@@ -177,7 +177,8 @@ pub fn update_tray_menu(app: &AppHandle, state: &TrayIconState, locale: Option<&
 
     let tray = app.state::<TrayIcon>();
     let _ = tray.set_menu(Some(menu));
-    let _ = tray.set_icon_as_template(true);
+    // Keep full-color tray icon for uttr branding in the macOS menu bar.
+    let _ = tray.set_icon_as_template(false);
 }
 
 fn last_transcript_text(entry: &HistoryEntry) -> &str {
