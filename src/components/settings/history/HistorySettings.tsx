@@ -10,6 +10,8 @@ import { commands, type HistoryEntry } from "@/bindings";
 import { formatDateTime } from "@/utils/dateFormat";
 import { useOsType } from "@/hooks/useOsType";
 
+const MAX_VISIBLE_HISTORY = 20;
+
 interface OpenRecordingsButtonProps {
   onClick: () => void;
   label: string;
@@ -36,6 +38,7 @@ export const HistorySettings: React.FC = () => {
   const osType = useOsType();
   const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const visibleEntries = historyEntries.slice(0, MAX_VISIBLE_HISTORY);
 
   const loadHistoryEntries = useCallback(async () => {
     try {
@@ -198,18 +201,21 @@ export const HistorySettings: React.FC = () => {
         </div>
         <div className="bg-background border border-mid-gray/20 rounded-lg overflow-visible">
           <div className="divide-y divide-mid-gray/20">
-            {historyEntries.map((entry) => (
+            {visibleEntries.map((entry) => (
               <HistoryEntryComponent
                 key={entry.id}
                 entry={entry}
                 onToggleSaved={() => toggleSaved(entry.id)}
-                onCopyText={() => copyToClipboard(entry.transcription_text)}
+                onCopyText={(text) => copyToClipboard(text)}
                 getAudioUrl={getAudioUrl}
                 deleteAudio={deleteAudioEntry}
               />
             ))}
           </div>
         </div>
+        <p className="px-4 text-xs text-mid-gray">
+          {t("settings.history.showingLatest", { count: MAX_VISIBLE_HISTORY })}
+        </p>
       </div>
     </div>
   );
@@ -218,7 +224,7 @@ export const HistorySettings: React.FC = () => {
 interface HistoryEntryProps {
   entry: HistoryEntry;
   onToggleSaved: () => void;
-  onCopyText: () => void;
+  onCopyText: (text: string) => void;
   getAudioUrl: (fileName: string) => Promise<string | null>;
   deleteAudio: (id: number) => Promise<void>;
 }
@@ -232,6 +238,7 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
 }) => {
   const { t, i18n } = useTranslation();
   const [showCopied, setShowCopied] = useState(false);
+  const displayText = entry.post_processed_text || entry.transcription_text;
 
   const handleLoadAudio = useCallback(
     () => getAudioUrl(entry.file_name),
@@ -239,7 +246,7 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
   );
 
   const handleCopyText = () => {
-    onCopyText();
+    onCopyText(displayText);
     setShowCopied(true);
     setTimeout(() => setShowCopied(false), 2000);
   };
@@ -299,9 +306,15 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
           </button>
         </div>
       </div>
-      <p className="italic text-text/90 text-sm pb-2 select-text cursor-text">
-        {entry.transcription_text}
-      </p>
+      <div className="italic text-text/90 text-sm pb-2 select-text cursor-text">
+        <button
+          onClick={handleCopyText}
+          className="text-left w-full cursor-copy hover:text-logo-primary transition-colors"
+          title={t("settings.history.copyToClipboard")}
+        >
+          {displayText}
+        </button>
+      </div>
       <AudioPlayer onLoadRequest={handleLoadAudio} className="w-full" />
     </div>
   );

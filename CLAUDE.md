@@ -1,6 +1,7 @@
 # CLAUDE.md
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Primary workflow rules live in `rules/task-management.md`. Follow that first.
 
 ## Development Commands
 

@@ -1,57 +1,55 @@
+@import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap");
 @import "tailwindcss";
 
 @theme {
-  --color-text: #0f0f0f;
-  --color-background: #fbfbfb;
-  --color-background-ui: #da5893;
-  --color-logo-primary: #faa2ca;
-  --color-logo-stroke: #382731;
-  --color-text-stroke: #f6f6f6;
-  --color-mid-gray: #808080;
+  --color-text: #e6edf3;
+  --color-background: #0d1117;
+  --color-background-ui: #22c55e;
+  --color-logo-primary: #34d399;
+  --color-logo-stroke: #0d1117;
+  --color-text-stroke: #0d1117;
+  --color-mid-gray: #8b98ad;
 }
 
 :root {
-  /* Typography */
   font-size: 15px;
   line-height: 24px;
   font-weight: 400;
-
-  /* Colors - Light Theme */
-  /* --color-text: #0f0f0f;
-  --color-background: #fbfbfb;
-  --color-logo-primary: #FAA2CA;
-  --color-logo-stroke: #382731;
-  --color-text-stroke: #f6f6f6; */
-
-  /* Typography settings */
+  font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   -webkit-text-size-adjust: 100%;
-
-  /* Apply colors */
   color: var(--color-text);
-  background-color: var(--color-background);
+  background: var(--color-background);
 }
 
-.container {
+body {
   margin: 0;
-  padding-top: 10vh;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  text-align: center;
+  min-height: 100vh;
+  background:
+    radial-gradient(
+      1200px 520px at 90% -10%,
+      rgba(59, 130, 246, 0.2),
+      transparent 55%
+    ),
+    radial-gradient(
+      900px 420px at -10% 100%,
+      rgba(34, 197, 94, 0.16),
+      transparent 60%
+    ),
+    var(--color-background);
+  color: var(--color-text);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    /* Colors - Dark Theme */
-    --color-text: #fbfbfb;
-    --color-background: #2c2b29;
-    --color-logo-primary: #f28cbb;
-    --color-logo-stroke: #fad1ed;
-  }
+#root {
+  min-height: 100vh;
+}
+
+code,
+pre {
+  font-family: "JetBrains Mono", "Fira Code", "SFMono-Regular", monospace;
 }
 
 @layer utilities {

@@ -10,7 +10,6 @@ import {
 import { toast } from "sonner";
 import { commands } from "@/bindings";
 import { useSettingsStore } from "@/stores/settingsStore";
-import HandyTextLogo from "../icons/HandyTextLogo";
 import { Keyboard, Mic, Check, Loader2 } from "lucide-react";
 
 interface AccessibilityOnboardingProps {
@@ -231,7 +230,10 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
   return (
     <div className="h-screen w-screen flex flex-col p-6 gap-6 items-center justify-center">
       <div className="flex flex-col items-center gap-2">
-        <HandyTextLogo width={200} />
+        {/* eslint-disable-next-line i18next/no-literal-string */}
+        <p className="text-[11px] tracking-[0.3em] uppercase text-logo-primary/70">
+          uttr
+        </p>
       </div>
 
       <div className="max-w-md w-full flex flex-col items-center gap-4">
@@ -270,7 +272,7 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
               ) : (
                 <button
                   onClick={handleGrantMicrophone}
-                  className="px-4 py-2 rounded-lg bg-logo-primary hover:bg-logo-primary/90 text-white text-sm font-medium transition-colors"
+                  className="px-4 py-2 rounded-lg bg-logo-primary hover:bg-logo-primary/90 text-white text-sm font-medium transition-colors cursor-pointer"
                 >
                   {t("onboarding.permissions.grant")}
                 </button>
@@ -305,7 +307,7 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
               ) : (
                 <button
                   onClick={handleGrantAccessibility}
-                  className="px-4 py-2 rounded-lg bg-logo-primary hover:bg-logo-primary/90 text-white text-sm font-medium transition-colors"
+                  className="px-4 py-2 rounded-lg bg-logo-primary hover:bg-logo-primary/90 text-white text-sm font-medium transition-colors cursor-pointer"
                 >
                   {t("onboarding.permissions.grant")}
                 </button>
