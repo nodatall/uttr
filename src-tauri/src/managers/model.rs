@@ -24,6 +24,21 @@ pub enum EngineType {
     SenseVoice,
 }
 
+pub const GROQ_MODEL_WHISPER_LARGE_V3_TURBO: &str = "groq-whisper-large-v3-turbo";
+pub const GROQ_MODEL_WHISPER_LARGE_V3: &str = "groq-whisper-large-v3";
+
+pub fn is_cloud_model_id(model_id: &str) -> bool {
+    model_id.starts_with("groq-")
+}
+
+pub fn groq_api_model_name(model_id: &str) -> Option<&'static str> {
+    match model_id {
+        GROQ_MODEL_WHISPER_LARGE_V3_TURBO => Some("whisper-large-v3-turbo"),
+        GROQ_MODEL_WHISPER_LARGE_V3 => Some("whisper-large-v3"),
+        _ => None,
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct ModelInfo {
     pub id: String,
@@ -205,7 +220,55 @@ impl ModelManager {
                 speed_score: 0.35,
                 supports_translation: false,
                 is_recommended: false,
-                supported_languages: whisper_languages,
+                supported_languages: whisper_languages.clone(),
+                is_custom: false,
+            },
+        );
+
+        available_models.insert(
+            GROQ_MODEL_WHISPER_LARGE_V3_TURBO.to_string(),
+            ModelInfo {
+                id: GROQ_MODEL_WHISPER_LARGE_V3_TURBO.to_string(),
+                name: "Groq Whisper Large V3 Turbo".to_string(),
+                description: "Cloud model. Extremely fast. Requires internet and a Groq API key."
+                    .to_string(),
+                filename: GROQ_MODEL_WHISPER_LARGE_V3_TURBO.to_string(),
+                url: None,
+                size_mb: 0,
+                is_downloaded: true,
+                is_downloading: false,
+                partial_size: 0,
+                is_directory: false,
+                engine_type: EngineType::Whisper,
+                accuracy_score: 0.80,
+                speed_score: 0.98,
+                supports_translation: true,
+                is_recommended: false,
+                supported_languages: whisper_languages.clone(),
+                is_custom: false,
+            },
+        );
+
+        available_models.insert(
+            GROQ_MODEL_WHISPER_LARGE_V3.to_string(),
+            ModelInfo {
+                id: GROQ_MODEL_WHISPER_LARGE_V3.to_string(),
+                name: "Groq Whisper Large V3".to_string(),
+                description: "Cloud model. Higher quality. Requires internet and a Groq API key."
+                    .to_string(),
+                filename: GROQ_MODEL_WHISPER_LARGE_V3.to_string(),
+                url: None,
+                size_mb: 0,
+                is_downloaded: true,
+                is_downloading: false,
+                partial_size: 0,
+                is_directory: false,
+                engine_type: EngineType::Whisper,
+                accuracy_score: 0.88,
+                speed_score: 0.92,
+                supports_translation: true,
+                is_recommended: false,
+                supported_languages: whisper_languages.clone(),
                 is_custom: false,
             },
         );
@@ -387,6 +450,13 @@ impl ModelManager {
         let mut models = self.available_models.lock().unwrap();
 
         for model in models.values_mut() {
+            if is_cloud_model_id(&model.id) {
+                model.is_downloaded = true;
+                model.is_downloading = false;
+                model.partial_size = 0;
+                continue;
+            }
+
             if model.is_directory {
                 // For directory-based models, check if the directory exists
                 let model_path = self.models_dir.join(&model.filename);
@@ -459,7 +529,10 @@ impl ModelManager {
         if settings.selected_model.is_empty() {
             // Find the first available (downloaded) model
             let models = self.available_models.lock().unwrap();
-            if let Some(available_model) = models.values().find(|model| model.is_downloaded) {
+            if let Some(available_model) = models
+                .values()
+                .find(|model| model.is_downloaded && !is_cloud_model_id(&model.id))
+            {
                 info!(
                     "Auto-selecting model: {} ({})",
                     available_model.id, available_model.name
@@ -597,6 +670,12 @@ impl ModelManager {
     }
 
     pub async fn download_model(&self, model_id: &str) -> Result<()> {
+        if is_cloud_model_id(model_id) {
+            return Err(anyhow::anyhow!(
+                "Groq cloud models do not require downloading. Select the model directly."
+            ));
+        }
+
         let model_info = {
             let models = self.available_models.lock().unwrap();
             models.get(model_id).cloned()
@@ -949,6 +1028,12 @@ impl ModelManager {
     pub fn delete_model(&self, model_id: &str) -> Result<()> {
         debug!("ModelManager: delete_model called for: {}", model_id);
 
+        if is_cloud_model_id(model_id) {
+            return Err(anyhow::anyhow!(
+                "Cloud models cannot be deleted. They can be deselected at any time."
+            ));
+        }
+
         let model_info = {
             let models = self.available_models.lock().unwrap();
             models.get(model_id).cloned()
@@ -1017,6 +1102,12 @@ impl ModelManager {
     }
 
     pub fn get_model_path(&self, model_id: &str) -> Result<PathBuf> {
+        if is_cloud_model_id(model_id) {
+            return Err(anyhow::anyhow!(
+                "Cloud models do not have a local model path."
+            ));
+        }
+
         let model_info = self
             .get_model_info(model_id)
             .ok_or_else(|| anyhow::anyhow!("Model not found: {}", model_id))?;

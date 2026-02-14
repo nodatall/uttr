@@ -1,21 +1,27 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { ask } from "@tauri-apps/plugin-dialog";
+import { toast } from "sonner";
 import { ChevronDown, Globe } from "lucide-react";
 import type { ModelCardStatus } from "@/components/onboarding";
 import { ModelCard } from "@/components/onboarding";
 import { useModelStore } from "@/stores/modelStore";
+import { useSettings } from "@/hooks/useSettings";
 import { LANGUAGES } from "@/lib/constants/languages.ts";
 import type { ModelInfo } from "@/bindings";
+import { Input } from "@/components/ui/Input";
 
 // check if model supports a language based on its supported_languages list
 const modelSupportsLanguage = (model: ModelInfo, langCode: string): boolean => {
   return model.supported_languages.includes(langCode);
 };
 
+const isCloudModel = (modelId: string): boolean => modelId.startsWith("groq-");
+
 export const ModelsSettings: React.FC = () => {
   const { t } = useTranslation();
   const [switchingModelId, setSwitchingModelId] = useState<string | null>(null);
+  const [groqApiKeyDraft, setGroqApiKeyDraft] = useState("");
   const [languageFilter, setLanguageFilter] = useState("all");
   const [languageDropdownOpen, setLanguageDropdownOpen] = useState(false);
   const [languageSearch, setLanguageSearch] = useState("");
@@ -34,6 +40,15 @@ export const ModelsSettings: React.FC = () => {
     selectModel,
     deleteModel,
   } = useModelStore();
+  const { settings, updatePostProcessApiKey, isUpdating } = useSettings();
+  const groqApiKey = settings?.post_process_api_keys?.groq ?? "";
+  const isGroqApiKeyUpdating = isUpdating("post_process_api_key:groq");
+  const hasGroqApiKey =
+    groqApiKey.trim().length > 0 || groqApiKeyDraft.trim().length > 0;
+
+  useEffect(() => {
+    setGroqApiKeyDraft(groqApiKey);
+  }, [groqApiKey]);
 
   // click outside handler for language dropdown
   useEffect(() => {
@@ -87,6 +102,9 @@ export const ModelsSettings: React.FC = () => {
     if (modelId === currentModel) {
       return "active";
     }
+    if (isCloudModel(modelId)) {
+      return "available";
+    }
     const model = models.find((m: ModelInfo) => m.id === modelId);
     if (model?.is_downloaded) {
       return "available";
@@ -105,9 +123,36 @@ export const ModelsSettings: React.FC = () => {
   };
 
   const handleModelSelect = async (modelId: string) => {
+    if (modelId.startsWith("groq-")) {
+      const draftKey = groqApiKeyDraft.trim();
+      const storedKey = groqApiKey.trim();
+      const effectiveKey = draftKey || storedKey;
+
+      if (!effectiveKey) {
+        toast.error(
+          t("settings.models.groq.missingKey", {
+            defaultValue:
+              "Add your Groq API key before selecting a Groq model.",
+          }),
+        );
+        return;
+      }
+
+      if (draftKey && draftKey !== storedKey) {
+        await updatePostProcessApiKey("groq", draftKey);
+      }
+    }
+
     setSwitchingModelId(modelId);
     try {
-      await selectModel(modelId);
+      const success = await selectModel(modelId);
+      if (!success) {
+        toast.error(
+          t("onboarding.errors.selectModel", {
+            defaultValue: "Failed to switch model.",
+          }),
+        );
+      }
     } finally {
       setSwitchingModelId(null);
     }
@@ -149,9 +194,22 @@ export const ModelsSettings: React.FC = () => {
     }
   };
 
-  // Filter models based on language filter
-  const filteredModels = useMemo(() => {
+  const handleGroqApiKeyBlur = async () => {
+    const trimmed = groqApiKeyDraft.trim();
+    if (trimmed === groqApiKey) {
+      return;
+    }
+    await updatePostProcessApiKey("groq", trimmed);
+  };
+
+  const cloudModels = useMemo(() => {
+    return models.filter((model: ModelInfo) => isCloudModel(model.id));
+  }, [models]);
+
+  // Filter local models based on language filter
+  const filteredLocalModels = useMemo(() => {
     return models.filter((model: ModelInfo) => {
+      if (isCloudModel(model.id)) return false;
       if (languageFilter !== "all") {
         if (!modelSupportsLanguage(model, languageFilter)) return false;
       }
@@ -159,12 +217,12 @@ export const ModelsSettings: React.FC = () => {
     });
   }, [models, languageFilter]);
 
-  // Split filtered models into downloaded (including custom) and available sections
+  // Split filtered local models into downloaded (including custom) and available sections
   const { downloadedModels, availableModels } = useMemo(() => {
     const downloaded: ModelInfo[] = [];
     const available: ModelInfo[] = [];
 
-    for (const model of filteredModels) {
+    for (const model of filteredLocalModels) {
       if (
         model.is_custom ||
         model.is_downloaded ||
@@ -189,7 +247,7 @@ export const ModelsSettings: React.FC = () => {
       downloadedModels: downloaded,
       availableModels: available,
     };
-  }, [filteredModels, downloadingModels, extractingModels, currentModel]);
+  }, [filteredLocalModels, downloadingModels, extractingModels, currentModel]);
 
   if (loading) {
     return (
@@ -211,7 +269,31 @@ export const ModelsSettings: React.FC = () => {
           {t("settings.models.description")}
         </p>
       </div>
-      {filteredModels.length > 0 ? (
+      <div className="rounded-xl border border-mid-gray/30 bg-mid-gray/10 px-4 py-3 space-y-2">
+        <h2 className="text-sm font-semibold text-text">
+          {t("settings.models.groq.title", { defaultValue: "Groq Cloud" })}
+        </h2>
+        <p className="text-xs text-text/60">
+          {t("settings.models.groq.description", {
+            defaultValue:
+              "To use Groq cloud transcription models, add your Groq API key. The key is shared with Post Process provider settings.",
+          })}
+        </p>
+        <Input
+          type="password"
+          value={groqApiKeyDraft}
+          onChange={(event) => setGroqApiKeyDraft(event.target.value)}
+          onBlur={() => {
+            void handleGroqApiKeyBlur();
+          }}
+          placeholder={t("settings.models.groq.placeholder", {
+            defaultValue: "gsk_...",
+          })}
+          disabled={isGroqApiKeyUpdating}
+          className="w-full"
+        />
+      </div>
+      {filteredLocalModels.length > 0 ? (
         <div className="space-y-6">
           {/* Downloaded Models Section — header always visible so filter stays accessible */}
           <div className="space-y-3">
@@ -354,6 +436,37 @@ export const ModelsSettings: React.FC = () => {
       ) : (
         <div className="text-center py-8 text-text/50">
           {t("settings.models.noModelsMatch")}
+        </div>
+      )}
+      {cloudModels.length > 0 && (
+        <div className="space-y-3">
+          <h2 className="text-sm font-medium text-text/60">
+            {t("settings.models.groq.cloudModelsTitle", {
+              defaultValue: "Cloud Models",
+            })}
+          </h2>
+          {!hasGroqApiKey && (
+            <p className="text-xs text-text/50">
+              {t("settings.models.groq.enableHint", {
+                defaultValue: "Add a Groq API key above to enable selection.",
+              })}
+            </p>
+          )}
+          {cloudModels.map((model: ModelInfo) => (
+            <ModelCard
+              key={model.id}
+              model={model}
+              status={getModelStatus(model.id)}
+              disabled={!hasGroqApiKey || isGroqApiKeyUpdating}
+              onSelect={handleModelSelect}
+              onDownload={handleModelDownload}
+              onDelete={handleModelDelete}
+              onCancel={handleModelCancel}
+              downloadProgress={getDownloadProgress(model.id)}
+              downloadSpeed={getDownloadSpeed(model.id)}
+              showRecommended={false}
+            />
+          ))}
         </div>
       )}
     </div>

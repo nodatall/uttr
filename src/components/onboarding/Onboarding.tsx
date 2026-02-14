@@ -82,7 +82,7 @@ const Onboarding: React.FC<OnboardingProps> = ({ onModelSelected }) => {
       <div className="flex flex-col items-center gap-2 shrink-0 text-center">
         {/* eslint-disable-next-line i18next/no-literal-string */}
         <p className="text-[11px] tracking-[0.3em] uppercase text-logo-primary/70">
-          uttr
+          Uttr
         </p>
         <p className="text-text/70 max-w-md font-medium mx-auto">
           {t("onboarding.subtitle")}

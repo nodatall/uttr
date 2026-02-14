@@ -2,6 +2,7 @@ import React from "react";
 import { useTranslation } from "react-i18next";
 import {
   Check,
+  Cloud,
   Download,
   Globe,
   Languages,
@@ -31,6 +32,9 @@ const getLanguageDisplayText = (
   }
   return t("modelSelector.capabilities.multiLanguage");
 };
+
+const isCloudModel = (model: ModelInfo): boolean =>
+  model.id.startsWith("groq-");
 
 export type ModelCardStatus =
   | "downloadable"
@@ -99,7 +103,7 @@ const ModelCard: React.FC<ModelCardProps> = ({
 
   const handleClick = () => {
     if (!isClickable || disabled) return;
-    if (status === "downloadable" && onDownload) {
+    if (!isCloudModel(model) && status === "downloadable" && onDownload) {
       onDownload(model.id);
     } else {
       onSelect(model.id);
@@ -148,6 +152,12 @@ const ModelCard: React.FC<ModelCardProps> = ({
             )}
             {model.is_custom && (
               <Badge variant="secondary">{t("modelSelector.custom")}</Badge>
+            )}
+            {isCloudModel(model) && (
+              <Badge variant="secondary">
+                <Cloud className="w-3 h-3 mr-1" />
+                {t("settings.models.groq.badge", { defaultValue: "Cloud" })}
+              </Badge>
             )}
             {status === "switching" && (
               <Badge variant="secondary">
@@ -216,24 +226,26 @@ const ModelCard: React.FC<ModelCardProps> = ({
             <span>{t("modelSelector.capabilities.translate")}</span>
           </div>
         )}
-        {status === "downloadable" && (
+        {status === "downloadable" && !isCloudModel(model) && (
           <span className="flex items-center gap-1.5 ml-auto text-xs text-text/50">
             <Download className="w-3.5 h-3.5" />
             <span>{formatModelSize(Number(model.size_mb))}</span>
           </span>
         )}
-        {onDelete && (status === "available" || status === "active") && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={handleDelete}
-            title={t("modelSelector.deleteModel", { modelName: displayName })}
-            className="flex items-center gap-1.5 ml-auto text-logo-primary/85 hover:text-logo-primary hover:bg-logo-primary/10"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
-            <span>{t("common.delete")}</span>
-          </Button>
-        )}
+        {onDelete &&
+          !isCloudModel(model) &&
+          (status === "available" || status === "active") && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleDelete}
+              title={t("modelSelector.deleteModel", { modelName: displayName })}
+              className="flex items-center gap-1.5 ml-auto text-logo-primary/85 hover:text-logo-primary hover:bg-logo-primary/10"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>{t("common.delete")}</span>
+            </Button>
+          )}
       </div>
 
       {/* Download/extract progress */}

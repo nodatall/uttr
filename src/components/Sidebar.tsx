@@ -102,11 +102,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <div className="flex flex-col w-[220px] min-w-[220px] h-full border-e border-mid-gray/20 bg-black/20 px-3 py-3">
       <div className="px-2 pb-4 mb-3 border-b border-mid-gray/20">
         {/* eslint-disable-next-line i18next/no-literal-string */}
-        <p className="text-[10px] tracking-[0.3em] uppercase text-logo-primary/70">
-          workspace
-        </p>
-        {/* eslint-disable-next-line i18next/no-literal-string */}
-        <p className="text-lg font-semibold tracking-wide">uttr</p>
+        <p className="text-lg font-semibold tracking-wide">Uttr</p>
       </div>
 
       <div className="flex flex-col w-full gap-1.5">

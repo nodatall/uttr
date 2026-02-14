@@ -12,13 +12,15 @@ use crate::utils::{
 };
 use crate::ManagedToggleState;
 use ferrous_opencc::{config::BuiltinConfig, OpenCC};
-use log::{debug, error};
+use log::{debug, error, warn};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Instant;
 use tauri::AppHandle;
+use tauri::Emitter;
 use tauri::Manager;
+use tauri_plugin_clipboard_manager::ClipboardExt;
 
 // Shortcut Action Trait
 pub trait ShortcutAction: Send + Sync {
@@ -319,9 +321,33 @@ impl ShortcutAction for TranscribeAction {
                     samples.len()
                 );
 
+                if samples.is_empty() {
+                    let settings = get_settings(&ah);
+                    let binding = settings
+                        .bindings
+                        .get(&binding_id)
+                        .map(|b| b.current_binding.as_str())
+                        .unwrap_or("");
+                    let message = if binding == "fn" {
+                        "No audio captured. The Fn-only shortcut can be unreliable. Use a shortcut like Option+Space."
+                    } else {
+                        "No audio captured. Hold the push-to-talk key a bit longer or choose a different shortcut."
+                    };
+                    warn!("{}", message);
+                    let _ = ah.emit("transcription-error", message.to_string());
+                    utils::hide_recording_overlay(&ah);
+                    change_tray_icon(&ah, TrayIconState::Idle);
+
+                    // Clear toggle state now that transcription is complete
+                    if let Ok(mut states) = ah.state::<ManagedToggleState>().lock() {
+                        states.active_toggles.insert(binding_id, false);
+                    }
+                    return;
+                }
+
                 let transcription_time = Instant::now();
                 let samples_clone = samples.clone(); // Clone for history saving
-                match tm.transcribe(samples) {
+                match tm.transcribe(samples).await {
                     Ok(transcription) => {
                         debug!(
                             "Transcription completed in {:?}: '{}'",
@@ -391,12 +417,30 @@ impl ShortcutAction for TranscribeAction {
                             let ah_clone = ah.clone();
                             let paste_time = Instant::now();
                             ah.run_on_main_thread(move || {
-                                match utils::paste(final_text, ah_clone.clone()) {
+                                let text_for_paste = final_text.clone();
+                                match utils::paste(text_for_paste.clone(), ah_clone.clone()) {
                                     Ok(()) => debug!(
                                         "Text pasted successfully in {:?}",
                                         paste_time.elapsed()
                                     ),
-                                    Err(e) => error!("Failed to paste transcription: {}", e),
+                                    Err(e) => {
+                                        error!("Failed to paste transcription: {}", e);
+                                        let _ = ah_clone.emit(
+                                            "transcription-error",
+                                            format!(
+                                                "Transcription succeeded, but paste failed: {}",
+                                                e
+                                            ),
+                                        );
+                                        if let Err(copy_err) =
+                                            ah_clone.clipboard().write_text(&text_for_paste)
+                                        {
+                                            error!(
+                                                "Failed to copy transcription to clipboard after paste error: {}",
+                                                copy_err
+                                            );
+                                        }
+                                    }
                                 }
                                 // Hide the overlay after transcription is complete
                                 utils::hide_recording_overlay(&ah_clone);
@@ -413,13 +457,14 @@ impl ShortcutAction for TranscribeAction {
                         }
                     }
                     Err(err) => {
-                        debug!("Global Shortcut Transcription error: {}", err);
+                        error!("Global Shortcut Transcription error: {}", err);
+                        let _ = ah.emit("transcription-error", err.to_string());
                         utils::hide_recording_overlay(&ah);
                         change_tray_icon(&ah, TrayIconState::Idle);
                     }
                 }
             } else {
-                debug!("No samples retrieved from recording stop");
+                warn!("No samples retrieved from recording stop");
                 utils::hide_recording_overlay(&ah);
                 change_tray_icon(&ah, TrayIconState::Idle);
             }

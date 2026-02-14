@@ -5,6 +5,7 @@ mod audio_feedback;
 pub mod audio_toolkit;
 mod clipboard;
 mod commands;
+mod groq_client;
 mod helpers;
 mod input;
 mod llm_client;

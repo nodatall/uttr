@@ -1,7 +1,8 @@
 import { useEffect, useState, useRef } from "react";
-import { Toaster } from "sonner";
+import { Toaster, toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { platform } from "@tauri-apps/plugin-os";
+import { listen } from "@tauri-apps/api/event";
 import {
   checkAccessibilityPermission,
   checkMicrophonePermission,
@@ -92,6 +93,21 @@ function App() {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [settings?.debug_mode, updateSetting]);
+
+  // Surface backend transcription failures to the user.
+  useEffect(() => {
+    let unlistenFn: (() => void) | undefined;
+    listen<string>("transcription-error", (event) => {
+      const message = event.payload || "Transcription failed";
+      toast.error(message);
+    }).then((unlisten) => {
+      unlistenFn = unlisten;
+    });
+
+    return () => {
+      if (unlistenFn) unlistenFn();
+    };
+  }, []);
 
   const checkOnboardingStatus = async () => {
     try {

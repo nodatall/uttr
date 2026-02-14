@@ -1,4 +1,4 @@
-use crate::managers::model::{ModelInfo, ModelManager};
+use crate::managers::model::{is_cloud_model_id, ModelInfo, ModelManager};
 use crate::managers::transcription::TranscriptionManager;
 use crate::settings::{get_settings, write_settings};
 use std::sync::Arc;
@@ -41,6 +41,13 @@ pub async fn delete_model(
     transcription_manager: State<'_, Arc<TranscriptionManager>>,
     model_id: String,
 ) -> Result<(), String> {
+    if is_cloud_model_id(&model_id) {
+        return Err(
+            "Cloud models cannot be deleted. Deselect them by switching to another model."
+                .to_string(),
+        );
+    }
+
     // If deleting the active model, unload it and clear the setting
     let settings = get_settings(&app_handle);
     if settings.selected_model == model_id {
@@ -71,7 +78,7 @@ pub async fn set_active_model(
         .get_model_info(&model_id)
         .ok_or_else(|| format!("Model not found: {}", model_id))?;
 
-    if !model_info.is_downloaded {
+    if !model_info.is_downloaded && !is_cloud_model_id(&model_id) {
         return Err(format!("Model not downloaded: {}", model_id));
     }
 
@@ -119,7 +126,9 @@ pub async fn has_any_models_available(
     model_manager: State<'_, Arc<ModelManager>>,
 ) -> Result<bool, String> {
     let models = model_manager.get_available_models();
-    Ok(models.iter().any(|m| m.is_downloaded))
+    Ok(models
+        .iter()
+        .any(|m| m.is_downloaded && !is_cloud_model_id(&m.id)))
 }
 
 #[tauri::command]
@@ -129,7 +138,9 @@ pub async fn has_any_models_or_downloads(
 ) -> Result<bool, String> {
     let models = model_manager.get_available_models();
     // Return true if any models are downloaded OR if any downloads are in progress
-    Ok(models.iter().any(|m| m.is_downloaded))
+    Ok(models
+        .iter()
+        .any(|m| m.is_downloaded && !is_cloud_model_id(&m.id)))
 }
 
 #[tauri::command]
