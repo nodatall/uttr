@@ -1,21 +1,19 @@
 import { listen } from "@tauri-apps/api/event";
 import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import {
-  MicrophoneIcon,
-  TranscriptionIcon,
-  CancelIcon,
-} from "../components/icons";
+import { CancelIcon } from "../components/icons";
 import "./RecordingOverlay.css";
 import { commands } from "@/bindings";
 import i18n, { syncLanguageFromSettings } from "@/i18n";
 import { getLanguageDirection } from "@/lib/utils/rtl";
+import recordingTriggerIcon from "@/assets/overlay/recording-trigger.png";
+import transcribingTriggerIcon from "@/assets/overlay/transcribing-trigger.png";
 
 type OverlayState = "recording" | "transcribing" | "processing";
 
 const RecordingOverlay: React.FC = () => {
   const { t } = useTranslation();
-  const [isVisible, setIsVisible] = useState(false);
+  const [isVisible, setIsVisible] = useState(true);
   const [state, setState] = useState<OverlayState>("recording");
   const [levels, setLevels] = useState<number[]>(Array(16).fill(0));
   const smoothedLevelsRef = useRef<number[]>(Array(16).fill(0));
@@ -40,6 +38,8 @@ const RecordingOverlay: React.FC = () => {
       // Listen for mic-level updates
       const unlistenLevel = await listen<number[]>("mic-level", (event) => {
         const newLevels = event.payload as number[];
+        // Fallback: if this hidden webview missed `show-overlay`, levels imply active recording.
+        setIsVisible(true);
 
         // Apply smoothing to reduce jitter
         const smoothed = smoothedLevelsRef.current.map((prev, i) => {
@@ -64,10 +64,24 @@ const RecordingOverlay: React.FC = () => {
 
   const getIcon = () => {
     if (state === "recording") {
-      return <MicrophoneIcon />;
-    } else {
-      return <TranscriptionIcon />;
+      return (
+        <img
+          src={recordingTriggerIcon}
+          alt=""
+          className="overlay-state-icon"
+          draggable={false}
+        />
+      );
     }
+
+    return (
+      <img
+        src={transcribingTriggerIcon}
+        alt=""
+        className="overlay-state-icon"
+        draggable={false}
+      />
+    );
   };
 
   return (
@@ -109,7 +123,7 @@ const RecordingOverlay: React.FC = () => {
               commands.cancelOperation();
             }}
           >
-            <CancelIcon />
+            <CancelIcon color="#8F3CC8" />
           </div>
         )}
       </div>

@@ -1,10 +1,10 @@
-use crate::input;
 use crate::settings;
 use crate::settings::OverlayPosition;
-use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize};
+use log::debug;
+use tauri::{AppHandle, Emitter, Manager};
 
 #[cfg(not(target_os = "macos"))]
-use log::debug;
+use tauri::{PhysicalPosition, PhysicalSize};
 
 #[cfg(not(target_os = "macos"))]
 use tauri::WebviewWindowBuilder;
@@ -13,7 +13,7 @@ use tauri::WebviewWindowBuilder;
 use tauri::WebviewUrl;
 
 #[cfg(target_os = "macos")]
-use tauri_nspanel::{tauri_panel, CollectionBehavior, PanelBuilder, PanelLevel};
+use tauri_nspanel::{tauri_panel, CollectionBehavior, ManagerExt as _, PanelBuilder, PanelLevel};
 
 #[cfg(target_os = "linux")]
 use gtk_layer_shell::{Edge, KeyboardMode, Layer, LayerShell};
@@ -32,6 +32,7 @@ tauri_panel! {
 
 const OVERLAY_WIDTH: f64 = 172.0;
 const OVERLAY_HEIGHT: f64 = 36.0;
+const OVERLAY_LABEL_BASE: &str = "recording_overlay";
 
 #[cfg(target_os = "macos")]
 const OVERLAY_TOP_OFFSET: f64 = 46.0;
@@ -133,8 +134,66 @@ fn force_overlay_topmost(overlay_window: &tauri::webview::WebviewWindow) {
     });
 }
 
+fn overlay_label(index: usize) -> String {
+    if index == 0 {
+        OVERLAY_LABEL_BASE.to_string()
+    } else {
+        format!("{}_{}", OVERLAY_LABEL_BASE, index)
+    }
+}
+
+fn available_monitors_or_primary(app_handle: &AppHandle) -> Vec<tauri::Monitor> {
+    if let Ok(monitors) = app_handle.available_monitors() {
+        if !monitors.is_empty() {
+            return monitors;
+        }
+    }
+
+    app_handle
+        .primary_monitor()
+        .ok()
+        .flatten()
+        .map(|m| vec![m])
+        .unwrap_or_default()
+}
+
+#[cfg(target_os = "macos")]
+fn calculate_overlay_position_for_monitor(
+    app_handle: &AppHandle,
+    monitor: &tauri::Monitor,
+) -> (f64, f64, f64) {
+    let scale = monitor.scale_factor();
+    let monitor_pos = monitor.position();
+    let monitor_size = monitor.size();
+
+    let monitor_x = monitor_pos.x as f64;
+    let monitor_y = monitor_pos.y as f64;
+    let monitor_width = monitor_size.width as f64;
+    let monitor_height = monitor_size.height as f64;
+
+    let overlay_width = OVERLAY_WIDTH * scale;
+    let overlay_height = OVERLAY_HEIGHT * scale;
+
+    let top_offset = OVERLAY_TOP_OFFSET * scale;
+    let bottom_offset = OVERLAY_BOTTOM_OFFSET * scale;
+
+    let settings = settings::get_settings(app_handle);
+
+    let x = monitor_x + (monitor_width - overlay_width) / 2.0;
+    let y = match settings.overlay_position {
+        OverlayPosition::Top => monitor_y + top_offset,
+        OverlayPosition::Bottom | OverlayPosition::None => {
+            monitor_y + monitor_height - overlay_height - bottom_offset
+        }
+    };
+
+    (x, y, scale)
+}
+
+#[cfg(not(target_os = "macos"))]
 fn get_monitor_with_cursor(app_handle: &AppHandle) -> Option<tauri::Monitor> {
-    if let Some(mouse_location) = input::get_cursor_position(app_handle) {
+    if let Ok(mouse_position) = app_handle.cursor_position() {
+        let mouse_location = (mouse_position.x, mouse_position.y);
         if let Ok(monitors) = app_handle.available_monitors() {
             for monitor in monitors {
                 let is_within =
@@ -149,8 +208,9 @@ fn get_monitor_with_cursor(app_handle: &AppHandle) -> Option<tauri::Monitor> {
     app_handle.primary_monitor().ok().flatten()
 }
 
+#[cfg(not(target_os = "macos"))]
 fn is_mouse_within_monitor(
-    mouse_pos: (i32, i32),
+    mouse_pos: (f64, f64),
     monitor_pos: &PhysicalPosition<i32>,
     monitor_size: &PhysicalSize<u32>,
 ) -> bool {
@@ -164,12 +224,13 @@ fn is_mouse_within_monitor(
         height: monitor_height,
     } = *monitor_size;
 
-    mouse_x >= monitor_x
-        && mouse_x < (monitor_x + monitor_width as i32)
-        && mouse_y >= monitor_y
-        && mouse_y < (monitor_y + monitor_height as i32)
+    mouse_x >= monitor_x as f64
+        && mouse_x < (monitor_x + monitor_width as i32) as f64
+        && mouse_y >= monitor_y as f64
+        && mouse_y < (monitor_y + monitor_height as i32) as f64
 }
 
+#[cfg(not(target_os = "macos"))]
 fn calculate_overlay_position(app_handle: &AppHandle) -> Option<(f64, f64)> {
     if let Some(monitor) = get_monitor_with_cursor(app_handle) {
         let work_area = monitor.work_area();
@@ -195,6 +256,66 @@ fn calculate_overlay_position(app_handle: &AppHandle) -> Option<(f64, f64)> {
 }
 
 /// Creates the recording overlay window and keeps it hidden by default
+#[cfg(target_os = "macos")]
+pub fn create_recording_overlay(app_handle: &AppHandle) {
+    let monitors = available_monitors_or_primary(app_handle);
+    debug!("[overlay] macos create_recording_overlay monitor_count={}", monitors.len());
+
+    for (index, monitor) in monitors.iter().enumerate() {
+        let label = overlay_label(index);
+        if app_handle.get_webview_window(&label).is_some() {
+            debug!("[overlay] macos create skip existing label={}", label);
+            continue;
+        }
+
+        let (x, y, scale) = calculate_overlay_position_for_monitor(app_handle, monitor);
+        debug!(
+            "[overlay] macos create label={} target_pos=({:.1}, {:.1}) scale={}",
+            label, x, y, scale
+        );
+        match PanelBuilder::<_, RecordingOverlayPanel>::new(app_handle, &label)
+            .url(WebviewUrl::App("src/overlay/index.html".into()))
+            .title("Recording")
+            .position(tauri::Position::Logical(tauri::LogicalPosition {
+                x: x / scale,
+                y: y / scale,
+            }))
+            .level(PanelLevel::Status)
+            .size(tauri::Size::Logical(tauri::LogicalSize {
+                width: OVERLAY_WIDTH,
+                height: OVERLAY_HEIGHT,
+            }))
+            .has_shadow(false)
+            .transparent(true)
+            .hides_on_deactivate(false)
+            .no_activate(true)
+            .corner_radius(0.0)
+            .with_window(|w| {
+                w.decorations(false)
+                    .transparent(true)
+                    .always_on_top(true)
+                    .visible_on_all_workspaces(true)
+                    .skip_taskbar(true)
+            })
+            .collection_behavior(
+                CollectionBehavior::new()
+                    .can_join_all_spaces()
+                    .full_screen_auxiliary(),
+            )
+            .build()
+        {
+            Ok(panel) => {
+                let _ = panel.hide();
+                debug!("[overlay] macos created label={} (hidden)", label);
+            }
+            Err(e) => {
+                debug!("Failed to create macOS overlay panel {}: {}", label, e);
+            }
+        }
+    }
+}
+
+/// Creates the recording overlay window and keeps it hidden by default
 #[cfg(not(target_os = "macos"))]
 pub fn create_recording_overlay(app_handle: &AppHandle) {
     let position = calculate_overlay_position(app_handle);
@@ -209,7 +330,7 @@ pub fn create_recording_overlay(app_handle: &AppHandle) {
 
     let mut builder = WebviewWindowBuilder::new(
         app_handle,
-        "recording_overlay",
+        OVERLAY_LABEL_BASE,
         tauri::WebviewUrl::App("src/overlay/index.html".into()),
     )
     .title("Recording")
@@ -251,43 +372,6 @@ pub fn create_recording_overlay(app_handle: &AppHandle) {
     }
 }
 
-/// Creates the recording overlay panel and keeps it hidden by default (macOS)
-#[cfg(target_os = "macos")]
-pub fn create_recording_overlay(app_handle: &AppHandle) {
-    if let Some((x, y)) = calculate_overlay_position(app_handle) {
-        // PanelBuilder creates a Tauri window then converts it to NSPanel.
-        // The window remains registered, so get_webview_window() still works.
-        match PanelBuilder::<_, RecordingOverlayPanel>::new(app_handle, "recording_overlay")
-            .url(WebviewUrl::App("src/overlay/index.html".into()))
-            .title("Recording")
-            .position(tauri::Position::Logical(tauri::LogicalPosition { x, y }))
-            .level(PanelLevel::Status)
-            .size(tauri::Size::Logical(tauri::LogicalSize {
-                width: OVERLAY_WIDTH,
-                height: OVERLAY_HEIGHT,
-            }))
-            .has_shadow(false)
-            .transparent(true)
-            .no_activate(true)
-            .corner_radius(0.0)
-            .with_window(|w| w.decorations(false).transparent(true))
-            .collection_behavior(
-                CollectionBehavior::new()
-                    .can_join_all_spaces()
-                    .full_screen_auxiliary(),
-            )
-            .build()
-        {
-            Ok(panel) => {
-                let _ = panel.hide();
-            }
-            Err(e) => {
-                log::error!("Failed to create recording overlay panel: {}", e);
-            }
-        }
-    }
-}
-
 fn show_overlay_state(app_handle: &AppHandle, state: &str) {
     // Check if overlay should be shown based on position setting
     let settings = settings::get_settings(app_handle);
@@ -295,16 +379,69 @@ fn show_overlay_state(app_handle: &AppHandle, state: &str) {
         return;
     }
 
+    create_recording_overlay(app_handle);
     update_overlay_position(app_handle);
 
-    if let Some(overlay_window) = app_handle.get_webview_window("recording_overlay") {
-        let _ = overlay_window.show();
+    #[cfg(target_os = "macos")]
+    {
+        let app = app_handle.clone();
+        let state = state.to_string();
+        let state_for_retry = state.clone();
+        let _ = app_handle.run_on_main_thread(move || {
+            debug!("[overlay] macos show_overlay_state state={}", state);
+            create_recording_overlay(&app);
+            update_overlay_position(&app);
+            let monitor_count = available_monitors_or_primary(&app).len().max(1);
+            debug!("[overlay] macos show monitor_count={}", monitor_count);
+            for i in 0..monitor_count {
+                let label = overlay_label(i);
+                if let Some(overlay_window) = app.get_webview_window(&label) {
+                    debug!("[overlay] macos show label={}", label);
+                    let _ = overlay_window.show();
+                    if let Ok(panel) = app.get_webview_panel(&label) {
+                        panel.order_front_regardless();
+                    }
+                    let _ = overlay_window.emit("show-overlay", &state);
+                } else {
+                    debug!("[overlay] macos show missing label={}", label);
+                }
+            }
+        });
 
-        // On Windows, aggressively re-assert "topmost" in the native Z-order after showing
-        #[cfg(target_os = "windows")]
-        force_overlay_topmost(&overlay_window);
+        // Hidden webviews can miss the first event; retry state emission shortly after show.
+        let app_retry = app_handle.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(90));
+            let monitor_count = available_monitors_or_primary(&app_retry).len().max(1);
+            for i in 0..monitor_count {
+                let label = overlay_label(i);
+                if let Some(window) = app_retry.get_webview_window(&label) {
+                    let _ = window.emit("show-overlay", &state_for_retry);
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(180));
+            let monitor_count = available_monitors_or_primary(&app_retry).len().max(1);
+            for i in 0..monitor_count {
+                let label = overlay_label(i);
+                if let Some(window) = app_retry.get_webview_window(&label) {
+                    let _ = window.emit("show-overlay", &state_for_retry);
+                }
+            }
+        });
+        return;
+    }
 
-        let _ = overlay_window.emit("show-overlay", state);
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Some(overlay_window) = app_handle.get_webview_window(OVERLAY_LABEL_BASE) {
+            let _ = overlay_window.show();
+
+            // On Windows, aggressively re-assert "topmost" in the native Z-order after showing
+            #[cfg(target_os = "windows")]
+            force_overlay_topmost(&overlay_window);
+
+            let _ = overlay_window.emit("show-overlay", state);
+        }
     }
 }
 
@@ -325,32 +462,87 @@ pub fn show_processing_overlay(app_handle: &AppHandle) {
 
 /// Updates the overlay window position based on current settings
 pub fn update_overlay_position(app_handle: &AppHandle) {
-    if let Some(overlay_window) = app_handle.get_webview_window("recording_overlay") {
-        #[cfg(target_os = "linux")]
-        {
-            update_gtk_layer_shell_anchors(&overlay_window);
+    #[cfg(target_os = "macos")]
+    {
+        let monitors = available_monitors_or_primary(app_handle);
+        debug!("[overlay] macos update_overlay_position monitor_count={}", monitors.len());
+        for (index, monitor) in monitors.iter().enumerate() {
+            let label = overlay_label(index);
+            if let Some(overlay_window) = app_handle.get_webview_window(&label) {
+                let (x, y, scale) = calculate_overlay_position_for_monitor(app_handle, monitor);
+                debug!(
+                    "[overlay] macos update label={} target_pos=({:.1}, {:.1}) scale={}",
+                    label, x, y, scale
+                );
+                let _ = overlay_window
+                    .set_position(tauri::Position::Logical(tauri::LogicalPosition {
+                        x: x / scale,
+                        y: y / scale,
+                    }));
+                if let Ok(pos) = overlay_window.outer_position() {
+                    debug!(
+                        "[overlay] macos update label={} actual_outer_pos=({}, {})",
+                        label, pos.x, pos.y
+                    );
+                }
+            } else {
+                debug!("[overlay] macos update missing label={}", label);
+            }
         }
+        return;
+    }
 
-        if let Some((x, y)) = calculate_overlay_position(app_handle) {
-            let _ = overlay_window
-                .set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Some(overlay_window) = app_handle.get_webview_window(OVERLAY_LABEL_BASE) {
+            #[cfg(target_os = "linux")]
+            {
+                update_gtk_layer_shell_anchors(&overlay_window);
+            }
+
+            if let Some((x, y)) = calculate_overlay_position(app_handle) {
+                let _ = overlay_window
+                    .set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
+            }
         }
     }
 }
 
 /// Hides the recording overlay window with fade-out animation
 pub fn hide_recording_overlay(app_handle: &AppHandle) {
-    // Always hide the overlay regardless of settings - if setting was changed while recording,
-    // we still want to hide it properly
-    if let Some(overlay_window) = app_handle.get_webview_window("recording_overlay") {
-        // Emit event to trigger fade-out animation
-        let _ = overlay_window.emit("hide-overlay", ());
-        // Hide the window after a short delay to allow animation to complete
-        let window_clone = overlay_window.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(300));
-            let _ = window_clone.hide();
+    #[cfg(target_os = "macos")]
+    {
+        let app = app_handle.clone();
+        let _ = app_handle.run_on_main_thread(move || {
+            let monitor_count = available_monitors_or_primary(&app).len().max(1);
+            debug!("[overlay] macos hide monitor_count={}", monitor_count);
+            for i in 0..monitor_count {
+                let label = overlay_label(i);
+                if let Some(overlay_window) = app.get_webview_window(&label) {
+                    let _ = overlay_window.emit("hide-overlay", ());
+                    let window_clone = overlay_window.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(300));
+                        let _ = window_clone.hide();
+                    });
+                }
+            }
         });
+        return;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Some(overlay_window) = app_handle.get_webview_window(OVERLAY_LABEL_BASE) {
+            // Emit event to trigger fade-out animation
+            let _ = overlay_window.emit("hide-overlay", ());
+            // Hide the window after a short delay to allow animation to complete
+            let window_clone = overlay_window.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(300));
+                let _ = window_clone.hide();
+            });
+        }
     }
 }
 
@@ -358,8 +550,23 @@ pub fn emit_levels(app_handle: &AppHandle, levels: &Vec<f32>) {
     // emit levels to main app
     let _ = app_handle.emit("mic-level", levels);
 
-    // also emit to the recording overlay if it's open
-    if let Some(overlay_window) = app_handle.get_webview_window("recording_overlay") {
-        let _ = overlay_window.emit("mic-level", levels);
+    #[cfg(target_os = "macos")]
+    {
+        let monitor_count = available_monitors_or_primary(app_handle).len().max(1);
+        for i in 0..monitor_count {
+            let label = overlay_label(i);
+            if let Some(overlay_window) = app_handle.get_webview_window(&label) {
+                let _ = overlay_window.emit("mic-level", levels);
+            }
+        }
+        return;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        // also emit to the recording overlay if it's open
+        if let Some(overlay_window) = app_handle.get_webview_window(OVERLAY_LABEL_BASE) {
+            let _ = overlay_window.emit("mic-level", levels);
+        }
     }
 }
