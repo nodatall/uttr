@@ -17,6 +17,13 @@
   align-items: center;
 }
 
+.overlay-state-icon {
+  width: 24px;
+  height: 24px;
+  object-fit: contain;
+  user-select: none;
+}
+
 .overlay-middle {
   display: flex;
   align-items: center;
@@ -41,7 +48,7 @@
 
 .bar {
   width: 6px;
-  background: #ffe5ee;
+  background: linear-gradient(180deg, #c75eb4 0%, #6a16c4 100%);
   max-height: 20px;
   border-radius: 2px;
   transition: height 80ms linear;
@@ -86,7 +93,7 @@
 }
 
 .cancel-button:hover {
-  background: #faa2ca33;
+  background: #8f3cc833;
   transform: scale(1.05);
 }
 

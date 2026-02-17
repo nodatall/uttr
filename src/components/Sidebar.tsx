@@ -8,6 +8,7 @@ import {
   Sparkles,
   Cpu,
   AudioLines,
+  KeyRound,
 } from "lucide-react";
 import { useSettings } from "../hooks/useSettings";
 import {
@@ -18,6 +19,7 @@ import {
   AboutSettings,
   PostProcessingSettings,
   ModelsSettings,
+  ApiKeysSettings,
 } from "./settings";
 
 export type SidebarSection = keyof typeof SECTIONS_CONFIG;
@@ -48,6 +50,12 @@ export const SECTIONS_CONFIG = {
     labelKey: "sidebar.models",
     icon: Cpu,
     component: ModelsSettings,
+    enabled: () => true,
+  },
+  apiKeys: {
+    labelKey: "sidebar.apiKeys",
+    icon: KeyRound,
+    component: ApiKeysSettings,
     enabled: () => true,
   },
   advanced: {
@@ -99,13 +107,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
     .map(([id, config]) => ({ id: id as SidebarSection, ...config }));
 
   return (
-    <div className="flex flex-col w-[220px] min-w-[220px] h-full border-e border-mid-gray/20 bg-black/20 px-3 py-3">
-      <div className="px-2 pb-4 mb-3 border-b border-mid-gray/20">
-        {/* eslint-disable-next-line i18next/no-literal-string */}
-        <p className="text-lg font-semibold tracking-wide">Uttr</p>
-      </div>
-
-      <div className="flex flex-col w-full gap-1.5">
+    <div className="flex flex-col w-[220px] min-w-[220px] h-full border-e border-mid-gray/20 bg-black/20 p-3">
+      <div className="flex flex-col w-full gap-1.5 overflow-y-auto uttr-scrollbar">
         {availableSections.map((section) => {
           const Icon = section.icon;
           const isActive = activeSection === section.id;

@@ -10,6 +10,7 @@
   "sidebar": {
     "general": "General",
     "models": "Models",
+    "apiKeys": "API Keys",
     "advanced": "Advanced",
     "postProcessing": "Post Process",
     "history": "History",
@@ -174,7 +175,21 @@
         "translation": "Translation",
         "allLanguages": "All Languages"
       },
-      "noModelsMatch": "No models match this filter."
+      "noModelsMatch": "No models match this filter.",
+      "groq": {
+        "missingKey": "Add your Groq API key in API Keys before selecting a Groq model.",
+        "cloudModelsTitle": "Cloud Models",
+        "enableHint": "Add a Groq API key in API Keys to enable selection."
+      }
+    },
+    "apiKeys": {
+      "title": "API Keys",
+      "description": "Manage API keys for cloud providers used by transcription and post-processing.",
+      "groq": {
+        "title": "Groq Cloud",
+        "description": "Required for Groq cloud transcription models. This key is shared with Post Process provider settings.",
+        "placeholder": "gsk_..."
+      }
     },
     "sound": {
       "title": "Sound",

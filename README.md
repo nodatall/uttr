@@ -1,6 +1,6 @@
 # uttr
 
-Local setup and run instructions for `uttr`.
+Local setup and run instructions for `Uttr`.
 
 ## Prerequisites
 
@@ -50,13 +50,13 @@ npm run tauri build
 
 App output:
 
-- `src-tauri/target/release/bundle/macos/uttr.app`
+- `src-tauri/target/release/bundle/macos/Uttr.app`
 - `src-tauri/target/release/bundle/dmg/*.dmg`
 
 Optional install to Applications:
 
 ```bash
-cp -R src-tauri/target/release/bundle/macos/uttr.app /Applications/
+cp -R src-tauri/target/release/bundle/macos/Uttr.app /Applications/
 ```
 
 ## Common Setup Errors
