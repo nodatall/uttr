@@ -1,10 +1,13 @@
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use crate::apple_intelligence;
 use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, SoundType};
+use crate::audio_toolkit::normalize_spoken_punctuation;
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::history::HistoryManager;
 use crate::managers::transcription::TranscriptionManager;
-use crate::settings::{get_settings, AppSettings, APPLE_INTELLIGENCE_PROVIDER_ID};
+use crate::settings::{
+    get_settings, AppSettings, PostProcessProvider, APPLE_INTELLIGENCE_PROVIDER_ID,
+};
 use crate::shortcut;
 use crate::tray::{change_tray_icon, TrayIconState};
 use crate::utils::{
@@ -15,7 +18,7 @@ use ferrous_opencc::{config::BuiltinConfig, OpenCC};
 use log::{debug, error, warn};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tauri::AppHandle;
 use tauri::Emitter;
@@ -44,6 +47,104 @@ struct TranscribeAction {
     post_process: bool,
 }
 
+const GROQ_PROVIDER_ID: &str = "groq";
+const GROQ_MODEL_PREFERENCES: &[&str] = &[
+    "llama-3.3-70b-versatile",
+    "llama-3.1-70b-versatile",
+    "llama-3.1-8b-instant",
+    "mixtral-8x7b-32768",
+];
+
+static AUTO_SELECTED_MODEL_CACHE: Lazy<Mutex<HashMap<String, String>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+fn select_preferred_groq_model(available_models: &[String]) -> Option<String> {
+    for preferred in GROQ_MODEL_PREFERENCES {
+        if let Some(found) = available_models
+            .iter()
+            .find(|model| model.as_str() == *preferred)
+        {
+            return Some(found.clone());
+        }
+    }
+
+    // Skip clearly non-chat/text models when possible.
+    available_models
+        .iter()
+        .find(|model| {
+            let id = model.to_ascii_lowercase();
+            !id.contains("whisper")
+                && !id.contains("tts")
+                && !id.contains("transcribe")
+                && !id.contains("speech")
+        })
+        .cloned()
+        .or_else(|| available_models.first().cloned())
+}
+
+async fn resolve_post_process_model(
+    provider: &PostProcessProvider,
+    settings: &AppSettings,
+    api_key: &str,
+) -> Option<String> {
+    let configured = settings
+        .post_process_models
+        .get(&provider.id)
+        .cloned()
+        .unwrap_or_default();
+    if !configured.trim().is_empty() {
+        return Some(configured);
+    }
+
+    if provider.id != GROQ_PROVIDER_ID {
+        debug!(
+            "Post-processing skipped because provider '{}' has no model configured",
+            provider.id
+        );
+        return None;
+    }
+
+    if let Ok(cache) = AUTO_SELECTED_MODEL_CACHE.lock() {
+        if let Some(model) = cache.get(&provider.id) {
+            return Some(model.clone());
+        }
+    }
+
+    let available_models =
+        match crate::llm_client::fetch_models(provider, api_key.to_string()).await {
+            Ok(models) if !models.is_empty() => models,
+            Ok(_) => {
+                debug!(
+                    "Post-processing skipped because provider '{}' returned no available models",
+                    provider.id
+                );
+                return None;
+            }
+            Err(err) => {
+                debug!(
+                "Post-processing skipped because models could not be fetched for provider '{}': {}",
+                provider.id, err
+            );
+                return None;
+            }
+        };
+
+    let selected = match select_preferred_groq_model(&available_models) {
+        Some(model) => model,
+        None => return None,
+    };
+
+    if let Ok(mut cache) = AUTO_SELECTED_MODEL_CACHE.lock() {
+        cache.insert(provider.id.clone(), selected.clone());
+    }
+
+    debug!(
+        "Auto-selected post-process model '{}' for provider '{}'",
+        selected, provider.id
+    );
+    Some(selected)
+}
+
 async fn post_process_transcription(settings: &AppSettings, transcription: &str) -> Option<String> {
     let provider = match settings.active_post_process_provider().cloned() {
         Some(provider) => provider,
@@ -53,19 +154,16 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
         }
     };
 
-    let model = settings
-        .post_process_models
+    let api_key = settings
+        .post_process_api_keys
         .get(&provider.id)
         .cloned()
         .unwrap_or_default();
 
-    if model.trim().is_empty() {
-        debug!(
-            "Post-processing skipped because provider '{}' has no model configured",
-            provider.id
-        );
-        return None;
-    }
+    let model = match resolve_post_process_model(&provider, settings, &api_key).await {
+        Some(model) => model,
+        None => return None,
+    };
 
     let selected_prompt_id = match &settings.post_process_selected_prompt_id {
         Some(id) => id.clone(),
@@ -139,12 +237,6 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
             return None;
         }
     }
-
-    let api_key = settings
-        .post_process_api_keys
-        .get(&provider.id)
-        .cloned()
-        .unwrap_or_default();
 
     // Send the chat completion request
     match crate::llm_client::send_chat_completion(&provider, api_key, &model, processed_prompt)
@@ -315,7 +407,10 @@ impl ShortcutAction for TranscribeAction {
         play_feedback_sound(app, SoundType::Stop);
 
         let binding_id = binding_id.to_string(); // Clone binding_id for the async task
-        let post_process = self.post_process;
+        let settings = get_settings(app);
+        // When post-processing is enabled in settings, apply it automatically for normal
+        // transcription. The dedicated post-process hotkey still forces it on.
+        let post_process = self.post_process || settings.post_process_enabled;
 
         tauri::async_runtime::spawn(async move {
             let _guard = FinishGuard(ah.clone());
@@ -349,11 +444,6 @@ impl ShortcutAction for TranscribeAction {
                     let _ = ah.emit("transcription-error", message.to_string());
                     utils::hide_recording_overlay(&ah);
                     change_tray_icon(&ah, TrayIconState::Idle);
-
-                    // Clear toggle state now that transcription is complete
-                    if let Ok(mut states) = ah.state::<ManagedToggleState>().lock() {
-                        states.active_toggles.insert(binding_id, false);
-                    }
                     return;
                 }
 
@@ -406,6 +496,17 @@ impl ShortcutAction for TranscribeAction {
                             } else if final_text != transcription {
                                 // Chinese conversion was applied but no LLM post-processing
                                 post_processed_text = Some(final_text.clone());
+                            }
+
+                            // Apply deterministic spoken punctuation normalization as a fallback
+                            // for post-processing runs where the LLM leaves words like "period".
+                            if post_process {
+                                let normalized_punctuation =
+                                    normalize_spoken_punctuation(&final_text);
+                                if normalized_punctuation != final_text {
+                                    final_text = normalized_punctuation;
+                                    post_processed_text = Some(final_text.clone());
+                                }
                             }
 
                             // Save to history with post-processed text and prompt

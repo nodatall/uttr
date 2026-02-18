@@ -200,7 +200,60 @@ const FILLER_WORDS: &[&str] = &[
     "ehh",
 ];
 
+/// Replace spoken punctuation words with punctuation symbols.
+///
+/// This is intentionally conservative and only applies clear punctuation words.
+pub fn normalize_spoken_punctuation(text: &str) -> String {
+    if text.trim().is_empty() {
+        return text.to_string();
+    }
+
+    let mut normalized = text.to_string();
+
+    for (pattern, replacement) in SPOKEN_PUNCTUATION_PATTERNS.iter() {
+        normalized = pattern.replace_all(&normalized, *replacement).to_string();
+    }
+
+    // Remove spaces before punctuation symbols.
+    normalized = SPACE_BEFORE_PUNCT_PATTERN
+        .replace_all(&normalized, "$1")
+        .to_string();
+
+    // Clean up multiple spaces to a single space.
+    normalized = MULTI_SPACE_PATTERN
+        .replace_all(&normalized, " ")
+        .to_string();
+
+    normalized.trim().to_string()
+}
+
 static MULTI_SPACE_PATTERN: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s{2,}").unwrap());
+static SPACE_BEFORE_PUNCT_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"\s+([,.;:!?])").unwrap());
+static SPOKEN_PUNCTUATION_PATTERNS: Lazy<Vec<(Regex, &'static str)>> = Lazy::new(|| {
+    vec![
+        (
+            Regex::new(r"(?i)\bquestion\s+mark\b(?:\s*\?+)?").expect("invalid regex"),
+            "?",
+        ),
+        (
+            Regex::new(r"(?i)\bexclamation\s+(?:point|mark)\b(?:\s*!+)?")
+                .expect("invalid regex"),
+            "!",
+        ),
+        (
+            Regex::new(r"(?i)\bfull\s+stop\b(?:\s*\.+)?").expect("invalid regex"),
+            ".",
+        ),
+        (
+            Regex::new(r"(?i)\bsemicolon\b(?:\s*;+)?").expect("invalid regex"),
+            ";",
+        ),
+        (Regex::new(r"(?i)\bcomma\b(?:\s*,+)?").expect("invalid regex"), ","),
+        (Regex::new(r"(?i)\bperiod\b(?:\s*\.+)?").expect("invalid regex"), "."),
+        (Regex::new(r"(?i)\bcolon\b(?:\s*:+)?").expect("invalid regex"), ":"),
+    ]
+});
 
 /// Collapses repeated 1-2 letter words (3+ repetitions) to a single instance.
 /// E.g., "wh wh wh wh" -> "wh", "I I I I" -> "I"
@@ -400,6 +453,27 @@ mod tests {
         let text = "no no is fine";
         let result = filter_transcription_output(text);
         assert_eq!(result, "no no is fine");
+    }
+
+    #[test]
+    fn test_normalize_spoken_punctuation_basic() {
+        let text = "hello comma world period";
+        let result = normalize_spoken_punctuation(text);
+        assert_eq!(result, "hello, world.");
+    }
+
+    #[test]
+    fn test_normalize_spoken_punctuation_multi_word_and_case_insensitive() {
+        let text = "What is this QUESTION mark wow exclamation point";
+        let result = normalize_spoken_punctuation(text);
+        assert_eq!(result, "What is this? wow!");
+    }
+
+    #[test]
+    fn test_normalize_spoken_punctuation_avoids_double_period() {
+        let text = "im hungry period.";
+        let result = normalize_spoken_punctuation(text);
+        assert_eq!(result, "im hungry.");
     }
 
     #[test]

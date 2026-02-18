@@ -173,8 +173,13 @@ function App() {
   return (
     <div
       dir={direction}
-      className="h-screen pt-[20px] flex flex-col select-none cursor-default bg-background text-text"
+      className="h-screen flex flex-col select-none cursor-default bg-background text-text"
     >
+      <div
+        data-tauri-drag-region
+        className="h-[20px] shrink-0"
+        aria-hidden="true"
+      />
       <Toaster
         theme="system"
         toastOptions={{

@@ -3,7 +3,6 @@ use crate::settings::OverlayPosition;
 use log::debug;
 use tauri::{AppHandle, Emitter, Manager};
 
-#[cfg(not(target_os = "macos"))]
 use tauri::{PhysicalPosition, PhysicalSize};
 
 #[cfg(not(target_os = "macos"))]
@@ -134,29 +133,6 @@ fn force_overlay_topmost(overlay_window: &tauri::webview::WebviewWindow) {
     });
 }
 
-fn overlay_label(index: usize) -> String {
-    if index == 0 {
-        OVERLAY_LABEL_BASE.to_string()
-    } else {
-        format!("{}_{}", OVERLAY_LABEL_BASE, index)
-    }
-}
-
-fn available_monitors_or_primary(app_handle: &AppHandle) -> Vec<tauri::Monitor> {
-    if let Ok(monitors) = app_handle.available_monitors() {
-        if !monitors.is_empty() {
-            return monitors;
-        }
-    }
-
-    app_handle
-        .primary_monitor()
-        .ok()
-        .flatten()
-        .map(|m| vec![m])
-        .unwrap_or_default()
-}
-
 #[cfg(target_os = "macos")]
 fn calculate_overlay_position_for_monitor(
     app_handle: &AppHandle,
@@ -190,7 +166,6 @@ fn calculate_overlay_position_for_monitor(
     (x, y, scale)
 }
 
-#[cfg(not(target_os = "macos"))]
 fn get_monitor_with_cursor(app_handle: &AppHandle) -> Option<tauri::Monitor> {
     if let Ok(mouse_position) = app_handle.cursor_position() {
         let mouse_location = (mouse_position.x, mouse_position.y);
@@ -208,7 +183,6 @@ fn get_monitor_with_cursor(app_handle: &AppHandle) -> Option<tauri::Monitor> {
     app_handle.primary_monitor().ok().flatten()
 }
 
-#[cfg(not(target_os = "macos"))]
 fn is_mouse_within_monitor(
     mouse_pos: (f64, f64),
     monitor_pos: &PhysicalPosition<i32>,
@@ -258,59 +232,65 @@ fn calculate_overlay_position(app_handle: &AppHandle) -> Option<(f64, f64)> {
 /// Creates the recording overlay window and keeps it hidden by default
 #[cfg(target_os = "macos")]
 pub fn create_recording_overlay(app_handle: &AppHandle) {
-    let monitors = available_monitors_or_primary(app_handle);
-    debug!("[overlay] macos create_recording_overlay monitor_count={}", monitors.len());
+    if app_handle.get_webview_window(OVERLAY_LABEL_BASE).is_some() {
+        return;
+    }
 
-    for (index, monitor) in monitors.iter().enumerate() {
-        let label = overlay_label(index);
-        if app_handle.get_webview_window(&label).is_some() {
-            debug!("[overlay] macos create skip existing label={}", label);
-            continue;
+    let Some(monitor) =
+        get_monitor_with_cursor(app_handle).or_else(|| app_handle.primary_monitor().ok().flatten())
+    else {
+        debug!("Failed to determine monitor for overlay, not creating overlay window");
+        return;
+    };
+
+    let (x, y, scale) = calculate_overlay_position_for_monitor(app_handle, &monitor);
+    debug!(
+        "[overlay] macos create label={} target_pos=({:.1}, {:.1}) scale={}",
+        OVERLAY_LABEL_BASE, x, y, scale
+    );
+    match PanelBuilder::<_, RecordingOverlayPanel>::new(app_handle, OVERLAY_LABEL_BASE)
+        .url(WebviewUrl::App("src/overlay/index.html".into()))
+        .title("Recording")
+        .position(tauri::Position::Logical(tauri::LogicalPosition {
+            x: x / scale,
+            y: y / scale,
+        }))
+        .level(PanelLevel::Status)
+        .size(tauri::Size::Logical(tauri::LogicalSize {
+            width: OVERLAY_WIDTH,
+            height: OVERLAY_HEIGHT,
+        }))
+        .has_shadow(false)
+        .transparent(true)
+        .hides_on_deactivate(false)
+        .no_activate(true)
+        .corner_radius(0.0)
+        .with_window(|w| {
+            w.decorations(false)
+                .transparent(true)
+                .always_on_top(true)
+                .visible_on_all_workspaces(true)
+                .skip_taskbar(true)
+        })
+        .collection_behavior(
+            CollectionBehavior::new()
+                .can_join_all_spaces()
+                .full_screen_auxiliary(),
+        )
+        .build()
+    {
+        Ok(panel) => {
+            let _ = panel.hide();
+            debug!(
+                "[overlay] macos created label={} (hidden)",
+                OVERLAY_LABEL_BASE
+            );
         }
-
-        let (x, y, scale) = calculate_overlay_position_for_monitor(app_handle, monitor);
-        debug!(
-            "[overlay] macos create label={} target_pos=({:.1}, {:.1}) scale={}",
-            label, x, y, scale
-        );
-        match PanelBuilder::<_, RecordingOverlayPanel>::new(app_handle, &label)
-            .url(WebviewUrl::App("src/overlay/index.html".into()))
-            .title("Recording")
-            .position(tauri::Position::Logical(tauri::LogicalPosition {
-                x: x / scale,
-                y: y / scale,
-            }))
-            .level(PanelLevel::Status)
-            .size(tauri::Size::Logical(tauri::LogicalSize {
-                width: OVERLAY_WIDTH,
-                height: OVERLAY_HEIGHT,
-            }))
-            .has_shadow(false)
-            .transparent(true)
-            .hides_on_deactivate(false)
-            .no_activate(true)
-            .corner_radius(0.0)
-            .with_window(|w| {
-                w.decorations(false)
-                    .transparent(true)
-                    .always_on_top(true)
-                    .visible_on_all_workspaces(true)
-                    .skip_taskbar(true)
-            })
-            .collection_behavior(
-                CollectionBehavior::new()
-                    .can_join_all_spaces()
-                    .full_screen_auxiliary(),
-            )
-            .build()
-        {
-            Ok(panel) => {
-                let _ = panel.hide();
-                debug!("[overlay] macos created label={} (hidden)", label);
-            }
-            Err(e) => {
-                debug!("Failed to create macOS overlay panel {}: {}", label, e);
-            }
+        Err(e) => {
+            debug!(
+                "Failed to create macOS overlay panel {}: {}",
+                OVERLAY_LABEL_BASE, e
+            );
         }
     }
 }
@@ -391,20 +371,12 @@ fn show_overlay_state(app_handle: &AppHandle, state: &str) {
             debug!("[overlay] macos show_overlay_state state={}", state);
             create_recording_overlay(&app);
             update_overlay_position(&app);
-            let monitor_count = available_monitors_or_primary(&app).len().max(1);
-            debug!("[overlay] macos show monitor_count={}", monitor_count);
-            for i in 0..monitor_count {
-                let label = overlay_label(i);
-                if let Some(overlay_window) = app.get_webview_window(&label) {
-                    debug!("[overlay] macos show label={}", label);
-                    let _ = overlay_window.show();
-                    if let Ok(panel) = app.get_webview_panel(&label) {
-                        panel.order_front_regardless();
-                    }
-                    let _ = overlay_window.emit("show-overlay", &state);
-                } else {
-                    debug!("[overlay] macos show missing label={}", label);
+            if let Some(overlay_window) = app.get_webview_window(OVERLAY_LABEL_BASE) {
+                let _ = overlay_window.show();
+                if let Ok(panel) = app.get_webview_panel(OVERLAY_LABEL_BASE) {
+                    panel.order_front_regardless();
                 }
+                let _ = overlay_window.emit("show-overlay", &state);
             }
         });
 
@@ -412,20 +384,12 @@ fn show_overlay_state(app_handle: &AppHandle, state: &str) {
         let app_retry = app_handle.clone();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(90));
-            let monitor_count = available_monitors_or_primary(&app_retry).len().max(1);
-            for i in 0..monitor_count {
-                let label = overlay_label(i);
-                if let Some(window) = app_retry.get_webview_window(&label) {
-                    let _ = window.emit("show-overlay", &state_for_retry);
-                }
+            if let Some(window) = app_retry.get_webview_window(OVERLAY_LABEL_BASE) {
+                let _ = window.emit("show-overlay", &state_for_retry);
             }
             std::thread::sleep(std::time::Duration::from_millis(180));
-            let monitor_count = available_monitors_or_primary(&app_retry).len().max(1);
-            for i in 0..monitor_count {
-                let label = overlay_label(i);
-                if let Some(window) = app_retry.get_webview_window(&label) {
-                    let _ = window.emit("show-overlay", &state_for_retry);
-                }
+            if let Some(window) = app_retry.get_webview_window(OVERLAY_LABEL_BASE) {
+                let _ = window.emit("show-overlay", &state_for_retry);
             }
         });
         return;
@@ -464,30 +428,17 @@ pub fn show_processing_overlay(app_handle: &AppHandle) {
 pub fn update_overlay_position(app_handle: &AppHandle) {
     #[cfg(target_os = "macos")]
     {
-        let monitors = available_monitors_or_primary(app_handle);
-        debug!("[overlay] macos update_overlay_position monitor_count={}", monitors.len());
-        for (index, monitor) in monitors.iter().enumerate() {
-            let label = overlay_label(index);
-            if let Some(overlay_window) = app_handle.get_webview_window(&label) {
-                let (x, y, scale) = calculate_overlay_position_for_monitor(app_handle, monitor);
-                debug!(
-                    "[overlay] macos update label={} target_pos=({:.1}, {:.1}) scale={}",
-                    label, x, y, scale
-                );
-                let _ = overlay_window
-                    .set_position(tauri::Position::Logical(tauri::LogicalPosition {
-                        x: x / scale,
-                        y: y / scale,
-                    }));
-                if let Ok(pos) = overlay_window.outer_position() {
-                    debug!(
-                        "[overlay] macos update label={} actual_outer_pos=({}, {})",
-                        label, pos.x, pos.y
-                    );
-                }
-            } else {
-                debug!("[overlay] macos update missing label={}", label);
-            }
+        if let Some(overlay_window) = app_handle.get_webview_window(OVERLAY_LABEL_BASE) {
+            let Some(monitor) = get_monitor_with_cursor(app_handle)
+                .or_else(|| app_handle.primary_monitor().ok().flatten())
+            else {
+                return;
+            };
+            let (x, y, scale) = calculate_overlay_position_for_monitor(app_handle, &monitor);
+            let _ = overlay_window.set_position(tauri::Position::Logical(tauri::LogicalPosition {
+                x: x / scale,
+                y: y / scale,
+            }));
         }
         return;
     }
@@ -514,18 +465,13 @@ pub fn hide_recording_overlay(app_handle: &AppHandle) {
     {
         let app = app_handle.clone();
         let _ = app_handle.run_on_main_thread(move || {
-            let monitor_count = available_monitors_or_primary(&app).len().max(1);
-            debug!("[overlay] macos hide monitor_count={}", monitor_count);
-            for i in 0..monitor_count {
-                let label = overlay_label(i);
-                if let Some(overlay_window) = app.get_webview_window(&label) {
-                    let _ = overlay_window.emit("hide-overlay", ());
-                    let window_clone = overlay_window.clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_millis(300));
-                        let _ = window_clone.hide();
-                    });
-                }
+            if let Some(overlay_window) = app.get_webview_window(OVERLAY_LABEL_BASE) {
+                let _ = overlay_window.emit("hide-overlay", ());
+                let window_clone = overlay_window.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(300));
+                    let _ = window_clone.hide();
+                });
             }
         });
         return;
@@ -552,12 +498,8 @@ pub fn emit_levels(app_handle: &AppHandle, levels: &Vec<f32>) {
 
     #[cfg(target_os = "macos")]
     {
-        let monitor_count = available_monitors_or_primary(app_handle).len().max(1);
-        for i in 0..monitor_count {
-            let label = overlay_label(i);
-            if let Some(overlay_window) = app_handle.get_webview_window(&label) {
-                let _ = overlay_window.emit("mic-level", levels);
-            }
+        if let Some(overlay_window) = app_handle.get_webview_window(OVERLAY_LABEL_BASE) {
+            let _ = overlay_window.emit("mic-level", levels);
         }
         return;
     }

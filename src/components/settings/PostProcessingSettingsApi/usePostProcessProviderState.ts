@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useSettings } from "../../../hooks/useSettings";
 import { commands, type PostProcessProvider } from "@/bindings";
 import type { ModelOption } from "./types";
@@ -10,6 +10,7 @@ type PostProcessProviderState = {
   selectedProvider: PostProcessProvider | undefined;
   isCustomProvider: boolean;
   isAppleProvider: boolean;
+  isGroqProvider: boolean;
   appleIntelligenceUnavailable: boolean;
   baseUrl: string;
   handleBaseUrlChange: (value: string) => void;
@@ -29,6 +30,7 @@ type PostProcessProviderState = {
 };
 
 const APPLE_PROVIDER_ID = "apple_intelligence";
+const GROQ_PROVIDER_ID = "groq";
 
 export const usePostProcessProviderState = (): PostProcessProviderState => {
   const {
@@ -44,10 +46,29 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
 
   // Settings are guaranteed to have providers after migration
   const providers = settings?.post_process_providers || [];
+  const groqProvider = useMemo(
+    () => providers.find((provider) => provider.id === GROQ_PROVIDER_ID),
+    [providers],
+  );
 
   const selectedProviderId = useMemo(() => {
-    return settings?.post_process_provider_id || providers[0]?.id || "openai";
-  }, [providers, settings?.post_process_provider_id]);
+    return (
+      groqProvider?.id ||
+      settings?.post_process_provider_id ||
+      providers[0]?.id ||
+      GROQ_PROVIDER_ID
+    );
+  }, [groqProvider?.id, providers, settings?.post_process_provider_id]);
+
+  useEffect(() => {
+    if (
+      groqProvider &&
+      settings?.post_process_provider_id &&
+      settings.post_process_provider_id !== groqProvider.id
+    ) {
+      void setPostProcessProvider(groqProvider.id);
+    }
+  }, [groqProvider, setPostProcessProvider, settings?.post_process_provider_id]);
 
   const selectedProvider = useMemo(() => {
     return (
@@ -57,6 +78,7 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
   }, [providers, selectedProviderId]);
 
   const isAppleProvider = selectedProvider?.id === APPLE_PROVIDER_ID;
+  const isGroqProvider = selectedProvider?.id === GROQ_PROVIDER_ID;
   const [appleIntelligenceUnavailable, setAppleIntelligenceUnavailable] =
     useState(false);
 
@@ -66,11 +88,15 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
   const model = settings?.post_process_models?.[selectedProviderId] ?? "";
 
   const providerOptions = useMemo<DropdownOption[]>(() => {
-    return providers.map((provider) => ({
-      value: provider.id,
-      label: provider.label,
-    }));
-  }, [providers]);
+    const onlyProvider = groqProvider || selectedProvider;
+    if (!onlyProvider) return [];
+    return [
+      {
+        value: onlyProvider.id,
+        label: onlyProvider.label,
+      },
+    ];
+  }, [groqProvider, selectedProvider]);
 
   const handleProviderSelect = useCallback(
     async (providerId: string) => {
@@ -193,6 +219,7 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
     selectedProvider,
     isCustomProvider,
     isAppleProvider,
+    isGroqProvider,
     appleIntelligenceUnavailable,
     baseUrl,
     handleBaseUrlChange,

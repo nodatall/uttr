@@ -444,7 +444,7 @@ fn default_show_tray_icon() -> bool {
 }
 
 fn default_post_process_provider_id() -> String {
-    "openai".to_string()
+    "groq".to_string()
 }
 
 fn default_post_process_providers() -> Vec<PostProcessProvider> {

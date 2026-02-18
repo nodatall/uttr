@@ -5,7 +5,6 @@ import {
   FlaskConical,
   History,
   Info,
-  Sparkles,
   Cpu,
   AudioLines,
   KeyRound,
@@ -17,7 +16,6 @@ import {
   HistorySettings,
   DebugSettings,
   AboutSettings,
-  PostProcessingSettings,
   ModelsSettings,
   ApiKeysSettings,
 } from "./settings";
@@ -63,12 +61,6 @@ export const SECTIONS_CONFIG = {
     icon: Cog,
     component: AdvancedSettings,
     enabled: () => true,
-  },
-  postprocessing: {
-    labelKey: "sidebar.postProcessing",
-    icon: Sparkles,
-    component: PostProcessingSettings,
-    enabled: (settings) => settings?.post_process_enabled ?? false,
   },
   history: {
     labelKey: "sidebar.history",
