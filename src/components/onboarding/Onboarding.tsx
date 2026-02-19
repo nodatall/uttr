@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import type { ModelInfo } from "@/bindings";
+import WindowDragRegion from "@/components/ui/WindowDragRegion";
 import type { ModelCardStatus } from "./ModelCard";
 import ModelCard from "./ModelCard";
 import { useModelStore } from "../../stores/modelStore";
@@ -78,55 +79,58 @@ const Onboarding: React.FC<OnboardingProps> = ({ onModelSelected }) => {
   };
 
   return (
-    <div className="h-screen w-screen flex flex-col p-6 gap-4 inset-0">
-      <div className="flex flex-col items-center gap-2 shrink-0 text-center">
-        {/* eslint-disable-next-line i18next/no-literal-string */}
-        <p className="text-[11px] tracking-[0.3em] uppercase text-logo-primary/70">
-          Uttr
-        </p>
-        <p className="text-text/70 max-w-md font-medium mx-auto">
-          {t("onboarding.subtitle")}
-        </p>
-      </div>
+    <div className="relative h-screen w-screen flex flex-col inset-0">
+      <WindowDragRegion />
+      <div className="flex-1 flex flex-col p-6 gap-4">
+        <div className="flex flex-col items-center gap-2 shrink-0 text-center">
+          {/* eslint-disable-next-line i18next/no-literal-string */}
+          <p className="text-[11px] tracking-[0.3em] uppercase text-logo-primary/70">
+            Uttr
+          </p>
+          <p className="text-text/70 max-w-md font-medium mx-auto">
+            {t("onboarding.subtitle")}
+          </p>
+        </div>
 
-      <div className="max-w-[600px] w-full mx-auto text-center flex-1 flex flex-col min-h-0">
-        <div className="flex flex-col gap-4 pb-6">
-          {models
-            .filter((m: ModelInfo) => !m.is_downloaded)
-            .filter((model: ModelInfo) => model.is_recommended)
-            .map((model: ModelInfo) => (
-              <ModelCard
-                key={model.id}
-                model={model}
-                variant="featured"
-                status={getModelStatus(model.id)}
-                disabled={isDownloading}
-                onSelect={handleDownloadModel}
-                onDownload={handleDownloadModel}
-                downloadProgress={getModelDownloadProgress(model.id)}
-                downloadSpeed={getModelDownloadSpeed(model.id)}
-              />
-            ))}
+        <div className="max-w-[600px] w-full mx-auto text-center flex-1 flex flex-col min-h-0">
+          <div className="flex flex-col gap-4 pb-6">
+            {models
+              .filter((m: ModelInfo) => !m.is_downloaded)
+              .filter((model: ModelInfo) => model.is_recommended)
+              .map((model: ModelInfo) => (
+                <ModelCard
+                  key={model.id}
+                  model={model}
+                  variant="featured"
+                  status={getModelStatus(model.id)}
+                  disabled={isDownloading}
+                  onSelect={handleDownloadModel}
+                  onDownload={handleDownloadModel}
+                  downloadProgress={getModelDownloadProgress(model.id)}
+                  downloadSpeed={getModelDownloadSpeed(model.id)}
+                />
+              ))}
 
-          {models
-            .filter((m: ModelInfo) => !m.is_downloaded)
-            .filter((model: ModelInfo) => !model.is_recommended)
-            .sort(
-              (a: ModelInfo, b: ModelInfo) =>
-                Number(a.size_mb) - Number(b.size_mb),
-            )
-            .map((model: ModelInfo) => (
-              <ModelCard
-                key={model.id}
-                model={model}
-                status={getModelStatus(model.id)}
-                disabled={isDownloading}
-                onSelect={handleDownloadModel}
-                onDownload={handleDownloadModel}
-                downloadProgress={getModelDownloadProgress(model.id)}
-                downloadSpeed={getModelDownloadSpeed(model.id)}
-              />
-            ))}
+            {models
+              .filter((m: ModelInfo) => !m.is_downloaded)
+              .filter((model: ModelInfo) => !model.is_recommended)
+              .sort(
+                (a: ModelInfo, b: ModelInfo) =>
+                  Number(a.size_mb) - Number(b.size_mb),
+              )
+              .map((model: ModelInfo) => (
+                <ModelCard
+                  key={model.id}
+                  model={model}
+                  status={getModelStatus(model.id)}
+                  disabled={isDownloading}
+                  onSelect={handleDownloadModel}
+                  onDownload={handleDownloadModel}
+                  downloadProgress={getModelDownloadProgress(model.id)}
+                  downloadSpeed={getModelDownloadSpeed(model.id)}
+                />
+              ))}
+          </div>
         </div>
       </div>
     </div>
