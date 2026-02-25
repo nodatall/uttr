@@ -3,7 +3,7 @@ use crate::input::{self, EnigoState};
 use crate::settings::TypingTool;
 use crate::settings::{get_settings, AutoSubmitKey, ClipboardHandling, PasteMethod};
 use enigo::{Direction, Enigo, Key, Keyboard};
-use log::info;
+use log::{info, warn};
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -13,35 +13,133 @@ use crate::utils::{is_kde_wayland, is_wayland};
 #[cfg(target_os = "linux")]
 use std::process::Command;
 
-/// Pastes text using the clipboard: saves current content, writes text, sends paste keystroke, restores clipboard.
+const CLIPBOARD_SYNC_ATTEMPTS: usize = 12;
+const CLIPBOARD_SYNC_RETRY_DELAY_MS: u64 = 15;
+const CLIPBOARD_RESTORE_DELAY_MS: u64 = 250;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ClipboardWriteSyncStatus {
+    Synced,
+    Mismatch,
+    Unavailable,
+}
+
+#[derive(Debug)]
+struct ClipboardRestoreState {
+    original_text: Option<String>,
+    use_wl_copy: bool,
+}
+
+#[cfg(target_os = "linux")]
+fn write_clipboard_text(
+    app_handle: &AppHandle,
+    text: &str,
+    use_wl_copy: bool,
+) -> Result<(), String> {
+    if use_wl_copy {
+        return write_clipboard_via_wl_copy(text);
+    }
+
+    app_handle
+        .clipboard()
+        .write_text(text)
+        .map_err(|e| format!("Failed to write to clipboard: {}", e))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn write_clipboard_text(
+    app_handle: &AppHandle,
+    text: &str,
+    _use_wl_copy: bool,
+) -> Result<(), String> {
+    app_handle
+        .clipboard()
+        .write_text(text)
+        .map_err(|e| format!("Failed to write to clipboard: {}", e))
+}
+
+fn clipboard_text_matches(current: &str, expected: &str) -> bool {
+    current.replace("\r\n", "\n") == expected.replace("\r\n", "\n")
+}
+
+fn wait_for_clipboard_sync(app_handle: &AppHandle, expected: &str) -> ClipboardWriteSyncStatus {
+    let clipboard = app_handle.clipboard();
+    let mut had_successful_read = false;
+
+    for attempt in 0..CLIPBOARD_SYNC_ATTEMPTS {
+        if let Ok(current) = clipboard.read_text() {
+            had_successful_read = true;
+            if clipboard_text_matches(&current, expected) {
+                return ClipboardWriteSyncStatus::Synced;
+            }
+        }
+
+        if attempt + 1 < CLIPBOARD_SYNC_ATTEMPTS {
+            std::thread::sleep(Duration::from_millis(CLIPBOARD_SYNC_RETRY_DELAY_MS));
+        }
+    }
+
+    if had_successful_read {
+        ClipboardWriteSyncStatus::Mismatch
+    } else {
+        ClipboardWriteSyncStatus::Unavailable
+    }
+}
+
+fn restore_clipboard_after_paste(app_handle: &AppHandle, state: ClipboardRestoreState) {
+    let Some(original_text) = state.original_text else {
+        // Preserve non-text clipboard content by not forcing an empty string restore.
+        return;
+    };
+
+    std::thread::sleep(Duration::from_millis(CLIPBOARD_RESTORE_DELAY_MS));
+
+    if let Err(err) = write_clipboard_text(app_handle, &original_text, state.use_wl_copy) {
+        warn!("Failed to restore original clipboard text: {}", err);
+    }
+}
+
+/// Pastes text using the clipboard: saves current content, writes text, sends paste keystroke.
 fn paste_via_clipboard(
     enigo: &mut Enigo,
     text: &str,
     app_handle: &AppHandle,
     paste_method: &PasteMethod,
     paste_delay_ms: u64,
-) -> Result<(), String> {
+) -> Result<ClipboardRestoreState, String> {
     let clipboard = app_handle.clipboard();
-    let clipboard_content = clipboard.read_text().unwrap_or_default();
+    let original_text = clipboard.read_text().ok();
 
-    // Write text to clipboard first
-    // On Wayland, prefer wl-copy for better compatibility (especially with umlauts)
     #[cfg(target_os = "linux")]
-    let write_result = if is_wayland() && is_wl_copy_available() {
-        info!("Using wl-copy for clipboard write on Wayland");
-        write_clipboard_via_wl_copy(text)
-    } else {
-        clipboard
-            .write_text(text)
-            .map_err(|e| format!("Failed to write to clipboard: {}", e))
-    };
-
+    let use_wl_copy = is_wayland() && is_wl_copy_available();
     #[cfg(not(target_os = "linux"))]
-    let write_result = clipboard
-        .write_text(text)
-        .map_err(|e| format!("Failed to write to clipboard: {}", e));
+    let use_wl_copy = false;
 
-    write_result?;
+    // Write text to clipboard first.
+    #[cfg(target_os = "linux")]
+    if use_wl_copy {
+        info!("Using wl-copy for clipboard write on Wayland");
+    }
+    write_clipboard_text(app_handle, text, use_wl_copy)?;
+
+    // Verify the clipboard contains the intended text before issuing Ctrl/Cmd+V.
+    // Without this sync, the target app can occasionally paste stale clipboard content.
+    match wait_for_clipboard_sync(app_handle, text) {
+        ClipboardWriteSyncStatus::Synced => {}
+        ClipboardWriteSyncStatus::Unavailable => {
+            warn!("Clipboard readback unavailable; proceeding without verification");
+        }
+        ClipboardWriteSyncStatus::Mismatch => {
+            // Restore immediately and abort to avoid pasting stale clipboard content.
+            if let Some(previous) = &original_text {
+                let _ = write_clipboard_text(app_handle, previous, use_wl_copy);
+            }
+            return Err(
+                "Clipboard did not update in time; paste aborted to prevent stale content"
+                    .to_string(),
+            );
+        }
+    }
 
     std::thread::sleep(Duration::from_millis(paste_delay_ms));
 
@@ -62,21 +160,10 @@ fn paste_via_clipboard(
         }
     }
 
-    std::thread::sleep(std::time::Duration::from_millis(50));
-
-    // Restore original clipboard content
-    // On Wayland, prefer wl-copy for better compatibility
-    #[cfg(target_os = "linux")]
-    if is_wayland() && is_wl_copy_available() {
-        let _ = write_clipboard_via_wl_copy(&clipboard_content);
-    } else {
-        let _ = clipboard.write_text(&clipboard_content);
-    }
-
-    #[cfg(not(target_os = "linux"))]
-    let _ = clipboard.write_text(&clipboard_content);
-
-    Ok(())
+    Ok(ClipboardRestoreState {
+        original_text,
+        use_wl_copy,
+    })
 }
 
 /// Attempts to send a key combination using Linux-native tools.
@@ -589,6 +676,7 @@ pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
         .0
         .lock()
         .map_err(|e| format!("Failed to lock Enigo: {}", e))?;
+    let mut clipboard_restore_state: Option<ClipboardRestoreState> = None;
 
     // Perform the paste operation
     match paste_method {
@@ -604,19 +692,40 @@ pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
             )?;
         }
         PasteMethod::CtrlV | PasteMethod::CtrlShiftV | PasteMethod::ShiftInsert => {
-            paste_via_clipboard(
+            match paste_via_clipboard(
                 &mut enigo,
                 &text,
                 &app_handle,
                 &paste_method,
                 paste_delay_ms,
-            )?
+            ) {
+                Ok(state) => {
+                    clipboard_restore_state = Some(state);
+                }
+                Err(err) => {
+                    warn!(
+                        "Clipboard paste failed ({}). Falling back to direct typing.",
+                        err
+                    );
+                    paste_direct(
+                        &mut enigo,
+                        &text,
+                        #[cfg(target_os = "linux")]
+                        settings.typing_tool,
+                    )?;
+                }
+            }
         }
     }
 
     if should_send_auto_submit(settings.auto_submit, paste_method) {
         std::thread::sleep(Duration::from_millis(50));
         send_return_key(&mut enigo, settings.auto_submit_key)?;
+    }
+
+    // Restore clipboard after a short grace period so slower apps can consume pasted text first.
+    if let Some(state) = clipboard_restore_state {
+        restore_clipboard_after_paste(&app_handle, state);
     }
 
     // After pasting, optionally copy to clipboard based on settings
@@ -651,5 +760,10 @@ mod tests {
         assert!(should_send_auto_submit(true, PasteMethod::Direct));
         assert!(should_send_auto_submit(true, PasteMethod::CtrlShiftV));
         assert!(should_send_auto_submit(true, PasteMethod::ShiftInsert));
+    }
+
+    #[test]
+    fn clipboard_text_match_tolerates_crlf() {
+        assert!(clipboard_text_matches("hello\r\nworld", "hello\nworld"));
     }
 }

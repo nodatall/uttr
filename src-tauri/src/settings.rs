@@ -8,6 +8,8 @@ use tauri_plugin_store::StoreExt;
 
 pub const APPLE_INTELLIGENCE_PROVIDER_ID: &str = "apple_intelligence";
 pub const APPLE_INTELLIGENCE_DEFAULT_MODEL_ID: &str = "Apple Intelligence";
+const DEFAULT_IMPROVE_TRANSCRIPTIONS_PROMPT_ID: &str = "default_improve_transcriptions";
+const DEFAULT_FORMAT_AS_LIST_PROMPT_ID: &str = "default_format_as_list";
 
 #[derive(Serialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
 #[serde(rename_all = "lowercase")]
@@ -540,11 +542,18 @@ fn default_post_process_models() -> HashMap<String, String> {
 }
 
 fn default_post_process_prompts() -> Vec<LLMPrompt> {
-    vec![LLMPrompt {
-        id: "default_improve_transcriptions".to_string(),
-        name: "Improve Transcriptions".to_string(),
-        prompt: "Clean this transcript:\n1. Fix spelling, capitalization, and punctuation errors\n2. Convert number words to digits (twenty-five → 25, ten percent → 10%, five dollars → $5)\n3. Replace spoken punctuation with symbols (period → ., comma → ,, question mark → ?)\n4. Remove filler words (um, uh, like as filler)\n5. Keep the language in the original version (if it was french, keep it in french for example)\n\nPreserve exact meaning and word order. Do not paraphrase or reorder content.\n\nReturn only the cleaned transcript.\n\nTranscript:\n${output}".to_string(),
-    }]
+    vec![
+        LLMPrompt {
+            id: DEFAULT_IMPROVE_TRANSCRIPTIONS_PROMPT_ID.to_string(),
+            name: "Improve Transcriptions".to_string(),
+            prompt: "Clean this transcript:\n1. Fix spelling, capitalization, and punctuation errors\n2. Convert number words to digits (twenty-five → 25, ten percent → 10%, five dollars → $5)\n3. Replace spoken punctuation with symbols (period → ., comma → ,, question mark → ?)\n4. Remove filler words (um, uh, like as filler)\n5. Keep the language in the original version (if it was french, keep it in french for example)\n\nPreserve exact meaning and word order. Do not paraphrase or reorder content.\n\nReturn only the cleaned transcript.\n\nTranscript:\n${output}".to_string(),
+        },
+        LLMPrompt {
+            id: DEFAULT_FORMAT_AS_LIST_PROMPT_ID.to_string(),
+            name: "Format as List".to_string(),
+            prompt: "Format this transcript as a concise bullet list:\n1. Keep the original language\n2. Preserve meaning exactly (no added facts)\n3. Keep important names, numbers, and dates\n4. Remove filler words and repeated phrases\n5. Use one idea per bullet when possible\n\nReturn only the list, with each item prefixed by \"- \".\n\nTranscript:\n${output}".to_string(),
+        },
+    ]
 }
 
 fn default_typing_tool() -> TypingTool {
@@ -582,6 +591,31 @@ fn ensure_post_process_defaults(settings: &mut AppSettings) -> bool {
                 settings
                     .post_process_models
                     .insert(provider.id.clone(), default_model);
+                changed = true;
+            }
+        }
+    }
+
+    if settings.post_process_prompts.is_empty() {
+        settings.post_process_prompts = default_post_process_prompts();
+        changed = true;
+    } else {
+        let has_improve_prompt = settings
+            .post_process_prompts
+            .iter()
+            .any(|prompt| prompt.id == DEFAULT_IMPROVE_TRANSCRIPTIONS_PROMPT_ID);
+        let has_list_prompt = settings
+            .post_process_prompts
+            .iter()
+            .any(|prompt| prompt.id == DEFAULT_FORMAT_AS_LIST_PROMPT_ID);
+
+        // Migrate legacy installs that only had the original default prompt.
+        if has_improve_prompt && !has_list_prompt {
+            if let Some(list_prompt) = default_post_process_prompts()
+                .into_iter()
+                .find(|prompt| prompt.id == DEFAULT_FORMAT_AS_LIST_PROMPT_ID)
+            {
+                settings.post_process_prompts.push(list_prompt);
                 changed = true;
             }
         }
@@ -829,5 +863,44 @@ mod tests {
         let settings = get_default_settings();
         assert!(!settings.auto_submit);
         assert_eq!(settings.auto_submit_key, AutoSubmitKey::Enter);
+    }
+
+    #[test]
+    fn default_settings_include_list_prompt() {
+        let settings = get_default_settings();
+        assert!(settings
+            .post_process_prompts
+            .iter()
+            .any(|prompt| prompt.id == DEFAULT_FORMAT_AS_LIST_PROMPT_ID));
+    }
+
+    #[test]
+    fn ensure_post_process_defaults_migrates_legacy_prompts() {
+        let mut settings = get_default_settings();
+        settings
+            .post_process_prompts
+            .retain(|prompt| prompt.id == DEFAULT_IMPROVE_TRANSCRIPTIONS_PROMPT_ID);
+        assert_eq!(settings.post_process_prompts.len(), 1);
+
+        let changed = ensure_post_process_defaults(&mut settings);
+        assert!(changed);
+        assert!(settings
+            .post_process_prompts
+            .iter()
+            .any(|prompt| prompt.id == DEFAULT_FORMAT_AS_LIST_PROMPT_ID));
+    }
+
+    #[test]
+    fn ensure_post_process_defaults_does_not_duplicate_list_prompt() {
+        let mut settings = get_default_settings();
+        let changed = ensure_post_process_defaults(&mut settings);
+        assert!(!changed);
+
+        let list_prompt_count = settings
+            .post_process_prompts
+            .iter()
+            .filter(|prompt| prompt.id == DEFAULT_FORMAT_AS_LIST_PROMPT_ID)
+            .count();
+        assert_eq!(list_prompt_count, 1);
     }
 }

@@ -230,6 +230,11 @@ pub fn normalize_spoken_punctuation(text: &str) -> String {
 static MULTI_SPACE_PATTERN: Lazy<Regex> = Lazy::new(|| Regex::new(r"\s{2,}").unwrap());
 static SPACE_BEFORE_PUNCT_PATTERN: Lazy<Regex> =
     Lazy::new(|| Regex::new(r"\s+([,.;:!?])").unwrap());
+static MULTI_NEWLINE_PATTERN: Lazy<Regex> = Lazy::new(|| Regex::new(r"\n{2,}").unwrap());
+static WHITESPACE_AROUND_NEWLINE_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"[ \t]*\n[ \t]*").unwrap());
+static BULLET_PREFIX_NORMALIZE_PATTERN: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"(?m)^\s*-\s*").unwrap());
 static SPOKEN_PUNCTUATION_PATTERNS: Lazy<Vec<(Regex, &'static str)>> = Lazy::new(|| {
     vec![
         (
@@ -237,8 +242,7 @@ static SPOKEN_PUNCTUATION_PATTERNS: Lazy<Vec<(Regex, &'static str)>> = Lazy::new
             "?",
         ),
         (
-            Regex::new(r"(?i)\bexclamation\s+(?:point|mark)\b(?:\s*!+)?")
-                .expect("invalid regex"),
+            Regex::new(r"(?i)\bexclamation\s+(?:point|mark)\b(?:\s*!+)?").expect("invalid regex"),
             "!",
         ),
         (
@@ -249,11 +253,187 @@ static SPOKEN_PUNCTUATION_PATTERNS: Lazy<Vec<(Regex, &'static str)>> = Lazy::new
             Regex::new(r"(?i)\bsemicolon\b(?:\s*;+)?").expect("invalid regex"),
             ";",
         ),
-        (Regex::new(r"(?i)\bcomma\b(?:\s*,+)?").expect("invalid regex"), ","),
-        (Regex::new(r"(?i)\bperiod\b(?:\s*\.+)?").expect("invalid regex"), "."),
-        (Regex::new(r"(?i)\bcolon\b(?:\s*:+)?").expect("invalid regex"), ":"),
+        (
+            Regex::new(r"(?i)\bcomma\b(?:\s*,+)?").expect("invalid regex"),
+            ",",
+        ),
+        (
+            Regex::new(r"(?i)\bperiod\b(?:\s*\.+)?").expect("invalid regex"),
+            ".",
+        ),
+        (
+            Regex::new(r"(?i)\bcolon\b(?:\s*:+)?").expect("invalid regex"),
+            ":",
+        ),
     ]
 });
+static SPOKEN_BULLET_PATTERN: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)\b(?:new|next)\s+bullet(?:\s+point)?\b|\bbullet\s+point\b")
+        .expect("invalid regex")
+});
+static ORDINAL_MARKER_PATTERN: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|finally|lastly)\b")
+        .expect("invalid regex")
+});
+static ORDINAL_ITEM_PREFIX_PATTERN: Lazy<Regex> = Lazy::new(|| {
+    Regex::new(r"(?i)^\s*(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|finally|lastly)\b[\s,:-]*")
+        .expect("invalid regex")
+});
+
+fn ordinal_rank(marker: &str) -> Option<u8> {
+    match marker {
+        "first" => Some(1),
+        "second" => Some(2),
+        "third" => Some(3),
+        "fourth" => Some(4),
+        "fifth" => Some(5),
+        "sixth" => Some(6),
+        "seventh" => Some(7),
+        "eighth" => Some(8),
+        "ninth" => Some(9),
+        "tenth" => Some(10),
+        _ => None,
+    }
+}
+
+fn normalize_explicit_bullets(text: &str) -> Option<String> {
+    if !SPOKEN_BULLET_PATTERN.is_match(text) {
+        return None;
+    }
+
+    let mut normalized = SPOKEN_BULLET_PATTERN.replace_all(text, "\n- ").to_string();
+    normalized = WHITESPACE_AROUND_NEWLINE_PATTERN
+        .replace_all(&normalized, "\n")
+        .to_string();
+    normalized = BULLET_PREFIX_NORMALIZE_PATTERN
+        .replace_all(&normalized, "- ")
+        .to_string();
+    normalized = MULTI_NEWLINE_PATTERN
+        .replace_all(&normalized, "\n")
+        .to_string();
+
+    let lines: Vec<String> = normalized
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(String::from)
+        .collect();
+    if lines.is_empty() {
+        return None;
+    }
+
+    let has_bullet_line = lines.iter().any(|line| line.starts_with("- "));
+    if !has_bullet_line {
+        return None;
+    }
+
+    Some(lines.join("\n"))
+}
+
+fn normalize_ordinal_list(text: &str) -> Option<String> {
+    if text.contains('\n') || text.trim_start().starts_with("- ") {
+        return None;
+    }
+
+    let markers: Vec<(usize, usize, String)> = ORDINAL_MARKER_PATTERN
+        .captures_iter(text)
+        .filter_map(|cap| {
+            cap.get(1).map(|m| {
+                (
+                    m.start(),
+                    m.end(),
+                    m.as_str().to_ascii_lowercase(), // normalize matching logic
+                )
+            })
+        })
+        .collect();
+
+    if markers.len() < 2 {
+        return None;
+    }
+    if markers[0].2 != "first" || !markers.iter().any(|(_, _, marker)| marker == "second") {
+        return None;
+    }
+
+    // Avoid rewriting normal sentences where "first/second" appear mid-sentence.
+    let leading = &text[..markers[0].0];
+    if !leading
+        .trim_matches(|c: char| !c.is_alphanumeric())
+        .is_empty()
+    {
+        return None;
+    }
+
+    let numeric_markers: Vec<u8> = markers
+        .iter()
+        .filter_map(|(_, _, marker)| ordinal_rank(marker))
+        .collect();
+    if numeric_markers.len() >= 2 {
+        let mut last_rank = 0;
+        for rank in numeric_markers {
+            if rank < last_rank {
+                return None;
+            }
+            last_rank = rank;
+        }
+    }
+
+    let mut items: Vec<String> = Vec::new();
+    for i in 0..markers.len() {
+        let start = markers[i].0;
+        let end = if i + 1 < markers.len() {
+            markers[i + 1].0
+        } else {
+            text.len()
+        };
+        let chunk = text[start..end].trim();
+        if chunk.is_empty() {
+            continue;
+        }
+
+        let stripped = ORDINAL_ITEM_PREFIX_PATTERN.replace(chunk, "");
+        let item = stripped
+            .trim()
+            .trim_matches(|c: char| c == ',' || c == ';' || c == ':');
+        if item.is_empty() {
+            continue;
+        }
+        items.push(item.to_string());
+    }
+
+    if items.len() < 2 {
+        return None;
+    }
+
+    Some(
+        items
+            .into_iter()
+            .map(|item| format!("- {}", item))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+}
+
+/// Normalizes spoken list cues into markdown-style bullets.
+///
+/// This is intentionally conservative:
+/// - Explicit cues: "bullet point", "new bullet", "next bullet"
+/// - Ordinal cues: "first ... second ... [third ...]"
+pub fn normalize_spoken_lists(text: &str) -> String {
+    if text.trim().is_empty() {
+        return text.to_string();
+    }
+
+    if let Some(explicit_bullets) = normalize_explicit_bullets(text) {
+        return explicit_bullets;
+    }
+
+    if let Some(ordinal_list) = normalize_ordinal_list(text) {
+        return ordinal_list;
+    }
+
+    text.to_string()
+}
 
 /// Collapses repeated 1-2 letter words (3+ repetitions) to a single instance.
 /// E.g., "wh wh wh wh" -> "wh", "I I I I" -> "I"
@@ -474,6 +654,41 @@ mod tests {
         let text = "im hungry period.";
         let result = normalize_spoken_punctuation(text);
         assert_eq!(result, "im hungry.");
+    }
+
+    #[test]
+    fn test_normalize_spoken_lists_explicit_bullets() {
+        let text = "bullet point buy milk bullet point buy eggs";
+        let result = normalize_spoken_lists(text);
+        assert_eq!(result, "- buy milk\n- buy eggs");
+    }
+
+    #[test]
+    fn test_normalize_spoken_lists_new_and_next_bullet() {
+        let text = "new bullet write tests next bullet run checks";
+        let result = normalize_spoken_lists(text);
+        assert_eq!(result, "- write tests\n- run checks");
+    }
+
+    #[test]
+    fn test_normalize_spoken_lists_ordinals() {
+        let text = "first buy milk second buy eggs third call mom";
+        let result = normalize_spoken_lists(text);
+        assert_eq!(result, "- buy milk\n- buy eggs\n- call mom");
+    }
+
+    #[test]
+    fn test_normalize_spoken_lists_ordinals_with_punctuation() {
+        let text = "First, buy milk. Second, buy eggs. Finally, call mom.";
+        let result = normalize_spoken_lists(text);
+        assert_eq!(result, "- buy milk.\n- buy eggs.\n- call mom.");
+    }
+
+    #[test]
+    fn test_normalize_spoken_lists_does_not_rewrite_normal_sentence() {
+        let text = "This is the first draft and second revision.";
+        let result = normalize_spoken_lists(text);
+        assert_eq!(result, text);
     }
 
     #[test]

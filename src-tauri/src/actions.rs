@@ -1,7 +1,7 @@
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use crate::apple_intelligence;
 use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, SoundType};
-use crate::audio_toolkit::normalize_spoken_punctuation;
+use crate::audio_toolkit::{normalize_spoken_lists, normalize_spoken_punctuation};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::history::HistoryManager;
 use crate::managers::transcription::TranscriptionManager;
@@ -503,8 +503,10 @@ impl ShortcutAction for TranscribeAction {
                             if post_process {
                                 let normalized_punctuation =
                                     normalize_spoken_punctuation(&final_text);
-                                if normalized_punctuation != final_text {
-                                    final_text = normalized_punctuation;
+                                let normalized_lists =
+                                    normalize_spoken_lists(&normalized_punctuation);
+                                if normalized_lists != final_text {
+                                    final_text = normalized_lists;
                                     post_processed_text = Some(final_text.clone());
                                 }
                             }
