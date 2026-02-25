@@ -27,6 +27,7 @@ pub enum EngineType {
 
 pub const GROQ_MODEL_WHISPER_LARGE_V3_TURBO: &str = "groq-whisper-large-v3-turbo";
 pub const GROQ_MODEL_WHISPER_LARGE_V3: &str = "groq-whisper-large-v3";
+pub const DEFAULT_LOCAL_MODEL_ID: &str = "parakeet-tdt-0.6b-v3";
 
 pub fn is_cloud_model_id(model_id: &str) -> bool {
     model_id.starts_with("groq-")
@@ -38,6 +39,27 @@ pub fn groq_api_model_name(model_id: &str) -> Option<&'static str> {
         GROQ_MODEL_WHISPER_LARGE_V3 => Some("whisper-large-v3"),
         _ => None,
     }
+}
+
+fn choose_default_local_model_id(available_models: Vec<ModelInfo>) -> Option<String> {
+    let mut local_models: Vec<_> = available_models
+        .into_iter()
+        .filter(|model| model.is_downloaded && !is_cloud_model_id(&model.id))
+        .collect();
+
+    if local_models
+        .iter()
+        .any(|model| model.id == DEFAULT_LOCAL_MODEL_ID)
+    {
+        return Some(DEFAULT_LOCAL_MODEL_ID.to_string());
+    }
+
+    if let Some(recommended) = local_models.iter().find(|model| model.is_recommended) {
+        return Some(recommended.id.clone());
+    }
+
+    local_models.sort_by(|a, b| a.id.cmp(&b.id));
+    local_models.first().map(|model| model.id.clone())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
@@ -601,14 +623,20 @@ impl ModelManager {
             }
         }
 
-        // If no model is selected, pick the first downloaded one
+        // If no model is selected, pick a default local model.
+        // Priority:
+        // 1) Parakeet V3 (if downloaded)
+        // 2) any other downloaded recommended model
+        // 3) first downloaded local model by id
         if settings.selected_model.is_empty() {
-            // Find the first available (downloaded) model
             let models = self.available_models.lock().unwrap();
-            if let Some(available_model) = models
-                .values()
-                .find(|model| model.is_downloaded && !is_cloud_model_id(&model.id))
-            {
+            let selected_model_id =
+                choose_default_local_model_id(models.values().cloned().collect());
+            if let Some(selected_model_id) = selected_model_id {
+                let available_model = match models.get(&selected_model_id) {
+                    Some(model) => model,
+                    None => return Ok(()),
+                };
                 info!(
                     "Auto-selecting model: {} ({})",
                     available_model.id, available_model.name
@@ -616,10 +644,10 @@ impl ModelManager {
 
                 // Update settings with the selected model
                 let mut updated_settings = settings;
-                updated_settings.selected_model = available_model.id.clone();
+                updated_settings.selected_model = selected_model_id.clone();
                 write_settings(&self.app_handle, updated_settings);
 
-                info!("Successfully auto-selected model: {}", available_model.id);
+                info!("Successfully auto-selected model: {}", selected_model_id);
             }
         }
 
@@ -1266,6 +1294,52 @@ mod tests {
     use super::*;
     use std::io::Write;
     use tempfile::TempDir;
+
+    fn model(id: &str, is_downloaded: bool, is_recommended: bool) -> ModelInfo {
+        ModelInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: String::new(),
+            filename: String::new(),
+            url: None,
+            size_mb: 0,
+            is_downloaded,
+            is_downloading: false,
+            partial_size: 0,
+            is_directory: false,
+            engine_type: EngineType::Whisper,
+            accuracy_score: 0.0,
+            speed_score: 0.0,
+            supports_translation: true,
+            is_recommended,
+            supported_languages: vec![],
+            is_custom: false,
+        }
+    }
+
+    #[test]
+    fn default_local_model_prefers_parakeet_v3_when_downloaded() {
+        let models = vec![
+            model("small", true, false),
+            model(DEFAULT_LOCAL_MODEL_ID, true, false),
+        ];
+        let selected = choose_default_local_model_id(models);
+        assert_eq!(selected.as_deref(), Some(DEFAULT_LOCAL_MODEL_ID));
+    }
+
+    #[test]
+    fn default_local_model_falls_back_to_recommended_then_sorted() {
+        let with_recommended = vec![
+            model("small", true, false),
+            model("sense-voice-int8", true, true),
+        ];
+        let selected_recommended = choose_default_local_model_id(with_recommended);
+        assert_eq!(selected_recommended.as_deref(), Some("sense-voice-int8"));
+
+        let sorted_fallback = vec![model("zeta", true, false), model("alpha", true, false)];
+        let selected_sorted = choose_default_local_model_id(sorted_fallback);
+        assert_eq!(selected_sorted.as_deref(), Some("alpha"));
+    }
 
     #[test]
     fn test_discover_custom_whisper_models() {

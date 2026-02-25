@@ -12,7 +12,6 @@ import AccessibilityPermissions from "./components/AccessibilityPermissions";
 import Footer from "./components/footer";
 import Onboarding, { AccessibilityOnboarding } from "./components/onboarding";
 import { Sidebar, SidebarSection, SECTIONS_CONFIG } from "./components/Sidebar";
-import WindowDragRegion from "./components/ui/WindowDragRegion";
 import { useSettings } from "./hooks/useSettings";
 import { useSettingsStore } from "./stores/settingsStore";
 import { commands } from "@/bindings";
@@ -176,7 +175,6 @@ function App() {
       dir={direction}
       className="relative h-screen flex flex-col select-none cursor-default bg-background text-text"
     >
-      <WindowDragRegion />
       <Toaster
         theme="system"
         toastOptions={{
@@ -190,7 +188,7 @@ function App() {
         }}
       />
       {/* Main content area that takes remaining space */}
-      <div className="flex-1 flex overflow-hidden px-4 pb-4 pt-[6px] gap-4">
+      <div className="flex-1 flex overflow-hidden px-4 pb-4 pt-[13px] gap-4">
         <Sidebar
           activeSection={currentSection}
           onSectionChange={setCurrentSection}

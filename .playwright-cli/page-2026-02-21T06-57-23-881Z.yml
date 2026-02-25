@@ -1,0 +1,15 @@
+- generic [ref=e2]:
+  - heading "X Cancelled | Verifying your request" [level=1] [ref=e3]
+  - paragraph [ref=e4]:
+    - text: Sorry this pages exist in order to keep the service usable for everyone.
+    - generic [ref=e5]: If you can't pass the test, please whitelist your extensions on this website and update your browser.
+    - text: In case you really can't pass the test then email me at antibot [AT] xcancel [DOT] com with as much details as possible.
+    - generic [ref=e6]:
+      - text: Want to access the original Twitter/X link?
+      - link "click here" [ref=e7] [cursor=pointer]:
+        - /url: https://x.com/rishabhhdesigns/status/2024129528390455583
+  - generic [ref=e8]:
+    - heading "Information :" [level=2] [ref=e9]
+    - generic [ref=e10]:
+      - text: This process is automatic. Your browser will redirect to your requested content shortly.
+      - text: Please allow up to 1 second…

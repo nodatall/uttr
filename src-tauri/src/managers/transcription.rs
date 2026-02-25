@@ -1,7 +1,10 @@
 use crate::audio_toolkit::{apply_custom_words, filter_transcription_output};
 use crate::groq_client;
-use crate::managers::model::{groq_api_model_name, is_cloud_model_id, EngineType, ModelManager};
-use crate::settings::{get_settings, ModelUnloadTimeout};
+use crate::managers::model::{
+    groq_api_model_name, is_cloud_model_id, EngineType, ModelInfo, ModelManager,
+    DEFAULT_LOCAL_MODEL_ID,
+};
+use crate::settings::{get_settings, AppSettings, ModelUnloadTimeout};
 use anyhow::Result;
 use log::{debug, error, info, warn};
 use serde::Serialize;
@@ -43,6 +46,72 @@ enum LoadedEngine {
     Moonshine(MoonshineEngine),
     MoonshineStreaming(MoonshineStreamingEngine),
     SenseVoice(SenseVoiceEngine),
+}
+
+fn looks_like_network_error(error_message: &str) -> bool {
+    let lower = error_message.to_ascii_lowercase();
+    [
+        "connection",
+        "connect error",
+        "dns",
+        "lookup address",
+        "timed out",
+        "timeout",
+        "network",
+        "unreachable",
+        "temporary failure",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+}
+
+fn choose_local_fallback_model_id(
+    available_models: Vec<ModelInfo>,
+    preferred_local_model_id: Option<&str>,
+) -> Option<String> {
+    let mut local_models: Vec<_> = available_models
+        .into_iter()
+        .filter(|model| model.is_downloaded && !is_cloud_model_id(&model.id))
+        .collect();
+
+    if let Some(preferred_id) = preferred_local_model_id {
+        if local_models.iter().any(|model| model.id == preferred_id) {
+            return Some(preferred_id.to_string());
+        }
+    }
+
+    if local_models
+        .iter()
+        .any(|model| model.id == DEFAULT_LOCAL_MODEL_ID)
+    {
+        return Some(DEFAULT_LOCAL_MODEL_ID.to_string());
+    }
+
+    if let Some(recommended) = local_models.iter().find(|model| model.is_recommended) {
+        return Some(recommended.id.clone());
+    }
+
+    const PRIORITY_IDS: &[&str] = &[
+        "parakeet-tdt-0.6b-v3",
+        "small",
+        "turbo",
+        "medium",
+        "large",
+        "parakeet-tdt-0.6b-v2",
+        "moonshine-tiny-streaming-en",
+        "moonshine-small-streaming-en",
+        "moonshine-medium-streaming-en",
+        "sense-voice-int8",
+        "moonshine-base",
+    ];
+    for priority_id in PRIORITY_IDS {
+        if local_models.iter().any(|model| model.id == *priority_id) {
+            return Some((*priority_id).to_string());
+        }
+    }
+
+    local_models.sort_by(|a, b| a.id.cmp(&b.id));
+    local_models.first().map(|model| model.id.clone())
 }
 
 #[derive(Clone)]
@@ -220,6 +289,163 @@ impl TranscriptionManager {
             .ok()
             .map(|key| key.trim().to_string())
             .filter(|key| !key.is_empty())
+    }
+
+    fn select_local_fallback_model_id(
+        &self,
+        preferred_local_model_id: Option<&str>,
+    ) -> Option<String> {
+        choose_local_fallback_model_id(
+            self.model_manager.get_available_models(),
+            preferred_local_model_id,
+        )
+    }
+
+    fn transcribe_with_local_engine(
+        &self,
+        audio: Vec<f32>,
+        settings: &AppSettings,
+    ) -> Result<String> {
+        // Perform transcription with the appropriate local engine.
+        // We use catch_unwind to prevent engine panics from poisoning the mutex,
+        // which would make the app hang indefinitely on subsequent operations.
+        let result = {
+            let mut engine_guard = self.lock_engine();
+
+            // Take the engine out so we own it during transcription.
+            // If the engine panics, we simply don't put it back (effectively unloading it)
+            // instead of poisoning the mutex.
+            let mut engine = match engine_guard.take() {
+                Some(e) => e,
+                None => {
+                    return Err(anyhow::anyhow!(
+                        "Model failed to load after auto-load attempt. Please check your model settings."
+                    ));
+                }
+            };
+
+            // Release the lock before transcribing — no mutex held during the engine call
+            drop(engine_guard);
+
+            let transcribe_result = catch_unwind(AssertUnwindSafe(
+                || -> Result<transcribe_rs::TranscriptionResult> {
+                    match &mut engine {
+                        LoadedEngine::Whisper(whisper_engine) => {
+                            let whisper_language = if settings.selected_language == "auto" {
+                                None
+                            } else {
+                                let normalized = if settings.selected_language == "zh-Hans"
+                                    || settings.selected_language == "zh-Hant"
+                                {
+                                    "zh".to_string()
+                                } else {
+                                    settings.selected_language.clone()
+                                };
+                                Some(normalized)
+                            };
+
+                            let params = WhisperInferenceParams {
+                                language: whisper_language,
+                                translate: settings.translate_to_english,
+                                ..Default::default()
+                            };
+
+                            whisper_engine
+                                .transcribe_samples(audio, Some(params))
+                                .map_err(|e| anyhow::anyhow!("Whisper transcription failed: {}", e))
+                        }
+                        LoadedEngine::Parakeet(parakeet_engine) => {
+                            let params = ParakeetInferenceParams {
+                                timestamp_granularity: TimestampGranularity::Segment,
+                                ..Default::default()
+                            };
+                            parakeet_engine
+                                .transcribe_samples(audio, Some(params))
+                                .map_err(|e| {
+                                    anyhow::anyhow!("Parakeet transcription failed: {}", e)
+                                })
+                        }
+                        LoadedEngine::Moonshine(moonshine_engine) => moonshine_engine
+                            .transcribe_samples(audio, None)
+                            .map_err(|e| anyhow::anyhow!("Moonshine transcription failed: {}", e)),
+                        LoadedEngine::MoonshineStreaming(streaming_engine) => streaming_engine
+                            .transcribe_samples(audio, None)
+                            .map_err(|e| {
+                                anyhow::anyhow!("Moonshine streaming transcription failed: {}", e)
+                            }),
+                        LoadedEngine::SenseVoice(sense_voice_engine) => {
+                            let language = match settings.selected_language.as_str() {
+                                "zh" | "zh-Hans" | "zh-Hant" => SenseVoiceLanguage::Chinese,
+                                "en" => SenseVoiceLanguage::English,
+                                "ja" => SenseVoiceLanguage::Japanese,
+                                "ko" => SenseVoiceLanguage::Korean,
+                                "yue" => SenseVoiceLanguage::Cantonese,
+                                _ => SenseVoiceLanguage::Auto,
+                            };
+                            let params = SenseVoiceInferenceParams {
+                                language,
+                                use_itn: true,
+                            };
+                            sense_voice_engine
+                                .transcribe_samples(audio, Some(params))
+                                .map_err(|e| {
+                                    anyhow::anyhow!("SenseVoice transcription failed: {}", e)
+                                })
+                        }
+                    }
+                },
+            ));
+
+            match transcribe_result {
+                Ok(inner_result) => {
+                    // Success or normal error — put the engine back
+                    let mut engine_guard = self.lock_engine();
+                    *engine_guard = Some(engine);
+                    inner_result?
+                }
+                Err(panic_payload) => {
+                    // Engine panicked — do NOT put it back (it's in an unknown state).
+                    // The engine is dropped here, effectively unloading it.
+                    let panic_msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "unknown panic".to_string()
+                    };
+                    error!(
+                        "Transcription engine panicked: {}. Model has been unloaded.",
+                        panic_msg
+                    );
+
+                    // Clear the model ID so it will be reloaded on next attempt
+                    {
+                        let mut current_model = self
+                            .current_model_id
+                            .lock()
+                            .unwrap_or_else(|e| e.into_inner());
+                        *current_model = None;
+                    }
+
+                    let _ = self.app_handle.emit(
+                        "model-state-changed",
+                        ModelStateEvent {
+                            event_type: "unloaded".to_string(),
+                            model_id: None,
+                            model_name: None,
+                            error: Some(format!("Engine panicked: {}", panic_msg)),
+                        },
+                    );
+
+                    return Err(anyhow::anyhow!(
+                        "Transcription engine panicked: {}. The model has been unloaded and will reload on next attempt.",
+                        panic_msg
+                    ));
+                }
+            }
+        };
+
+        Ok(result.text)
     }
 
     pub fn load_model(&self, model_id: &str) -> Result<()> {
@@ -486,16 +712,25 @@ impl TranscriptionManager {
         }
         // Get current settings for configuration
         let settings = get_settings(&self.app_handle);
-        let active_model_id = self
-            .get_current_model()
-            .filter(|id| !id.is_empty())
-            .or_else(|| {
-                if settings.selected_model.is_empty() {
-                    None
-                } else {
-                    Some(settings.selected_model.clone())
-                }
-            });
+        let selected_model_id = if settings.selected_model.is_empty() {
+            None
+        } else {
+            Some(settings.selected_model.clone())
+        };
+        let selected_model_is_cloud = selected_model_id
+            .as_deref()
+            .map(is_cloud_model_id)
+            .unwrap_or(false);
+
+        // If settings explicitly select a cloud model, always start with cloud.
+        // This allows cloud-first behavior even if a local fallback model is loaded.
+        let active_model_id = if selected_model_is_cloud {
+            selected_model_id.clone()
+        } else {
+            self.get_current_model()
+                .filter(|id| !id.is_empty())
+                .or_else(|| selected_model_id.clone())
+        };
 
         let is_cloud_model = active_model_id
             .as_deref()
@@ -519,7 +754,7 @@ impl TranscriptionManager {
                 anyhow::anyhow!("Groq API key is required. Add it in Models > Groq Cloud API key.")
             })?;
 
-            groq_client::transcribe_samples(
+            match groq_client::transcribe_samples(
                 &api_key,
                 groq_model,
                 &audio,
@@ -527,155 +762,63 @@ impl TranscriptionManager {
                 settings.translate_to_english,
             )
             .await
-            .map_err(|e| anyhow::anyhow!("Groq transcription failed: {}", e))?
-        } else {
-            // Perform transcription with the appropriate local engine.
-            // We use catch_unwind to prevent engine panics from poisoning the mutex,
-            // which would make the app hang indefinitely on subsequent operations.
-            let result = {
-                let mut engine_guard = self.lock_engine();
-
-                // Take the engine out so we own it during transcription.
-                // If the engine panics, we simply don't put it back (effectively unloading it)
-                // instead of poisoning the mutex.
-                let mut engine = match engine_guard.take() {
-                    Some(e) => e,
-                    None => {
-                        return Err(anyhow::anyhow!(
-                            "Model failed to load after auto-load attempt. Please check your model settings."
-                        ));
-                    }
-                };
-
-                // Release the lock before transcribing — no mutex held during the engine call
-                drop(engine_guard);
-
-                let transcribe_result = catch_unwind(AssertUnwindSafe(
-                    || -> Result<transcribe_rs::TranscriptionResult> {
-                        match &mut engine {
-                            LoadedEngine::Whisper(whisper_engine) => {
-                                let whisper_language = if settings.selected_language == "auto" {
-                                    None
-                                } else {
-                                    let normalized = if settings.selected_language == "zh-Hans"
-                                        || settings.selected_language == "zh-Hant"
-                                    {
-                                        "zh".to_string()
-                                    } else {
-                                        settings.selected_language.clone()
-                                    };
-                                    Some(normalized)
-                                };
-
-                                let params = WhisperInferenceParams {
-                                    language: whisper_language,
-                                    translate: settings.translate_to_english,
-                                    ..Default::default()
-                                };
-
-                                whisper_engine
-                                    .transcribe_samples(audio, Some(params))
-                                    .map_err(|e| {
-                                        anyhow::anyhow!("Whisper transcription failed: {}", e)
-                                    })
-                            }
-                            LoadedEngine::Parakeet(parakeet_engine) => {
-                                let params = ParakeetInferenceParams {
-                                    timestamp_granularity: TimestampGranularity::Segment,
-                                    ..Default::default()
-                                };
-                                parakeet_engine
-                                    .transcribe_samples(audio, Some(params))
-                                    .map_err(|e| {
-                                        anyhow::anyhow!("Parakeet transcription failed: {}", e)
-                                    })
-                            }
-                            LoadedEngine::Moonshine(moonshine_engine) => moonshine_engine
-                                .transcribe_samples(audio, None)
-                                .map_err(|e| {
-                                    anyhow::anyhow!("Moonshine transcription failed: {}", e)
-                                }),
-                            LoadedEngine::MoonshineStreaming(streaming_engine) => streaming_engine
-                                .transcribe_samples(audio, None)
-                                .map_err(|e| {
-                                    anyhow::anyhow!(
-                                        "Moonshine streaming transcription failed: {}",
-                                        e
-                                    )
-                                }),
-                            LoadedEngine::SenseVoice(sense_voice_engine) => {
-                                let language = match settings.selected_language.as_str() {
-                                    "zh" | "zh-Hans" | "zh-Hant" => SenseVoiceLanguage::Chinese,
-                                    "en" => SenseVoiceLanguage::English,
-                                    "ja" => SenseVoiceLanguage::Japanese,
-                                    "ko" => SenseVoiceLanguage::Korean,
-                                    "yue" => SenseVoiceLanguage::Cantonese,
-                                    _ => SenseVoiceLanguage::Auto,
-                                };
-                                let params = SenseVoiceInferenceParams {
-                                    language,
-                                    use_itn: true,
-                                };
-                                sense_voice_engine
-                                    .transcribe_samples(audio, Some(params))
-                                    .map_err(|e| {
-                                        anyhow::anyhow!("SenseVoice transcription failed: {}", e)
-                                    })
-                            }
-                        }
-                    },
-                ));
-
-                match transcribe_result {
-                    Ok(inner_result) => {
-                        // Success or normal error — put the engine back
-                        let mut engine_guard = self.lock_engine();
-                        *engine_guard = Some(engine);
-                        inner_result?
-                    }
-                    Err(panic_payload) => {
-                        // Engine panicked — do NOT put it back (it's in an unknown state).
-                        // The engine is dropped here, effectively unloading it.
-                        let panic_msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
-                            s.to_string()
-                        } else if let Some(s) = panic_payload.downcast_ref::<String>() {
-                            s.clone()
-                        } else {
-                            "unknown panic".to_string()
-                        };
-                        error!(
-                            "Transcription engine panicked: {}. Model has been unloaded.",
-                            panic_msg
+            {
+                Ok(text) => text,
+                Err(groq_error) => {
+                    let likely_network_issue = looks_like_network_error(groq_error.as_str());
+                    if likely_network_issue {
+                        warn!(
+                            "Groq transcription failed with what looks like a network/offline issue: {}",
+                            groq_error
                         );
-
-                        // Clear the model ID so it will be reloaded on next attempt
-                        {
-                            let mut current_model = self
-                                .current_model_id
-                                .lock()
-                                .unwrap_or_else(|e| e.into_inner());
-                            *current_model = None;
-                        }
-
-                        let _ = self.app_handle.emit(
-                            "model-state-changed",
-                            ModelStateEvent {
-                                event_type: "unloaded".to_string(),
-                                model_id: None,
-                                model_name: None,
-                                error: Some(format!("Engine panicked: {}", panic_msg)),
-                            },
-                        );
-
-                        return Err(anyhow::anyhow!(
-                            "Transcription engine panicked: {}. The model has been unloaded and will reload on next attempt.",
-                            panic_msg
-                        ));
+                    } else {
+                        warn!("Groq transcription failed: {}", groq_error);
                     }
+
+                    let preferred_local_id = self
+                        .get_current_model()
+                        .filter(|id| !is_cloud_model_id(id))
+                        .or_else(|| {
+                            selected_model_id
+                                .clone()
+                                .filter(|id| !is_cloud_model_id(id))
+                        });
+                    let fallback_local_model_id = self
+                        .select_local_fallback_model_id(preferred_local_id.as_deref())
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "Groq transcription failed: {}. No downloaded local model available for fallback.",
+                                groq_error
+                            )
+                        })?;
+
+                    let local_engine_loaded = {
+                        let engine_guard = self.lock_engine();
+                        engine_guard.is_some()
+                    };
+                    let current_model = self.get_current_model();
+                    if current_model.as_deref() != Some(fallback_local_model_id.as_str())
+                        || !local_engine_loaded
+                    {
+                        warn!(
+                            "Switching transcription to local fallback model '{}' after Groq failure",
+                            fallback_local_model_id
+                        );
+                        self.load_model(&fallback_local_model_id).map_err(|load_error| {
+                            anyhow::anyhow!(
+                                "Groq transcription failed: {}. Local fallback model '{}' failed to load: {}",
+                                groq_error,
+                                fallback_local_model_id,
+                                load_error
+                            )
+                        })?;
+                    }
+
+                    self.transcribe_with_local_engine(audio, &settings)?
                 }
-            };
-
-            result.text
+            }
+        } else {
+            self.transcribe_with_local_engine(audio, &settings)?
         };
 
         // Apply word correction if custom words are configured
@@ -733,5 +876,92 @@ impl Drop for TranscriptionManager {
                 debug!("Idle watcher thread joined successfully");
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn model(id: &str, is_downloaded: bool, is_recommended: bool) -> ModelInfo {
+        ModelInfo {
+            id: id.to_string(),
+            name: id.to_string(),
+            description: String::new(),
+            filename: String::new(),
+            url: None,
+            size_mb: 0,
+            is_downloaded,
+            is_downloading: false,
+            partial_size: 0,
+            is_directory: false,
+            engine_type: EngineType::Whisper,
+            accuracy_score: 0.0,
+            speed_score: 0.0,
+            supports_translation: true,
+            is_recommended,
+            supported_languages: vec![],
+            is_custom: false,
+        }
+    }
+
+    #[test]
+    fn network_error_detection_matches_common_offline_failures() {
+        assert!(looks_like_network_error(
+            "Groq request failed: error sending request for url: connection refused"
+        ));
+        assert!(looks_like_network_error(
+            "Groq request failed: dns error: failed to lookup address information"
+        ));
+        assert!(!looks_like_network_error(
+            "Groq API request failed (401 Unauthorized): invalid api key"
+        ));
+    }
+
+    #[test]
+    fn local_fallback_prefers_requested_local_model_when_available() {
+        let models = vec![model("small", true, false), model("turbo", true, false)];
+        let picked = choose_local_fallback_model_id(models, Some("turbo"));
+        assert_eq!(picked.as_deref(), Some("turbo"));
+    }
+
+    #[test]
+    fn local_fallback_prefers_default_local_model_id() {
+        let models = vec![
+            model("small", true, false),
+            model(DEFAULT_LOCAL_MODEL_ID, true, false),
+            model("sense-voice-int8", true, true),
+        ];
+        let picked = choose_local_fallback_model_id(models, None);
+        assert_eq!(picked.as_deref(), Some(DEFAULT_LOCAL_MODEL_ID));
+    }
+
+    #[test]
+    fn local_fallback_prefers_recommended_then_priority_then_first_sorted() {
+        let with_recommended = vec![
+            model("small", true, false),
+            model("medium", true, false),
+            model("sensevoice", true, true),
+        ];
+        let picked_recommended = choose_local_fallback_model_id(with_recommended, None);
+        assert_eq!(picked_recommended.as_deref(), Some("sensevoice"));
+
+        let with_priority = vec![model("foo", true, false), model("small", true, false)];
+        let picked_priority = choose_local_fallback_model_id(with_priority, None);
+        assert_eq!(picked_priority.as_deref(), Some("small"));
+
+        let sorted_fallback = vec![model("zeta", true, false), model("alpha", true, false)];
+        let picked_sorted = choose_local_fallback_model_id(sorted_fallback, None);
+        assert_eq!(picked_sorted.as_deref(), Some("alpha"));
+    }
+
+    #[test]
+    fn local_fallback_ignores_cloud_and_not_downloaded_models() {
+        let models = vec![
+            model("groq-whisper-large-v3", true, false),
+            model("small", false, false),
+        ];
+        let picked = choose_local_fallback_model_id(models, None);
+        assert!(picked.is_none());
     }
 }
