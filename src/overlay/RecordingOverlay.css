@@ -1,58 +1,46 @@
 .recording-overlay {
-  height: 36px;
+  height: 38px;
   width: 172px;
-  display: grid;
-  grid-template-columns: auto 1fr auto;
+  display: flex;
   align-items: center;
-  padding: 6px;
-  background: #000000cc;
+  padding: 4px 0;
+  background: rgb(10 16 26 / 28%);
+  border: 1px solid rgb(255 255 255 / 12%);
+  backdrop-filter: blur(11px) saturate(128%);
   border-radius: 18px;
   opacity: 0;
   transition: opacity 300ms ease-out;
   box-sizing: border-box;
 }
 
-.overlay-left {
-  display: flex;
-  align-items: center;
-}
-
-.overlay-state-icon {
-  width: 24px;
-  height: 24px;
-  object-fit: contain;
-  user-select: none;
-}
-
 .overlay-middle {
   display: flex;
   align-items: center;
   justify-content: center;
+  width: 100%;
 }
 
-.overlay-right {
+.overlay-middle-full {
+  width: 100%;
+  height: 100%;
+}
+
+.siriwave-host {
+  width: 100%;
+  height: 100%;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
-}
-
-.bars-container {
-  display: flex;
-  align-items: end;
   justify-content: center;
-  gap: 3px;
-  padding-bottom: 0px;
-  height: 24px;
   overflow: hidden;
 }
 
-.bar {
-  width: 6px;
-  background: linear-gradient(180deg, #c75eb4 0%, #6a16c4 100%);
-  max-height: 20px;
-  border-radius: 2px;
-  transition: height 80ms linear;
-  min-height: 4px;
+.siriwave-host canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: hidden;
+  opacity: 1;
+  filter: saturate(132%) brightness(1.18);
 }
 
 .recording-overlay.fade-in {
@@ -60,43 +48,22 @@
 }
 
 .transcribing-text {
-  color: white;
+  color: rgb(228 241 255 / 94%);
   font-size: 12px;
-  font-family:
-    -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  animation: transcribing-pulse 1.5s infinite ease-in-out;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  text-shadow:
+    0 0 10px rgb(113 205 255 / 45%),
+    0 0 20px rgb(155 132 255 / 28%);
+  animation: transcribing-pulse 1.15s ease-in-out infinite;
 }
 
 @keyframes transcribing-pulse {
   0%,
   100% {
-    opacity: 0.6;
+    opacity: 0.65;
   }
   50% {
     opacity: 1;
   }
-}
-
-.cancel-button {
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  background: transparent;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  cursor: pointer;
-  transition:
-    background-color 150ms ease-out,
-    transform 100ms ease-out;
-  flex-shrink: 0;
-}
-
-.cancel-button:hover {
-  background: #8f3cc833;
-  transform: scale(1.05);
-}
-
-.cancel-button:active {
-  transform: scale(0.95);
 }

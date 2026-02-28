@@ -39,10 +39,10 @@ const OVERLAY_TOP_OFFSET: f64 = 46.0;
 const OVERLAY_TOP_OFFSET: f64 = 4.0;
 
 #[cfg(target_os = "macos")]
-const OVERLAY_BOTTOM_OFFSET: f64 = 15.0;
+const OVERLAY_BOTTOM_OFFSET: f64 = 25.0;
 
 #[cfg(any(target_os = "windows", target_os = "linux"))]
-const OVERLAY_BOTTOM_OFFSET: f64 = 40.0;
+const OVERLAY_BOTTOM_OFFSET: f64 = 50.0;
 
 #[cfg(target_os = "linux")]
 fn update_gtk_layer_shell_anchors(overlay_window: &tauri::webview::WebviewWindow) {

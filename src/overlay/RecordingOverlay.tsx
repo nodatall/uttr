@@ -1,25 +1,44 @@
 import { listen } from "@tauri-apps/api/event";
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import { CancelIcon } from "../components/icons";
 import "./RecordingOverlay.css";
-import { commands } from "@/bindings";
 import i18n, { syncLanguageFromSettings } from "@/i18n";
 import { getLanguageDirection } from "@/lib/utils/rtl";
-import recordingTriggerIcon from "@/assets/overlay/recording-trigger.png";
-import transcribingTriggerIcon from "@/assets/overlay/transcribing-trigger.png";
+import SiriWave from "siriwave";
 
 type OverlayState = "recording" | "transcribing" | "processing";
+
+const INPUT_SMOOTHING_KEEP = 0.58;
+const INPUT_SMOOTHING_NEW = 0.42;
+const WAVE_ENERGY_POWER = 0.72;
+const QUIET_SPEECH_GAIN = 2.85;
+const QUIET_FLOOR = 0.12;
+const WAVE_ENERGY_MIN = 0;
+const WAVE_ENERGY_MAX = 1;
+const WAVE_AMPLITUDE_MIN = 0.9;
+const WAVE_AMPLITUDE_RANGE = 3.1;
+const WAVE_AMPLITUDE_CAP = 4.4;
+const WAVE_SPEED_MIN = 0.1;
+const WAVE_SPEED_RANGE = 0.24;
+const WAVE_SPEED_CAP = 0.36;
+
+const clamp = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value));
 
 const RecordingOverlay: React.FC = () => {
   const { t } = useTranslation();
   const [isVisible, setIsVisible] = useState(true);
   const [state, setState] = useState<OverlayState>("recording");
   const [levels, setLevels] = useState<number[]>(Array(16).fill(0));
+  const waveContainerRef = useRef<HTMLDivElement | null>(null);
+  const siriWaveRef = useRef<SiriWave | null>(null);
   const smoothedLevelsRef = useRef<number[]>(Array(16).fill(0));
   const direction = getLanguageDirection(i18n.language);
 
   useEffect(() => {
+    let isDisposed = false;
+    const unlistenFns: Array<() => void> = [];
+
     const setupEventListeners = async () => {
       // Listen for show-overlay event from Rust
       const unlistenShow = await listen("show-overlay", async (event) => {
@@ -44,87 +63,115 @@ const RecordingOverlay: React.FC = () => {
         // Apply smoothing to reduce jitter
         const smoothed = smoothedLevelsRef.current.map((prev, i) => {
           const target = newLevels[i] || 0;
-          return prev * 0.7 + target * 0.3; // Smooth transition
+          return prev * INPUT_SMOOTHING_KEEP + target * INPUT_SMOOTHING_NEW;
         });
 
         smoothedLevelsRef.current = smoothed;
-        setLevels(smoothed.slice(0, 9));
+        setLevels(smoothed);
       });
 
-      // Cleanup function
-      return () => {
+      if (isDisposed) {
         unlistenShow();
         unlistenHide();
         unlistenLevel();
-      };
+        return;
+      }
+
+      unlistenFns.push(unlistenShow, unlistenHide, unlistenLevel);
     };
 
-    setupEventListeners();
+    void setupEventListeners();
+
+    return () => {
+      isDisposed = true;
+      unlistenFns.forEach((unlisten) => unlisten());
+    };
   }, []);
 
-  const getIcon = () => {
-    if (state === "recording") {
-      return (
-        <img
-          src={recordingTriggerIcon}
-          alt=""
-          className="overlay-state-icon"
-          draggable={false}
-        />
-      );
+  useEffect(() => {
+    const host = waveContainerRef.current;
+    if (!host || !isVisible || state !== "recording") {
+      siriWaveRef.current?.dispose();
+      siriWaveRef.current = null;
+      return undefined;
     }
 
-    return (
-      <img
-        src={transcribingTriggerIcon}
-        alt=""
-        className="overlay-state-icon"
-        draggable={false}
-      />
+    siriWaveRef.current?.dispose();
+    siriWaveRef.current = new SiriWave({
+      container: host,
+      style: "ios9",
+      width: host.clientWidth,
+      height: host.clientHeight,
+      autostart: true,
+      amplitude: WAVE_AMPLITUDE_MIN,
+      speed: WAVE_SPEED_MIN,
+      pixelDepth: 0.02,
+      lerpSpeed: 0.11,
+      globalCompositeOperation: "lighter",
+      curveDefinition: [
+        { color: "255,255,255", supportLine: true },
+        { color: "102,217,255" },
+        { color: "170,120,255" },
+        { color: "96,243,191" },
+      ],
+      ranges: {
+        noOfCurves: [4, 7],
+        amplitude: [1.8, 3.8],
+        offset: [-2.5, 2.5],
+        width: [0.9, 2.3],
+        speed: [0.55, 1.1],
+        despawnTimeout: [900, 2200],
+      },
+    });
+
+    return () => {
+      siriWaveRef.current?.dispose();
+      siriWaveRef.current = null;
+    };
+  }, [isVisible, state]);
+
+  const waveEnergy = useMemo(() => {
+    const average = levels.reduce((sum, level) => sum + level, 0) / levels.length;
+    const boosted = Math.pow(average, WAVE_ENERGY_POWER) * QUIET_SPEECH_GAIN + QUIET_FLOOR;
+    return clamp(boosted, WAVE_ENERGY_MIN, WAVE_ENERGY_MAX);
+  }, [levels]);
+
+  useEffect(() => {
+    if (!isVisible || state !== "recording") {
+      return;
+    }
+
+    const siriWave = siriWaveRef.current;
+    if (!siriWave) {
+      return;
+    }
+
+    const amplitude = clamp(
+      WAVE_AMPLITUDE_MIN + waveEnergy * WAVE_AMPLITUDE_RANGE,
+      WAVE_AMPLITUDE_MIN,
+      WAVE_AMPLITUDE_CAP,
     );
-  };
+    const speed = clamp(
+      WAVE_SPEED_MIN + waveEnergy * WAVE_SPEED_RANGE,
+      WAVE_SPEED_MIN,
+      WAVE_SPEED_CAP,
+    );
+
+    siriWave.setAmplitude(amplitude);
+    siriWave.setSpeed(speed);
+  }, [isVisible, state, waveEnergy]);
 
   return (
     <div
       dir={direction}
       className={`recording-overlay ${isVisible ? "fade-in" : ""}`}
     >
-      <div className="overlay-left">{getIcon()}</div>
-
-      <div className="overlay-middle">
+      <div className="overlay-middle overlay-middle-full">
         {state === "recording" && (
-          <div className="bars-container">
-            {levels.map((v, i) => (
-              <div
-                key={i}
-                className="bar"
-                style={{
-                  height: `${Math.min(20, 4 + Math.pow(v, 0.7) * 16)}px`, // Cap at 20px max height
-                  transition: "height 60ms ease-out, opacity 120ms ease-out",
-                  opacity: Math.max(0.2, v * 1.7), // Minimum opacity for visibility
-                }}
-              />
-            ))}
-          </div>
+          <div ref={waveContainerRef} className="siriwave-host" role="presentation" aria-hidden />
         )}
-        {state === "transcribing" && (
+        {(state === "transcribing" || state === "processing") && (
           <div className="transcribing-text">{t("overlay.transcribing")}</div>
-        )}
-        {state === "processing" && (
-          <div className="transcribing-text">{t("overlay.processing")}</div>
-        )}
-      </div>
-
-      <div className="overlay-right">
-        {state === "recording" && (
-          <div
-            className="cancel-button"
-            onClick={() => {
-              commands.cancelOperation();
-            }}
-          >
-            <CancelIcon color="#8F3CC8" />
-          </div>
         )}
       </div>
     </div>
