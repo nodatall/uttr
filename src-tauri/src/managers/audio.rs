@@ -1,4 +1,6 @@
-use crate::audio_toolkit::{list_input_devices, vad::SmoothedVad, AudioRecorder, SileroVad};
+use crate::audio_toolkit::{
+    list_input_devices, vad::SmoothedVad, AudioRecorder, DrainResult, SileroVad,
+};
 use crate::helpers::clamshell;
 use crate::settings::{get_settings, AppSettings};
 use crate::utils;
@@ -419,6 +421,37 @@ impl AudioRecordingManager {
             *self.state.lock().unwrap(),
             RecordingState::Recording { .. }
         )
+    }
+
+    pub fn drain_recording_delta(&self, binding_id: &str) -> Option<DrainResult> {
+        let state = self.state.lock().unwrap();
+        match *state {
+            RecordingState::Recording {
+                binding_id: ref active,
+            } if active == binding_id => {
+                drop(state);
+                let recorder_guard = match self.recorder.try_lock() {
+                    Ok(guard) => guard,
+                    Err(_) => {
+                        // Avoid blocking stop() waiting on recorder lock.
+                        return None;
+                    }
+                };
+                if let Some(rec) = recorder_guard.as_ref() {
+                    match rec.drain() {
+                        Ok(delta) => Some(delta),
+                        Err(e) => {
+                            error!("drain() failed: {e}");
+                            None
+                        }
+                    }
+                } else {
+                    error!("Recorder not available");
+                    None
+                }
+            }
+            _ => None,
+        }
     }
 
     /// Cancel any ongoing recording without returning audio samples

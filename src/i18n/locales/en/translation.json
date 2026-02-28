@@ -247,6 +247,10 @@
         "label": "Experimental Features",
         "description": "Enable experimental features that are still in development."
       },
+      "incrementalTranscription": {
+        "label": "Incremental Transcription",
+        "description": "Transcribe long recordings in chunks during capture to reduce stop-time delay."
+      },
       "startHidden": {
         "label": "Start Hidden",
         "description": "Launch to system tray without opening the window."

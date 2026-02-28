@@ -14,6 +14,7 @@ import { AutoSubmit } from "../AutoSubmit";
 import { PostProcessingToggle } from "../PostProcessingToggle";
 import { PostProcessingSettingsApi } from "../PostProcessingSettingsApi";
 import { AppendTrailingSpace } from "../AppendTrailingSpace";
+import { IncrementalTranscriptionToggle } from "../IncrementalTranscriptionToggle";
 import { HistoryLimit } from "../HistoryLimit";
 import { RecordingRetentionPeriodSelector } from "../RecordingRetentionPeriod";
 import { ExperimentalToggle } from "../ExperimentalToggle";
@@ -46,6 +47,7 @@ export const AdvancedSettings: React.FC = () => {
 
       <SettingsGroup title={t("settings.advanced.groups.transcription")}>
         <CustomWords descriptionMode="tooltip" grouped />
+        <IncrementalTranscriptionToggle descriptionMode="tooltip" grouped />
         <AppendTrailingSpace descriptionMode="tooltip" grouped={true} />
         <PostProcessingToggle descriptionMode="tooltip" grouped={true} />
         {postProcessEnabled && <PostProcessingSettingsApi />}

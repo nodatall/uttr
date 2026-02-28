@@ -350,6 +350,8 @@ pub struct AppSettings {
     pub app_language: String,
     #[serde(default)]
     pub experimental_enabled: bool,
+    #[serde(default = "default_incremental_transcription_enabled")]
+    pub incremental_transcription_enabled: bool,
     #[serde(default)]
     pub keyboard_implementation: KeyboardImplementation,
     #[serde(default = "default_show_tray_icon")]
@@ -433,6 +435,10 @@ fn default_sound_theme() -> SoundTheme {
 
 fn default_post_process_enabled() -> bool {
     false
+}
+
+fn default_incremental_transcription_enabled() -> bool {
+    true
 }
 
 fn default_app_language() -> String {
@@ -717,6 +723,7 @@ pub fn get_default_settings() -> AppSettings {
         append_trailing_space: false,
         app_language: default_app_language(),
         experimental_enabled: false,
+        incremental_transcription_enabled: default_incremental_transcription_enabled(),
         keyboard_implementation: KeyboardImplementation::default(),
         show_tray_icon: default_show_tray_icon(),
         paste_delay_ms: default_paste_delay_ms(),

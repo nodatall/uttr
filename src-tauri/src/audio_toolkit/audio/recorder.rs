@@ -18,8 +18,16 @@ use crate::audio_toolkit::{
 
 enum Cmd {
     Start,
+    Drain(mpsc::Sender<DrainResult>),
     Stop(mpsc::Sender<Vec<f32>>),
     Shutdown,
+}
+
+#[derive(Debug, Clone)]
+pub struct DrainResult {
+    pub samples: Vec<f32>,
+    pub total_speech_samples: usize,
+    pub saw_pause: bool,
 }
 
 pub struct AudioRecorder {
@@ -137,10 +145,52 @@ impl AudioRecorder {
 
     pub fn stop(&self) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
         let (resp_tx, resp_rx) = mpsc::channel();
-        if let Some(tx) = &self.cmd_tx {
-            tx.send(Cmd::Stop(resp_tx))?;
-        }
-        Ok(resp_rx.recv()?) // wait for the samples
+        let tx = self
+            .cmd_tx
+            .as_ref()
+            .ok_or_else(|| Error::new(std::io::ErrorKind::BrokenPipe, "Recorder is not open"))?;
+        tx.send(Cmd::Stop(resp_tx))?;
+        resp_rx
+            .recv_timeout(Duration::from_millis(500))
+            .map_err(|e| {
+                let io_err = match e {
+                    mpsc::RecvTimeoutError::Timeout => Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "Timed out waiting for stop response",
+                    ),
+                    mpsc::RecvTimeoutError::Disconnected => Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "Recorder worker disconnected before stop response",
+                    ),
+                };
+                Box::new(io_err) as Box<dyn std::error::Error>
+            })
+    }
+
+    pub fn drain(&self) -> Result<DrainResult, Box<dyn std::error::Error>> {
+        let (resp_tx, resp_rx) = mpsc::channel();
+        let tx = self.cmd_tx.as_ref().ok_or_else(|| {
+            Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "Recorder command channel unavailable",
+            )
+        })?;
+        tx.send(Cmd::Drain(resp_tx))?;
+        resp_rx
+            .recv_timeout(Duration::from_millis(75))
+            .map_err(|e| {
+                let io_err = match e {
+                    mpsc::RecvTimeoutError::Timeout => Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "Timed out waiting for drain response",
+                    ),
+                    mpsc::RecvTimeoutError::Disconnected => Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "Recorder worker disconnected before drain response",
+                    ),
+                };
+                Box::new(io_err) as Box<dyn std::error::Error>
+            })
     }
 
     pub fn close(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -246,14 +296,20 @@ fn run_consumer(
     cmd_rx: mpsc::Receiver<Cmd>,
     level_cb: Option<Arc<dyn Fn(Vec<f32>) + Send + Sync + 'static>>,
 ) {
+    const SPEECH_SAMPLE_RATE: usize = crate::audio_toolkit::constants::WHISPER_SAMPLE_RATE as usize;
+    const PAUSE_THRESHOLD_SAMPLES: usize = SPEECH_SAMPLE_RATE * 300 / 1000; // 300ms
+
     let mut frame_resampler = FrameResampler::new(
         in_sample_rate as usize,
-        constants::WHISPER_SAMPLE_RATE as usize,
+        SPEECH_SAMPLE_RATE,
         Duration::from_millis(30),
     );
 
     let mut processed_samples = Vec::<f32>::new();
     let mut recording = false;
+    let mut drain_cursor = 0usize;
+    let mut silence_run_samples = 0usize;
+    let mut saw_pause_since_last_drain = false;
 
     // ---------- spectrum visualisation setup ---------------------------- //
     const BUCKETS: usize = 16;
@@ -271,26 +327,115 @@ fn run_consumer(
         recording: bool,
         vad: &Option<Arc<Mutex<Box<dyn vad::VoiceActivityDetector>>>>,
         out_buf: &mut Vec<f32>,
-    ) {
+    ) -> bool {
         if !recording {
-            return;
+            return false;
         }
 
         if let Some(vad_arc) = vad {
             let mut det = vad_arc.lock().unwrap();
             match det.push_frame(samples).unwrap_or(VadFrame::Speech(samples)) {
-                VadFrame::Speech(buf) => out_buf.extend_from_slice(buf),
-                VadFrame::Noise => {}
+                VadFrame::Speech(buf) => {
+                    out_buf.extend_from_slice(buf);
+                    true
+                }
+                VadFrame::Noise => false,
             }
         } else {
             out_buf.extend_from_slice(samples);
+            true
+        }
+    }
+
+    fn handle_cmd(
+        cmd: Cmd,
+        recording: &mut bool,
+        frame_resampler: &mut FrameResampler,
+        processed_samples: &mut Vec<f32>,
+        vad: &Option<Arc<Mutex<Box<dyn vad::VoiceActivityDetector>>>>,
+        visualizer: &mut AudioVisualiser,
+        drain_cursor: &mut usize,
+        silence_run_samples: &mut usize,
+        saw_pause_since_last_drain: &mut bool,
+    ) -> bool {
+        match cmd {
+            Cmd::Start => {
+                processed_samples.clear();
+                *recording = true;
+                *drain_cursor = 0;
+                *silence_run_samples = 0;
+                *saw_pause_since_last_drain = false;
+                visualizer.reset(); // Reset visualization buffer
+                if let Some(v) = vad {
+                    v.lock().unwrap().reset();
+                }
+                false
+            }
+            Cmd::Drain(reply_tx) => {
+                if !*recording {
+                    let _ = reply_tx.send(DrainResult {
+                        samples: Vec::new(),
+                        total_speech_samples: 0,
+                        saw_pause: false,
+                    });
+                    return false;
+                }
+
+                if *drain_cursor > processed_samples.len() {
+                    *drain_cursor = processed_samples.len();
+                }
+
+                let delta = processed_samples[*drain_cursor..].to_vec();
+                *drain_cursor = processed_samples.len();
+                let saw_pause = *saw_pause_since_last_drain;
+                *saw_pause_since_last_drain = false;
+
+                let _ = reply_tx.send(DrainResult {
+                    samples: delta,
+                    total_speech_samples: processed_samples.len(),
+                    saw_pause,
+                });
+                false
+            }
+            Cmd::Stop(reply_tx) => {
+                *recording = false;
+
+                frame_resampler.finish(&mut |frame: &[f32]| {
+                    // we still want to process the last few frames
+                    let _ = handle_frame(frame, true, vad, processed_samples);
+                });
+
+                *drain_cursor = 0;
+                *silence_run_samples = 0;
+                *saw_pause_since_last_drain = false;
+                let _ = reply_tx.send(std::mem::take(processed_samples));
+                false
+            }
+            Cmd::Shutdown => true,
         }
     }
 
     loop {
-        let raw = match sample_rx.recv() {
+        while let Ok(cmd) = cmd_rx.try_recv() {
+            if handle_cmd(
+                cmd,
+                &mut recording,
+                &mut frame_resampler,
+                &mut processed_samples,
+                &vad,
+                &mut visualizer,
+                &mut drain_cursor,
+                &mut silence_run_samples,
+                &mut saw_pause_since_last_drain,
+            ) {
+                return;
+            }
+        }
+
+        let raw = match sample_rx.recv_timeout(Duration::from_millis(20)) {
             Ok(s) => s,
-            Err(_) => break, // stream closed
+            Err(mpsc::RecvTimeoutError::Timeout) => continue,
+            Err(mpsc::RecvTimeoutError::Disconnected) => break, // stream closed
         };
 
         // ---------- spectrum processing ---------------------------------- //
@@ -302,31 +447,33 @@ fn run_consumer(
 
         // ---------- existing pipeline ------------------------------------ //
         frame_resampler.push(&raw, &mut |frame: &[f32]| {
-            handle_frame(frame, recording, &vad, &mut processed_samples)
+            let saw_speech = handle_frame(frame, recording, &vad, &mut processed_samples);
+            if recording {
+                if saw_speech {
+                    silence_run_samples = 0;
+                } else {
+                    silence_run_samples = silence_run_samples.saturating_add(frame.len());
+                    if silence_run_samples >= PAUSE_THRESHOLD_SAMPLES {
+                        saw_pause_since_last_drain = true;
+                    }
+                }
+            }
         });
 
         // non-blocking check for a command
         while let Ok(cmd) = cmd_rx.try_recv() {
-            match cmd {
-                Cmd::Start => {
-                    processed_samples.clear();
-                    recording = true;
-                    visualizer.reset(); // Reset visualization buffer
-                    if let Some(v) = &vad {
-                        v.lock().unwrap().reset();
-                    }
-                }
-                Cmd::Stop(reply_tx) => {
-                    recording = false;
-
-                    frame_resampler.finish(&mut |frame: &[f32]| {
-                        // we still want to process the last few frames
-                        handle_frame(frame, true, &vad, &mut processed_samples)
-                    });
-
-                    let _ = reply_tx.send(std::mem::take(&mut processed_samples));
-                }
-                Cmd::Shutdown => return,
+            if handle_cmd(
+                cmd,
+                &mut recording,
+                &mut frame_resampler,
+                &mut processed_samples,
+                &vad,
+                &mut visualizer,
+                &mut drain_cursor,
+                &mut silence_run_samples,
+                &mut saw_pause_since_last_drain,
+            ) {
+                return;
             }
         }
     }
