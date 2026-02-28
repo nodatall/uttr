@@ -1,5 +1,6 @@
 use crate::audio_toolkit::{apply_custom_words, filter_transcription_output};
 use crate::groq_client;
+use crate::managers::audio::AudioRecordingManager;
 use crate::managers::model::{
     groq_api_model_name, is_cloud_model_id, EngineType, ModelInfo, ModelManager,
     DEFAULT_LOCAL_MODEL_ID,
@@ -9,11 +10,12 @@ use anyhow::Result;
 use log::{debug, error, info, warn};
 use serde::Serialize;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
-use std::time::{Duration, SystemTime};
+use std::time::{Duration, Instant, SystemTime};
 use tauri::{AppHandle, Emitter};
+use tokio::time::{sleep, timeout};
 use transcribe_rs::{
     engines::{
         moonshine::{
@@ -46,6 +48,42 @@ enum LoadedEngine {
     Moonshine(MoonshineEngine),
     MoonshineStreaming(MoonshineStreamingEngine),
     SenseVoice(SenseVoiceEngine),
+}
+
+const SAMPLE_RATE: usize = 16_000;
+const CHUNK_SAMPLES: usize = SAMPLE_RATE * 10;
+const CHUNK_OVERLAP_SAMPLES: usize = SAMPLE_RATE * 3 / 2; // 1.5s
+const CHUNK_FORCE_WAIT_SAMPLES: usize = SAMPLE_RATE * 2; // 2s of additional speech
+const CHUNK_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const STOP_IN_FLIGHT_WAIT: Duration = Duration::from_secs(4);
+const MAX_TOKEN_OVERLAP: usize = 25;
+
+struct IncrementalRuntime {
+    stop_requested: AtomicBool,
+    failed: AtomicBool,
+    in_flight: AtomicBool,
+    next_chunk_start: AtomicUsize,
+    chunk_count: AtomicU64,
+    assembled_raw: Mutex<String>,
+}
+
+impl IncrementalRuntime {
+    fn new() -> Self {
+        Self {
+            stop_requested: AtomicBool::new(false),
+            failed: AtomicBool::new(false),
+            in_flight: AtomicBool::new(false),
+            next_chunk_start: AtomicUsize::new(0),
+            chunk_count: AtomicU64::new(0),
+            assembled_raw: Mutex::new(String::new()),
+        }
+    }
+}
+
+struct IncrementalSession {
+    binding_id: String,
+    runtime: Arc<IncrementalRuntime>,
+    worker_handle: tauri::async_runtime::JoinHandle<()>,
 }
 
 fn looks_like_network_error(error_message: &str) -> bool {
@@ -114,6 +152,66 @@ fn choose_local_fallback_model_id(
     local_models.first().map(|model| model.id.clone())
 }
 
+fn normalize_stitch_token(token: &str) -> String {
+    let trimmed = token.trim_matches(|c: char| !c.is_alphanumeric());
+    if trimmed.is_empty() {
+        token.trim().to_lowercase()
+    } else {
+        trimmed.to_lowercase()
+    }
+}
+
+fn append_stitched_text(existing: &mut String, incoming: &str) {
+    let incoming_trimmed = incoming.trim();
+    if incoming_trimmed.is_empty() {
+        return;
+    }
+
+    if existing.trim().is_empty() {
+        *existing = incoming_trimmed.to_string();
+        return;
+    }
+
+    let existing_tokens: Vec<&str> = existing.split_whitespace().collect();
+    let incoming_tokens: Vec<&str> = incoming_trimmed.split_whitespace().collect();
+    if existing_tokens.is_empty() || incoming_tokens.is_empty() {
+        if !existing.ends_with(' ') {
+            existing.push(' ');
+        }
+        existing.push_str(incoming_trimmed);
+        return;
+    }
+
+    let max_overlap = existing_tokens
+        .len()
+        .min(incoming_tokens.len())
+        .min(MAX_TOKEN_OVERLAP);
+    let mut overlap = 0usize;
+
+    for candidate in (1..=max_overlap).rev() {
+        let existing_suffix = &existing_tokens[existing_tokens.len() - candidate..];
+        let incoming_prefix = &incoming_tokens[..candidate];
+        let matches = existing_suffix
+            .iter()
+            .zip(incoming_prefix.iter())
+            .all(|(a, b)| normalize_stitch_token(a) == normalize_stitch_token(b));
+        if matches {
+            overlap = candidate;
+            break;
+        }
+    }
+
+    let remainder = incoming_tokens[overlap..].join(" ");
+    if remainder.is_empty() {
+        return;
+    }
+
+    if !existing.ends_with(' ') {
+        existing.push(' ');
+    }
+    existing.push_str(&remainder);
+}
+
 #[derive(Clone)]
 pub struct TranscriptionManager {
     engine: Arc<Mutex<Option<LoadedEngine>>>,
@@ -125,6 +223,8 @@ pub struct TranscriptionManager {
     watcher_handle: Arc<Mutex<Option<thread::JoinHandle<()>>>>,
     is_loading: Arc<Mutex<bool>>,
     loading_condvar: Arc<Condvar>,
+    incremental_session: Arc<Mutex<Option<IncrementalSession>>>,
+    cancel_requested: Arc<AtomicBool>,
 }
 
 impl TranscriptionManager {
@@ -144,6 +244,8 @@ impl TranscriptionManager {
             watcher_handle: Arc::new(Mutex::new(None)),
             is_loading: Arc::new(Mutex::new(false)),
             loading_condvar: Arc::new(Condvar::new()),
+            incremental_session: Arc::new(Mutex::new(None)),
+            cancel_requested: Arc::new(AtomicBool::new(false)),
         };
 
         // Start the idle watcher
@@ -448,6 +550,206 @@ impl TranscriptionManager {
         Ok(result.text)
     }
 
+    fn update_last_activity(&self) {
+        self.last_activity.store(
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64,
+            Ordering::Relaxed,
+        );
+    }
+
+    fn wait_for_loading_if_needed(&self) {
+        let mut is_loading = self.is_loading.lock().unwrap();
+        while *is_loading {
+            if self.cancel_requested.load(Ordering::Relaxed) {
+                break;
+            }
+            let (guard, _) = self
+                .loading_condvar
+                .wait_timeout(is_loading, Duration::from_millis(100))
+                .unwrap();
+            is_loading = guard;
+        }
+    }
+
+    fn apply_transcription_filters(
+        &self,
+        raw_transcription: String,
+        settings: &AppSettings,
+    ) -> String {
+        let corrected_result = if !settings.custom_words.is_empty() {
+            apply_custom_words(
+                &raw_transcription,
+                &settings.custom_words,
+                settings.word_correction_threshold,
+            )
+        } else {
+            raw_transcription
+        };
+
+        filter_transcription_output(&corrected_result)
+    }
+
+    fn transcribe_raw_local_with_settings(
+        &self,
+        audio: Vec<f32>,
+        settings: &AppSettings,
+    ) -> Result<String> {
+        self.update_last_activity();
+
+        if self.cancel_requested.load(Ordering::Relaxed) {
+            return Err(anyhow::anyhow!("Transcription cancelled"));
+        }
+
+        if audio.is_empty() {
+            return Ok(String::new());
+        }
+
+        self.wait_for_loading_if_needed();
+
+        let engine_guard = self.lock_engine();
+        if engine_guard.is_none() {
+            return Err(anyhow::anyhow!("Model is not loaded for transcription."));
+        }
+        drop(engine_guard);
+
+        self.transcribe_with_local_engine(audio, settings)
+    }
+
+    async fn transcribe_raw_with_settings(
+        &self,
+        audio: Vec<f32>,
+        settings: &AppSettings,
+        allow_local_fallback_on_cloud_error: bool,
+    ) -> Result<String> {
+        self.update_last_activity();
+
+        if self.cancel_requested.load(Ordering::Relaxed) {
+            return Err(anyhow::anyhow!("Transcription cancelled"));
+        }
+
+        if audio.is_empty() {
+            return Ok(String::new());
+        }
+
+        self.wait_for_loading_if_needed();
+
+        let selected_model_id = if settings.selected_model.is_empty() {
+            None
+        } else {
+            Some(settings.selected_model.clone())
+        };
+        let selected_model_is_cloud = selected_model_id
+            .as_deref()
+            .map(is_cloud_model_id)
+            .unwrap_or(false);
+
+        // If settings explicitly select a cloud model, always start with cloud.
+        // This allows cloud-first behavior even if a local fallback model is loaded.
+        let active_model_id = if selected_model_is_cloud {
+            selected_model_id.clone()
+        } else {
+            self.get_current_model()
+                .filter(|id| !id.is_empty())
+                .or_else(|| selected_model_id.clone())
+        };
+
+        let is_cloud_model = active_model_id
+            .as_deref()
+            .map(is_cloud_model_id)
+            .unwrap_or(false);
+
+        if !is_cloud_model {
+            return self.transcribe_raw_local_with_settings(audio, settings);
+        }
+
+        if is_cloud_model {
+            let model_id = active_model_id
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("No cloud model selected for transcription."))?;
+            let groq_model = groq_api_model_name(model_id)
+                .ok_or_else(|| anyhow::anyhow!("Unknown Groq model id: {}", model_id))?;
+            let api_key = self.resolve_groq_api_key().ok_or_else(|| {
+                anyhow::anyhow!("Groq API key is required. Add it in Models > Groq Cloud API key.")
+            })?;
+
+            match groq_client::transcribe_samples(
+                &api_key,
+                groq_model,
+                &audio,
+                &settings.selected_language,
+                settings.translate_to_english,
+            )
+            .await
+            {
+                Ok(text) => Ok(text),
+                Err(groq_error) => {
+                    if !allow_local_fallback_on_cloud_error {
+                        return Err(anyhow::anyhow!(
+                            "Groq transcription failed during incremental chunking: {}",
+                            groq_error
+                        ));
+                    }
+
+                    let likely_network_issue = looks_like_network_error(groq_error.as_str());
+                    if likely_network_issue {
+                        warn!(
+                            "Groq transcription failed with what looks like a network/offline issue: {}",
+                            groq_error
+                        );
+                    } else {
+                        warn!("Groq transcription failed: {}", groq_error);
+                    }
+
+                    let preferred_local_id = self
+                        .get_current_model()
+                        .filter(|id| !is_cloud_model_id(id))
+                        .or_else(|| {
+                            selected_model_id
+                                .clone()
+                                .filter(|id| !is_cloud_model_id(id))
+                        });
+                    let fallback_local_model_id = self
+                        .select_local_fallback_model_id(preferred_local_id.as_deref())
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "Groq transcription failed: {}. No downloaded local model available for fallback.",
+                                groq_error
+                            )
+                        })?;
+
+                    let local_engine_loaded = {
+                        let engine_guard = self.lock_engine();
+                        engine_guard.is_some()
+                    };
+                    let current_model = self.get_current_model();
+                    if current_model.as_deref() != Some(fallback_local_model_id.as_str())
+                        || !local_engine_loaded
+                    {
+                        warn!(
+                            "Switching transcription to local fallback model '{}' after Groq failure",
+                            fallback_local_model_id
+                        );
+                        self.load_model(&fallback_local_model_id).map_err(|load_error| {
+                            anyhow::anyhow!(
+                                "Groq transcription failed: {}. Local fallback model '{}' failed to load: {}",
+                                groq_error,
+                                fallback_local_model_id,
+                                load_error
+                            )
+                        })?;
+                    }
+
+                    self.transcribe_with_local_engine(audio, settings)
+                }
+            }
+        } else {
+            self.transcribe_raw_local_with_settings(audio, settings)
+        }
+    }
+
     pub fn load_model(&self, model_id: &str) -> Result<()> {
         let load_start = std::time::Instant::now();
         debug!("Starting to load model: {}", model_id);
@@ -683,15 +985,371 @@ impl TranscriptionManager {
         current_model.clone()
     }
 
-    pub async fn transcribe(&self, audio: Vec<f32>) -> Result<String> {
-        // Update last activity timestamp
-        self.last_activity.store(
-            SystemTime::now()
-                .duration_since(SystemTime::UNIX_EPOCH)
-                .unwrap()
-                .as_millis() as u64,
-            Ordering::Relaxed,
+    pub fn start_incremental_session(
+        &self,
+        binding_id: &str,
+        audio_manager: Arc<AudioRecordingManager>,
+    ) -> Result<()> {
+        self.clear_cancel_request();
+
+        let settings = get_settings(&self.app_handle);
+        if !settings.incremental_transcription_enabled {
+            return Ok(());
+        }
+
+        if settings.translate_to_english {
+            debug!(
+                "Skipping incremental session for binding '{}' because translate_to_english is enabled",
+                binding_id
+            );
+            return Ok(());
+        }
+
+        let active_model_id = if settings.selected_model.is_empty() {
+            self.get_current_model().unwrap_or_default()
+        } else {
+            settings.selected_model.clone()
+        };
+        if active_model_id.is_empty() || !is_cloud_model_id(&active_model_id) {
+            debug!(
+                "Skipping incremental session for binding '{}' because active model '{}' is not cloud",
+                binding_id, active_model_id
+            );
+            return Ok(());
+        }
+
+        let runtime = Arc::new(IncrementalRuntime::new());
+        let binding = binding_id.to_string();
+        let manager_clone = self.clone();
+        let runtime_clone = runtime.clone();
+        let worker_binding = binding.clone();
+        let worker_handle = tauri::async_runtime::spawn(async move {
+            manager_clone
+                .run_incremental_worker(worker_binding, audio_manager, runtime_clone)
+                .await;
+        });
+
+        let mut guard = self.incremental_session.lock().unwrap();
+        if let Some(previous) = guard.take() {
+            previous
+                .runtime
+                .stop_requested
+                .store(true, Ordering::Relaxed);
+            previous.worker_handle.abort();
+        }
+        *guard = Some(IncrementalSession {
+            binding_id: binding,
+            runtime,
+            worker_handle,
+        });
+
+        Ok(())
+    }
+
+    async fn run_incremental_worker(
+        &self,
+        binding_id: String,
+        audio_manager: Arc<AudioRecordingManager>,
+        runtime: Arc<IncrementalRuntime>,
+    ) {
+        let mut speech_buffer = Vec::<f32>::new();
+        let mut saw_pause = false;
+
+        loop {
+            if runtime.stop_requested.load(Ordering::Relaxed)
+                || runtime.failed.load(Ordering::Relaxed)
+                || self.cancel_requested.load(Ordering::Relaxed)
+            {
+                break;
+            }
+
+            let drained = audio_manager.drain_recording_delta(&binding_id);
+            let mut made_progress = false;
+
+            if let Some(delta) = drained {
+                if !delta.samples.is_empty() {
+                    speech_buffer.extend_from_slice(&delta.samples);
+                    made_progress = true;
+                }
+                if delta.saw_pause {
+                    saw_pause = true;
+                }
+            }
+
+            'chunking: loop {
+                let next_start = runtime.next_chunk_start.load(Ordering::Relaxed);
+                let available = speech_buffer.len().saturating_sub(next_start);
+                if available < CHUNK_SAMPLES {
+                    break;
+                }
+
+                let extra_after_min = available - CHUNK_SAMPLES;
+                if !saw_pause && extra_after_min < CHUNK_FORCE_WAIT_SAMPLES {
+                    break;
+                }
+
+                let chunk_end = next_start + CHUNK_SAMPLES;
+                let chunk_start = next_start.saturating_sub(CHUNK_OVERLAP_SAMPLES);
+                let chunk_samples = speech_buffer[chunk_start..chunk_end].to_vec();
+
+                runtime.in_flight.store(true, Ordering::Relaxed);
+                let chunk_st = Instant::now();
+                let settings = get_settings(&self.app_handle);
+                let selected_model_id = if settings.selected_model.is_empty() {
+                    None
+                } else {
+                    Some(settings.selected_model.clone())
+                };
+                let selected_model_is_cloud = selected_model_id
+                    .as_deref()
+                    .map(is_cloud_model_id)
+                    .unwrap_or(false);
+                let active_model_id = if selected_model_is_cloud {
+                    selected_model_id
+                } else {
+                    self.get_current_model()
+                        .filter(|id| !id.is_empty())
+                        .or_else(|| {
+                            if settings.selected_model.is_empty() {
+                                None
+                            } else {
+                                Some(settings.selected_model.clone())
+                            }
+                        })
+                };
+                let is_cloud_model = active_model_id
+                    .as_deref()
+                    .map(is_cloud_model_id)
+                    .unwrap_or(false);
+                let chunk_result = if is_cloud_model {
+                    self.transcribe_raw_with_settings(chunk_samples, &settings, false)
+                        .await
+                } else {
+                    let manager = self.clone();
+                    let settings_for_chunk = settings.clone();
+                    match tauri::async_runtime::spawn_blocking(move || {
+                        manager
+                            .transcribe_raw_local_with_settings(chunk_samples, &settings_for_chunk)
+                    })
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(join_err) => Err(anyhow::anyhow!(
+                            "Incremental local chunk task failed to join: {}",
+                            join_err
+                        )),
+                    }
+                };
+                runtime.in_flight.store(false, Ordering::Relaxed);
+
+                match chunk_result {
+                    Ok(chunk_text) => {
+                        if self.cancel_requested.load(Ordering::Relaxed) {
+                            break 'chunking;
+                        }
+                        if !runtime.stop_requested.load(Ordering::Relaxed) {
+                            let mut assembled = runtime.assembled_raw.lock().unwrap();
+                            append_stitched_text(&mut assembled, &chunk_text);
+                            runtime.next_chunk_start.store(chunk_end, Ordering::Relaxed);
+                            let count = runtime.chunk_count.fetch_add(1, Ordering::Relaxed) + 1;
+                            debug!(
+                                "Incremental chunk {} completed in {}ms (speech_len={} samples)",
+                                count,
+                                chunk_st.elapsed().as_millis(),
+                                chunk_end
+                            );
+                        }
+                        saw_pause = false;
+                        made_progress = true;
+                    }
+                    Err(err) => {
+                        runtime.failed.store(true, Ordering::Relaxed);
+                        warn!(
+                            "Incremental chunk transcription failed for binding '{}': {}",
+                            binding_id, err
+                        );
+                        break 'chunking;
+                    }
+                }
+            }
+
+            if runtime.failed.load(Ordering::Relaxed) {
+                break;
+            }
+
+            if !made_progress {
+                sleep(CHUNK_POLL_INTERVAL).await;
+            }
+        }
+    }
+
+    pub async fn finish_incremental_session(
+        &self,
+        binding_id: &str,
+        full_samples: &[f32],
+    ) -> Result<String> {
+        let session = {
+            let mut guard = self.incremental_session.lock().unwrap();
+            let Some(session) = guard.take() else {
+                return Err(anyhow::anyhow!("No active incremental session"));
+            };
+
+            if session.binding_id != binding_id {
+                *guard = Some(session);
+                return Err(anyhow::anyhow!(
+                    "Active incremental session belongs to a different binding"
+                ));
+            }
+            session
+        };
+
+        session
+            .runtime
+            .stop_requested
+            .store(true, Ordering::Relaxed);
+
+        // Short utterances cannot produce a full 10s incremental chunk.
+        // Skip worker join waiting and fall back to the regular full-pass path.
+        if full_samples.len() < CHUNK_SAMPLES {
+            session.worker_handle.abort();
+            return Err(anyhow::anyhow!(
+                "Not enough incremental progress for chunked finalization"
+            ));
+        }
+
+        if self.cancel_requested.load(Ordering::Relaxed) {
+            return Err(anyhow::anyhow!("Transcription cancelled"));
+        }
+
+        let mut worker_handle = session.worker_handle;
+        match timeout(STOP_IN_FLIGHT_WAIT, async { (&mut worker_handle).await }).await {
+            Ok(join_result) => {
+                if let Err(join_err) = join_result {
+                    warn!("Incremental worker join error: {}", join_err);
+                }
+            }
+            Err(_) => {
+                warn!("Timed out waiting for incremental in-flight chunk; aborting worker");
+                worker_handle.abort();
+            }
+        }
+
+        if session.runtime.failed.load(Ordering::Relaxed) {
+            return Err(anyhow::anyhow!(
+                "Incremental chunking failed; using full-pass fallback"
+            ));
+        }
+
+        if self.cancel_requested.load(Ordering::Relaxed) {
+            return Err(anyhow::anyhow!("Transcription cancelled"));
+        }
+
+        let next_chunk_start = session.runtime.next_chunk_start.load(Ordering::Relaxed);
+        if full_samples.len() < CHUNK_SAMPLES || next_chunk_start == 0 {
+            return Err(anyhow::anyhow!(
+                "Not enough incremental progress for chunked finalization"
+            ));
+        }
+
+        let tail_start = next_chunk_start.saturating_sub(CHUNK_OVERLAP_SAMPLES);
+        let tail_audio = if tail_start < full_samples.len() {
+            full_samples[tail_start..].to_vec()
+        } else {
+            Vec::new()
+        };
+
+        if !tail_audio.is_empty() {
+            session.runtime.in_flight.store(true, Ordering::Relaxed);
+            let tail_st = Instant::now();
+            let settings = get_settings(&self.app_handle);
+            let tail_result = self
+                .transcribe_raw_with_settings(tail_audio, &settings, false)
+                .await;
+            session.runtime.in_flight.store(false, Ordering::Relaxed);
+
+            match tail_result {
+                Ok(tail_text) => {
+                    if self.cancel_requested.load(Ordering::Relaxed) {
+                        return Err(anyhow::anyhow!("Transcription cancelled"));
+                    }
+                    let mut assembled = session.runtime.assembled_raw.lock().unwrap();
+                    append_stitched_text(&mut assembled, &tail_text);
+                    debug!(
+                        "Incremental tail processed in {}ms",
+                        tail_st.elapsed().as_millis()
+                    );
+                }
+                Err(err) => {
+                    return Err(anyhow::anyhow!(
+                        "Failed to transcribe incremental tail: {}",
+                        err
+                    ));
+                }
+            }
+        }
+
+        let raw = session.runtime.assembled_raw.lock().unwrap().clone();
+        if raw.trim().is_empty() {
+            return Err(anyhow::anyhow!(
+                "Incremental assembly was empty; using full-pass fallback"
+            ));
+        }
+
+        if self.cancel_requested.load(Ordering::Relaxed) {
+            return Err(anyhow::anyhow!("Transcription cancelled"));
+        }
+
+        let settings = get_settings(&self.app_handle);
+        let final_result = self.apply_transcription_filters(raw, &settings);
+        info!(
+            "Incremental transcription finalized with {} chunk(s)",
+            session.runtime.chunk_count.load(Ordering::Relaxed)
         );
+
+        self.maybe_unload_immediately("incremental transcription");
+
+        Ok(final_result)
+    }
+
+    pub fn signal_incremental_stop(&self, binding_id: &str) {
+        let guard = self.incremental_session.lock().unwrap();
+        if let Some(session) = guard.as_ref() {
+            if session.binding_id == binding_id {
+                session
+                    .runtime
+                    .stop_requested
+                    .store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
+    pub fn cancel_incremental_session(&self) {
+        let mut guard = self.incremental_session.lock().unwrap();
+        if let Some(session) = guard.take() {
+            session
+                .runtime
+                .stop_requested
+                .store(true, Ordering::Relaxed);
+            session.worker_handle.abort();
+            debug!("Cancelled incremental transcription session");
+        }
+    }
+
+    pub fn request_cancel(&self) {
+        self.cancel_requested.store(true, Ordering::Relaxed);
+        self.cancel_incremental_session();
+    }
+
+    pub fn clear_cancel_request(&self) {
+        self.cancel_requested.store(false, Ordering::Relaxed);
+    }
+
+    pub fn is_cancel_requested(&self) -> bool {
+        self.cancel_requested.load(Ordering::Relaxed)
+    }
+
+    pub async fn transcribe(&self, audio: Vec<f32>) -> Result<String> {
+        self.update_last_activity();
 
         let st = std::time::Instant::now();
 
@@ -703,137 +1361,15 @@ impl TranscriptionManager {
             return Ok(String::new());
         }
 
-        // If the model is loading, wait for it to complete.
-        {
-            let mut is_loading = self.is_loading.lock().unwrap();
-            while *is_loading {
-                is_loading = self.loading_condvar.wait(is_loading).unwrap();
-            }
+        if self.cancel_requested.load(Ordering::Relaxed) {
+            return Err(anyhow::anyhow!("Transcription cancelled"));
         }
-        // Get current settings for configuration
+
         let settings = get_settings(&self.app_handle);
-        let selected_model_id = if settings.selected_model.is_empty() {
-            None
-        } else {
-            Some(settings.selected_model.clone())
-        };
-        let selected_model_is_cloud = selected_model_id
-            .as_deref()
-            .map(is_cloud_model_id)
-            .unwrap_or(false);
-
-        // If settings explicitly select a cloud model, always start with cloud.
-        // This allows cloud-first behavior even if a local fallback model is loaded.
-        let active_model_id = if selected_model_is_cloud {
-            selected_model_id.clone()
-        } else {
-            self.get_current_model()
-                .filter(|id| !id.is_empty())
-                .or_else(|| selected_model_id.clone())
-        };
-
-        let is_cloud_model = active_model_id
-            .as_deref()
-            .map(is_cloud_model_id)
-            .unwrap_or(false);
-
-        if !is_cloud_model {
-            let engine_guard = self.lock_engine();
-            if engine_guard.is_none() {
-                return Err(anyhow::anyhow!("Model is not loaded for transcription."));
-            }
-        }
-
-        let raw_transcription = if is_cloud_model {
-            let model_id = active_model_id
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("No cloud model selected for transcription."))?;
-            let groq_model = groq_api_model_name(model_id)
-                .ok_or_else(|| anyhow::anyhow!("Unknown Groq model id: {}", model_id))?;
-            let api_key = self.resolve_groq_api_key().ok_or_else(|| {
-                anyhow::anyhow!("Groq API key is required. Add it in Models > Groq Cloud API key.")
-            })?;
-
-            match groq_client::transcribe_samples(
-                &api_key,
-                groq_model,
-                &audio,
-                &settings.selected_language,
-                settings.translate_to_english,
-            )
-            .await
-            {
-                Ok(text) => text,
-                Err(groq_error) => {
-                    let likely_network_issue = looks_like_network_error(groq_error.as_str());
-                    if likely_network_issue {
-                        warn!(
-                            "Groq transcription failed with what looks like a network/offline issue: {}",
-                            groq_error
-                        );
-                    } else {
-                        warn!("Groq transcription failed: {}", groq_error);
-                    }
-
-                    let preferred_local_id = self
-                        .get_current_model()
-                        .filter(|id| !is_cloud_model_id(id))
-                        .or_else(|| {
-                            selected_model_id
-                                .clone()
-                                .filter(|id| !is_cloud_model_id(id))
-                        });
-                    let fallback_local_model_id = self
-                        .select_local_fallback_model_id(preferred_local_id.as_deref())
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "Groq transcription failed: {}. No downloaded local model available for fallback.",
-                                groq_error
-                            )
-                        })?;
-
-                    let local_engine_loaded = {
-                        let engine_guard = self.lock_engine();
-                        engine_guard.is_some()
-                    };
-                    let current_model = self.get_current_model();
-                    if current_model.as_deref() != Some(fallback_local_model_id.as_str())
-                        || !local_engine_loaded
-                    {
-                        warn!(
-                            "Switching transcription to local fallback model '{}' after Groq failure",
-                            fallback_local_model_id
-                        );
-                        self.load_model(&fallback_local_model_id).map_err(|load_error| {
-                            anyhow::anyhow!(
-                                "Groq transcription failed: {}. Local fallback model '{}' failed to load: {}",
-                                groq_error,
-                                fallback_local_model_id,
-                                load_error
-                            )
-                        })?;
-                    }
-
-                    self.transcribe_with_local_engine(audio, &settings)?
-                }
-            }
-        } else {
-            self.transcribe_with_local_engine(audio, &settings)?
-        };
-
-        // Apply word correction if custom words are configured
-        let corrected_result = if !settings.custom_words.is_empty() {
-            apply_custom_words(
-                &raw_transcription,
-                &settings.custom_words,
-                settings.word_correction_threshold,
-            )
-        } else {
-            raw_transcription
-        };
-
-        // Filter out filler words and hallucinations
-        let filtered_result = filter_transcription_output(&corrected_result);
+        let raw_transcription = self
+            .transcribe_raw_with_settings(audio, &settings, true)
+            .await?;
+        let filtered_result = self.apply_transcription_filters(raw_transcription, &settings);
 
         let et = std::time::Instant::now();
         let translation_note = if settings.translate_to_english {
@@ -864,6 +1400,8 @@ impl TranscriptionManager {
 impl Drop for TranscriptionManager {
     fn drop(&mut self) {
         debug!("Shutting down TranscriptionManager");
+
+        self.cancel_incremental_session();
 
         // Signal the watcher thread to shutdown
         self.shutdown_signal.store(true, Ordering::Relaxed);
@@ -963,5 +1501,26 @@ mod tests {
         ];
         let picked = choose_local_fallback_model_id(models, None);
         assert!(picked.is_none());
+    }
+
+    #[test]
+    fn stitcher_removes_repeated_boundary_words() {
+        let mut assembled = "hello world from the meeting".to_string();
+        append_stitched_text(&mut assembled, "from the meeting today");
+        assert_eq!(assembled, "hello world from the meeting today");
+    }
+
+    #[test]
+    fn stitcher_handles_case_and_punctuation_at_boundary() {
+        let mut assembled = "Thanks for joining,".to_string();
+        append_stitched_text(&mut assembled, "joining today everyone");
+        assert_eq!(assembled, "Thanks for joining, today everyone");
+    }
+
+    #[test]
+    fn stitcher_appends_without_overlap() {
+        let mut assembled = "alpha beta".to_string();
+        append_stitched_text(&mut assembled, "gamma delta");
+        assert_eq!(assembled, "alpha beta gamma delta");
     }
 }

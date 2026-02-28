@@ -4,6 +4,7 @@ use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, S
 use crate::audio_toolkit::{normalize_spoken_lists, normalize_spoken_punctuation};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::history::HistoryManager;
+use crate::managers::model::is_cloud_model_id;
 use crate::managers::transcription::TranscriptionManager;
 use crate::settings::{
     get_settings, AppSettings, PostProcessProvider, APPLE_INTELLIGENCE_PROVIDER_ID,
@@ -24,6 +25,7 @@ use tauri::AppHandle;
 use tauri::Emitter;
 use tauri::Manager;
 use tauri_plugin_clipboard_manager::ClipboardExt;
+use tokio::time::timeout;
 
 /// Drop guard that notifies the [`TranscriptionCoordinator`] when the
 /// transcription pipeline finishes — whether it completes normally or panics.
@@ -322,6 +324,7 @@ impl ShortcutAction for TranscribeAction {
 
         // Load model in the background
         let tm = app.state::<Arc<TranscriptionManager>>();
+        tm.clear_cancel_request();
         tm.initiate_model_load();
 
         let binding_id = binding_id.to_string();
@@ -375,6 +378,9 @@ impl ShortcutAction for TranscribeAction {
         }
 
         if recording_started {
+            if let Err(e) = tm.start_incremental_session(&binding_id, Arc::clone(&rm)) {
+                warn!("Failed to start incremental transcription session: {}", e);
+            }
             // Dynamically register the cancel shortcut in a separate task to avoid deadlock
             shortcut::register_cancel_shortcut(app);
         }
@@ -411,6 +417,14 @@ impl ShortcutAction for TranscribeAction {
         // When post-processing is enabled in settings, apply it automatically for normal
         // transcription. The dedicated post-process hotkey still forces it on.
         let post_process = self.post_process || settings.post_process_enabled;
+        let active_model_id = if settings.selected_model.is_empty() {
+            tm.get_current_model().unwrap_or_default()
+        } else {
+            settings.selected_model.clone()
+        };
+        let use_incremental = settings.incremental_transcription_enabled
+            && !settings.translate_to_english
+            && is_cloud_model_id(&active_model_id);
 
         tauri::async_runtime::spawn(async move {
             let _guard = FinishGuard(ah.clone());
@@ -419,6 +433,10 @@ impl ShortcutAction for TranscribeAction {
                 "Starting async transcription task for binding: {}",
                 binding_id
             );
+
+            if use_incremental {
+                tm.signal_incremental_stop(&binding_id);
+            }
 
             let stop_recording_time = Instant::now();
             if let Some(samples) = rm.stop_recording(&binding_id) {
@@ -429,6 +447,7 @@ impl ShortcutAction for TranscribeAction {
                 );
 
                 if samples.is_empty() {
+                    tm.cancel_incremental_session();
                     let settings = get_settings(&ah);
                     let binding = settings
                         .bindings
@@ -449,8 +468,47 @@ impl ShortcutAction for TranscribeAction {
 
                 let transcription_time = Instant::now();
                 let samples_clone = samples.clone(); // Clone for history saving
-                match tm.transcribe(samples).await {
+                let transcription_result = if use_incremental {
+                    match timeout(
+                        std::time::Duration::from_secs(6),
+                        tm.finish_incremental_session(&binding_id, &samples),
+                    )
+                    .await
+                    {
+                        Ok(Ok(text)) => {
+                            debug!(
+                                "Incremental transcription finalized in {:?}",
+                                transcription_time.elapsed()
+                            );
+                            Ok(text)
+                        }
+                        Ok(Err(incremental_err)) => {
+                            warn!(
+                                "Incremental path unavailable, falling back to full-pass transcription: {}",
+                                incremental_err
+                            );
+                            tm.transcribe(samples).await
+                        }
+                        Err(_) => {
+                            warn!(
+                                "Incremental finalization timed out; falling back to full-pass transcription"
+                            );
+                            tm.cancel_incremental_session();
+                            tm.transcribe(samples).await
+                        }
+                    }
+                } else {
+                    tm.cancel_incremental_session();
+                    tm.transcribe(samples).await
+                };
+                match transcription_result {
                     Ok(transcription) => {
+                        if tm.is_cancel_requested() {
+                            debug!("Transcription was cancelled before output handling");
+                            utils::hide_recording_overlay(&ah);
+                            change_tray_icon(&ah, TrayIconState::Idle);
+                            return;
+                        }
                         debug!(
                             "Transcription completed in {:?}: '{}'",
                             transcription_time.elapsed(),
@@ -572,6 +630,12 @@ impl ShortcutAction for TranscribeAction {
                         }
                     }
                     Err(err) => {
+                        if tm.is_cancel_requested() {
+                            debug!("Transcription task cancelled");
+                            utils::hide_recording_overlay(&ah);
+                            change_tray_icon(&ah, TrayIconState::Idle);
+                            return;
+                        }
                         error!("Global Shortcut Transcription error: {}", err);
                         let _ = ah.emit("transcription-error", err.to_string());
                         utils::hide_recording_overlay(&ah);
@@ -580,6 +644,7 @@ impl ShortcutAction for TranscribeAction {
                 }
             } else {
                 warn!("No samples retrieved from recording stop");
+                tm.cancel_incremental_session();
                 utils::hide_recording_overlay(&ah);
                 change_tray_icon(&ah, TrayIconState::Idle);
             }
