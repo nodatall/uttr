@@ -13,8 +13,8 @@ use crate::utils::{is_kde_wayland, is_wayland};
 #[cfg(target_os = "linux")]
 use std::process::Command;
 
-const CLIPBOARD_SYNC_ATTEMPTS: usize = 12;
-const CLIPBOARD_SYNC_RETRY_DELAY_MS: u64 = 15;
+const CLIPBOARD_SYNC_ATTEMPTS: usize = 8;
+const CLIPBOARD_SYNC_RETRY_DELAY_MS: u64 = 8;
 const CLIPBOARD_RESTORE_DELAY_MS: u64 = 250;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,17 +86,18 @@ fn wait_for_clipboard_sync(app_handle: &AppHandle, expected: &str) -> ClipboardW
     }
 }
 
-fn restore_clipboard_after_paste(app_handle: &AppHandle, state: ClipboardRestoreState) {
+fn restore_clipboard_after_paste(app_handle: AppHandle, state: ClipboardRestoreState) {
     let Some(original_text) = state.original_text else {
         // Preserve non-text clipboard content by not forcing an empty string restore.
         return;
     };
 
-    std::thread::sleep(Duration::from_millis(CLIPBOARD_RESTORE_DELAY_MS));
-
-    if let Err(err) = write_clipboard_text(app_handle, &original_text, state.use_wl_copy) {
-        warn!("Failed to restore original clipboard text: {}", err);
-    }
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(CLIPBOARD_RESTORE_DELAY_MS));
+        if let Err(err) = write_clipboard_text(&app_handle, &original_text, state.use_wl_copy) {
+            warn!("Failed to restore original clipboard text: {}", err);
+        }
+    });
 }
 
 /// Pastes text using the clipboard: saves current content, writes text, sends paste keystroke.
@@ -124,7 +125,8 @@ fn paste_via_clipboard(
 
     // Verify the clipboard contains the intended text before issuing Ctrl/Cmd+V.
     // Without this sync, the target app can occasionally paste stale clipboard content.
-    match wait_for_clipboard_sync(app_handle, text) {
+    let sync_status = wait_for_clipboard_sync(app_handle, text);
+    match sync_status {
         ClipboardWriteSyncStatus::Synced => {}
         ClipboardWriteSyncStatus::Unavailable => {
             warn!("Clipboard readback unavailable; proceeding without verification");
@@ -141,7 +143,13 @@ fn paste_via_clipboard(
         }
     }
 
-    std::thread::sleep(Duration::from_millis(paste_delay_ms));
+    let effective_paste_delay_ms = match sync_status {
+        ClipboardWriteSyncStatus::Synced => paste_delay_ms.min(20),
+        _ => paste_delay_ms,
+    };
+    if effective_paste_delay_ms > 0 {
+        std::thread::sleep(Duration::from_millis(effective_paste_delay_ms));
+    }
 
     // Send paste key combo
     #[cfg(target_os = "linux")]
@@ -725,7 +733,7 @@ pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
 
     // Restore clipboard after a short grace period so slower apps can consume pasted text first.
     if let Some(state) = clipboard_restore_state {
-        restore_clipboard_after_paste(&app_handle, state);
+        restore_clipboard_after_paste(app_handle.clone(), state);
     }
 
     // After pasting, optionally copy to clipboard based on settings

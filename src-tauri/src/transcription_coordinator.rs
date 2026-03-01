@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 
 const DEBOUNCE: Duration = Duration::from_millis(30);
+const PROCESSING_WATCHDOG: Duration = Duration::from_secs(20);
 
 /// Commands processed sequentially by the coordinator thread.
 enum Command {
@@ -49,6 +50,7 @@ impl TranscriptionCoordinator {
             let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let mut stage = Stage::Idle;
                 let mut last_press: Option<Instant> = None;
+                let mut processing_started_at: Option<Instant> = None;
 
                 while let Ok(cmd) = rx.recv() {
                     match cmd {
@@ -67,15 +69,41 @@ impl TranscriptionCoordinator {
                                     continue;
                                 }
                                 last_press = Some(now);
+
+                                if matches!(stage, Stage::Processing)
+                                    && processing_started_at
+                                        .map(|started| started.elapsed() > PROCESSING_WATCHDOG)
+                                        .unwrap_or(false)
+                                {
+                                    warn!(
+                                        "Processing watchdog exceeded {:?}; resetting coordinator to idle",
+                                        PROCESSING_WATCHDOG
+                                    );
+                                    stage = Stage::Idle;
+                                    processing_started_at = None;
+                                }
                             }
 
                             if push_to_talk {
                                 if is_pressed && matches!(stage, Stage::Idle) {
                                     start(&app, &mut stage, &binding_id, &hotkey_string);
+                                } else if is_pressed
+                                    && matches!(&stage, Stage::Recording(id) if id == &binding_id)
+                                {
+                                    // Recovery path: if a push-to-talk press arrives while already
+                                    // recording the same binding, treat it as a stop. This handles
+                                    // missed release events from flaky shortcut sources.
+                                    warn!(
+                                        "Received push-to-talk press while already recording '{}'; treating as stop",
+                                        binding_id
+                                    );
+                                    stop(&app, &mut stage, &binding_id, &hotkey_string);
+                                    processing_started_at = Some(Instant::now());
                                 } else if !is_pressed
                                     && matches!(&stage, Stage::Recording(id) if id == &binding_id)
                                 {
                                     stop(&app, &mut stage, &binding_id, &hotkey_string);
+                                    processing_started_at = Some(Instant::now());
                                 }
                             } else if is_pressed {
                                 match &stage {
@@ -84,6 +112,7 @@ impl TranscriptionCoordinator {
                                     }
                                     Stage::Recording(id) if id == &binding_id => {
                                         stop(&app, &mut stage, &binding_id, &hotkey_string);
+                                        processing_started_at = Some(Instant::now());
                                     }
                                     _ => {
                                         debug!("Ignoring press for '{binding_id}': pipeline busy")
@@ -94,15 +123,20 @@ impl TranscriptionCoordinator {
                         Command::Cancel {
                             recording_was_active,
                         } => {
-                            // Don't reset during processing — wait for the pipeline to finish.
-                            if !matches!(stage, Stage::Processing)
-                                && (recording_was_active || matches!(stage, Stage::Recording(_)))
+                            // Cancellation is an explicit user escape hatch.
+                            // Always reset to idle so new hotkeys are not blocked by a stuck
+                            // processing stage.
+                            if recording_was_active
+                                || matches!(stage, Stage::Recording(_))
+                                || matches!(stage, Stage::Processing)
                             {
                                 stage = Stage::Idle;
+                                processing_started_at = None;
                             }
                         }
                         Command::ProcessingFinished => {
                             stage = Stage::Idle;
+                            processing_started_at = None;
                         }
                     }
                 }

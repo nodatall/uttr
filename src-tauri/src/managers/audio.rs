@@ -423,6 +423,15 @@ impl AudioRecordingManager {
         )
     }
 
+    pub fn is_recording_binding(&self, binding_id: &str) -> bool {
+        matches!(
+            *self.state.lock().unwrap(),
+            RecordingState::Recording {
+                binding_id: ref active
+            } if active == binding_id
+        )
+    }
+
     pub fn drain_recording_delta(&self, binding_id: &str) -> Option<DrainResult> {
         let state = self.state.lock().unwrap();
         match *state {
@@ -441,7 +450,13 @@ impl AudioRecordingManager {
                     match rec.drain() {
                         Ok(delta) => Some(delta),
                         Err(e) => {
-                            error!("drain() failed: {e}");
+                            if e.to_string()
+                                .contains("Timed out waiting for drain response")
+                            {
+                                debug!("drain() timed out waiting for recorder response");
+                            } else {
+                                error!("drain() failed: {e}");
+                            }
                             None
                         }
                     }

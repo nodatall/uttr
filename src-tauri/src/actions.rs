@@ -20,7 +20,7 @@ use log::{debug, error, warn};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use tauri::Emitter;
 use tauri::Manager;
@@ -56,6 +56,8 @@ const GROQ_MODEL_PREFERENCES: &[&str] = &[
     "llama-3.1-8b-instant",
     "mixtral-8x7b-32768",
 ];
+const FULL_PASS_TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(45);
+const SHORT_UTTERANCE_SAMPLES: usize = 16_000 * 10;
 
 static AUTO_SELECTED_MODEL_CACHE: Lazy<Mutex<HashMap<String, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
@@ -317,6 +319,19 @@ async fn maybe_convert_chinese_variant(
     }
 }
 
+async fn transcribe_full_pass_with_timeout(
+    tm: &Arc<TranscriptionManager>,
+    samples: Vec<f32>,
+) -> Result<String, anyhow::Error> {
+    match timeout(FULL_PASS_TRANSCRIPTION_TIMEOUT, tm.transcribe(samples)).await {
+        Ok(result) => result,
+        Err(_) => Err(anyhow::anyhow!(
+            "Transcription timed out after {}s",
+            FULL_PASS_TRANSCRIPTION_TIMEOUT.as_secs()
+        )),
+    }
+}
+
 impl ShortcutAction for TranscribeAction {
     fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
         let start_time = Instant::now();
@@ -325,7 +340,22 @@ impl ShortcutAction for TranscribeAction {
         // Load model in the background
         let tm = app.state::<Arc<TranscriptionManager>>();
         tm.clear_cancel_request();
-        tm.initiate_model_load();
+        let settings = get_settings(app);
+        let preload_model_id = if settings.selected_model.is_empty() {
+            tm.get_current_model().unwrap_or_default()
+        } else {
+            settings.selected_model.clone()
+        };
+        // Cloud models do not load a local engine, so skip preload
+        // to avoid adding loading-wait overhead on short recordings.
+        if preload_model_id.is_empty() || !is_cloud_model_id(&preload_model_id) {
+            tm.initiate_model_load();
+        } else {
+            debug!(
+                "Skipping preload for cloud model '{}' in hot path",
+                preload_model_id
+            );
+        }
 
         let binding_id = binding_id.to_string();
         change_tray_icon(app, TrayIconState::Recording);
@@ -334,7 +364,6 @@ impl ShortcutAction for TranscribeAction {
         let rm = app.state::<Arc<AudioRecordingManager>>();
 
         // Get the microphone mode to determine audio feedback timing
-        let settings = get_settings(app);
         let is_always_on = settings.always_on_microphone;
         debug!("Microphone mode - always_on: {}", is_always_on);
 
@@ -378,9 +407,7 @@ impl ShortcutAction for TranscribeAction {
         }
 
         if recording_started {
-            if let Err(e) = tm.start_incremental_session(&binding_id, Arc::clone(&rm)) {
-                warn!("Failed to start incremental transcription session: {}", e);
-            }
+            tm.cancel_incremental_session();
             // Dynamically register the cancel shortcut in a separate task to avoid deadlock
             shortcut::register_cancel_shortcut(app);
         }
@@ -417,14 +444,6 @@ impl ShortcutAction for TranscribeAction {
         // When post-processing is enabled in settings, apply it automatically for normal
         // transcription. The dedicated post-process hotkey still forces it on.
         let post_process = self.post_process || settings.post_process_enabled;
-        let active_model_id = if settings.selected_model.is_empty() {
-            tm.get_current_model().unwrap_or_default()
-        } else {
-            settings.selected_model.clone()
-        };
-        let use_incremental = settings.incremental_transcription_enabled
-            && !settings.translate_to_english
-            && is_cloud_model_id(&active_model_id);
 
         tauri::async_runtime::spawn(async move {
             let _guard = FinishGuard(ah.clone());
@@ -433,10 +452,6 @@ impl ShortcutAction for TranscribeAction {
                 "Starting async transcription task for binding: {}",
                 binding_id
             );
-
-            if use_incremental {
-                tm.signal_incremental_stop(&binding_id);
-            }
 
             let stop_recording_time = Instant::now();
             if let Some(samples) = rm.stop_recording(&binding_id) {
@@ -447,7 +462,6 @@ impl ShortcutAction for TranscribeAction {
                 );
 
                 if samples.is_empty() {
-                    tm.cancel_incremental_session();
                     let settings = get_settings(&ah);
                     let binding = settings
                         .bindings
@@ -468,38 +482,16 @@ impl ShortcutAction for TranscribeAction {
 
                 let transcription_time = Instant::now();
                 let samples_clone = samples.clone(); // Clone for history saving
-                let transcription_result = if use_incremental {
-                    match timeout(
-                        std::time::Duration::from_secs(6),
-                        tm.finish_incremental_session(&binding_id, &samples),
-                    )
-                    .await
-                    {
-                        Ok(Ok(text)) => {
-                            debug!(
-                                "Incremental transcription finalized in {:?}",
-                                transcription_time.elapsed()
-                            );
-                            Ok(text)
-                        }
-                        Ok(Err(incremental_err)) => {
-                            warn!(
-                                "Incremental path unavailable, falling back to full-pass transcription: {}",
-                                incremental_err
-                            );
-                            tm.transcribe(samples).await
-                        }
-                        Err(_) => {
-                            warn!(
-                                "Incremental finalization timed out; falling back to full-pass transcription"
-                            );
-                            tm.cancel_incremental_session();
-                            tm.transcribe(samples).await
-                        }
-                    }
-                } else {
-                    tm.cancel_incremental_session();
+                let transcription_result = if samples.len() < SHORT_UTTERANCE_SAMPLES {
+                    // Short utterance fast path: run direct transcription with no chunking/fallback
+                    // orchestration so <10s clips match pre-chunk latency.
+                    debug!(
+                        "Using short-utterance fast path ({} samples)",
+                        samples.len()
+                    );
                     tm.transcribe(samples).await
+                } else {
+                    transcribe_full_pass_with_timeout(&tm, samples).await
                 };
                 match transcription_result {
                     Ok(transcription) => {
@@ -644,7 +636,6 @@ impl ShortcutAction for TranscribeAction {
                 }
             } else {
                 warn!("No samples retrieved from recording stop");
-                tm.cancel_incremental_session();
                 utils::hide_recording_overlay(&ah);
                 change_tray_icon(&ah, TrayIconState::Idle);
             }

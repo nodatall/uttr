@@ -55,6 +55,7 @@ const CHUNK_SAMPLES: usize = SAMPLE_RATE * 10;
 const CHUNK_OVERLAP_SAMPLES: usize = SAMPLE_RATE * 3 / 2; // 1.5s
 const CHUNK_FORCE_WAIT_SAMPLES: usize = SAMPLE_RATE * 2; // 2s of additional speech
 const CHUNK_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const CHUNK_WARMUP_DURATION: Duration = Duration::from_secs(10);
 const STOP_IN_FLIGHT_WAIT: Duration = Duration::from_secs(4);
 const MAX_TOKEN_OVERLAP: usize = 25;
 
@@ -568,7 +569,7 @@ impl TranscriptionManager {
             }
             let (guard, _) = self
                 .loading_condvar
-                .wait_timeout(is_loading, Duration::from_millis(100))
+                .wait_timeout(is_loading, Duration::from_millis(25))
                 .unwrap();
             is_loading = guard;
         }
@@ -618,6 +619,26 @@ impl TranscriptionManager {
         self.transcribe_with_local_engine(audio, settings)
     }
 
+    async fn transcribe_raw_local_with_settings_async(
+        &self,
+        audio: Vec<f32>,
+        settings: &AppSettings,
+    ) -> Result<String> {
+        let manager = self.clone();
+        let settings_owned = settings.clone();
+        match tauri::async_runtime::spawn_blocking(move || {
+            manager.transcribe_raw_local_with_settings(audio, &settings_owned)
+        })
+        .await
+        {
+            Ok(result) => result,
+            Err(join_err) => Err(anyhow::anyhow!(
+                "Local transcription task failed to join: {}",
+                join_err
+            )),
+        }
+    }
+
     async fn transcribe_raw_with_settings(
         &self,
         audio: Vec<f32>,
@@ -662,7 +683,9 @@ impl TranscriptionManager {
             .unwrap_or(false);
 
         if !is_cloud_model {
-            return self.transcribe_raw_local_with_settings(audio, settings);
+            return self
+                .transcribe_raw_local_with_settings_async(audio, settings)
+                .await;
         }
 
         if is_cloud_model {
@@ -742,11 +765,13 @@ impl TranscriptionManager {
                         })?;
                     }
 
-                    self.transcribe_with_local_engine(audio, settings)
+                    self.transcribe_raw_local_with_settings_async(audio, settings)
+                        .await
                 }
             }
         } else {
-            self.transcribe_raw_local_with_settings(audio, settings)
+            self.transcribe_raw_local_with_settings_async(audio, settings)
+                .await
         }
     }
 
@@ -1052,6 +1077,7 @@ impl TranscriptionManager {
         audio_manager: Arc<AudioRecordingManager>,
         runtime: Arc<IncrementalRuntime>,
     ) {
+        let started_at = Instant::now();
         let mut speech_buffer = Vec::<f32>::new();
         let mut saw_pause = false;
 
@@ -1061,6 +1087,11 @@ impl TranscriptionManager {
                 || self.cancel_requested.load(Ordering::Relaxed)
             {
                 break;
+            }
+
+            if started_at.elapsed() < CHUNK_WARMUP_DURATION {
+                sleep(Duration::from_millis(200)).await;
+                continue;
             }
 
             let drained = audio_manager.drain_recording_delta(&binding_id);
@@ -1321,6 +1352,14 @@ impl TranscriptionManager {
                     .store(true, Ordering::Relaxed);
             }
         }
+    }
+
+    pub fn has_incremental_session(&self, binding_id: &str) -> bool {
+        let guard = self.incremental_session.lock().unwrap();
+        guard
+            .as_ref()
+            .map(|session| session.binding_id == binding_id)
+            .unwrap_or(false)
     }
 
     pub fn cancel_incremental_session(&self) {

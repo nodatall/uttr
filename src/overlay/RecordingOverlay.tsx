@@ -1,6 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
 import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useTranslation } from "react-i18next";
 import "./RecordingOverlay.css";
 import i18n, { syncLanguageFromSettings } from "@/i18n";
 import { getLanguageDirection } from "@/lib/utils/rtl";
@@ -21,12 +20,23 @@ const WAVE_AMPLITUDE_CAP = 4.4;
 const WAVE_SPEED_MIN = 0.1;
 const WAVE_SPEED_RANGE = 0.24;
 const WAVE_SPEED_CAP = 0.36;
+const RECORDING_CURVES = [
+  { color: "255,255,255", supportLine: true },
+  { color: "102,217,255" },
+  { color: "170,120,255" },
+  { color: "96,243,191" },
+];
+const TRANSCRIBING_CURVES = [
+  { color: "255,214,198", supportLine: true },
+  { color: "255,73,50" },
+  { color: "255,116,38" },
+  { color: "255,176,64" },
+];
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
 
 const RecordingOverlay: React.FC = () => {
-  const { t } = useTranslation();
   const [isVisible, setIsVisible] = useState(true);
   const [state, setState] = useState<OverlayState>("recording");
   const [levels, setLevels] = useState<number[]>(Array(16).fill(0));
@@ -34,6 +44,9 @@ const RecordingOverlay: React.FC = () => {
   const siriWaveRef = useRef<SiriWave | null>(null);
   const smoothedLevelsRef = useRef<number[]>(Array(16).fill(0));
   const direction = getLanguageDirection(i18n.language);
+  const showWave =
+    state === "recording" || state === "transcribing" || state === "processing";
+  const isOrangeState = state === "transcribing" || state === "processing";
 
   useEffect(() => {
     let isDisposed = false;
@@ -90,7 +103,7 @@ const RecordingOverlay: React.FC = () => {
 
   useEffect(() => {
     const host = waveContainerRef.current;
-    if (!host || !isVisible || state !== "recording") {
+    if (!host || !isVisible || !showWave) {
       siriWaveRef.current?.dispose();
       siriWaveRef.current = null;
       return undefined;
@@ -108,12 +121,7 @@ const RecordingOverlay: React.FC = () => {
       pixelDepth: 0.02,
       lerpSpeed: 0.11,
       globalCompositeOperation: "lighter",
-      curveDefinition: [
-        { color: "255,255,255", supportLine: true },
-        { color: "102,217,255" },
-        { color: "170,120,255" },
-        { color: "96,243,191" },
-      ],
+      curveDefinition: isOrangeState ? TRANSCRIBING_CURVES : RECORDING_CURVES,
       ranges: {
         noOfCurves: [4, 7],
         amplitude: [1.8, 3.8],
@@ -128,7 +136,7 @@ const RecordingOverlay: React.FC = () => {
       siriWaveRef.current?.dispose();
       siriWaveRef.current = null;
     };
-  }, [isVisible, state]);
+  }, [isVisible, showWave, isOrangeState]);
 
   const waveEnergy = useMemo(() => {
     const average = levels.reduce((sum, level) => sum + level, 0) / levels.length;
@@ -137,7 +145,7 @@ const RecordingOverlay: React.FC = () => {
   }, [levels]);
 
   useEffect(() => {
-    if (!isVisible || state !== "recording") {
+    if (!isVisible || !showWave) {
       return;
     }
 
@@ -157,21 +165,29 @@ const RecordingOverlay: React.FC = () => {
       WAVE_SPEED_CAP,
     );
 
-    siriWave.setAmplitude(amplitude);
-    siriWave.setSpeed(speed);
-  }, [isVisible, state, waveEnergy]);
+    if (isOrangeState) {
+      const orangeAmplitude = clamp(
+        amplitude * 1.22,
+        WAVE_AMPLITUDE_MIN * 1.05,
+        WAVE_AMPLITUDE_CAP,
+      );
+      const orangeSpeed = clamp(speed * 0.22, 0.02, 0.085);
+      siriWave.setAmplitude(orangeAmplitude);
+      siriWave.setSpeed(orangeSpeed);
+    } else {
+      siriWave.setAmplitude(amplitude);
+      siriWave.setSpeed(speed);
+    }
+  }, [isVisible, showWave, waveEnergy, isOrangeState]);
 
   return (
     <div
       dir={direction}
-      className={`recording-overlay ${isVisible ? "fade-in" : ""}`}
+      className={`recording-overlay overlay-state-${state} ${isVisible ? "fade-in" : ""}`}
     >
       <div className="overlay-middle overlay-middle-full">
-        {state === "recording" && (
+        {showWave && (
           <div ref={waveContainerRef} className="siriwave-host" role="presentation" aria-hidden />
-        )}
-        {(state === "transcribing" || state === "processing") && (
-          <div className="transcribing-text">{t("overlay.transcribing")}</div>
         )}
       </div>
     </div>

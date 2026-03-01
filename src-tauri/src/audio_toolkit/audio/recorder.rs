@@ -150,21 +150,19 @@ impl AudioRecorder {
             .as_ref()
             .ok_or_else(|| Error::new(std::io::ErrorKind::BrokenPipe, "Recorder is not open"))?;
         tx.send(Cmd::Stop(resp_tx))?;
-        resp_rx
-            .recv_timeout(Duration::from_millis(500))
-            .map_err(|e| {
-                let io_err = match e {
-                    mpsc::RecvTimeoutError::Timeout => Error::new(
-                        std::io::ErrorKind::TimedOut,
-                        "Timed out waiting for stop response",
-                    ),
-                    mpsc::RecvTimeoutError::Disconnected => Error::new(
-                        std::io::ErrorKind::BrokenPipe,
-                        "Recorder worker disconnected before stop response",
-                    ),
-                };
-                Box::new(io_err) as Box<dyn std::error::Error>
-            })
+        resp_rx.recv_timeout(Duration::from_millis(750)).map_err(|e| {
+            let io_err = match e {
+                mpsc::RecvTimeoutError::Timeout => Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "Timed out waiting for stop response",
+                ),
+                mpsc::RecvTimeoutError::Disconnected => Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "Recorder worker disconnected before stop response",
+                ),
+            };
+            Box::new(io_err) as Box<dyn std::error::Error>
+        })
     }
 
     pub fn drain(&self) -> Result<DrainResult, Box<dyn std::error::Error>> {

@@ -1,11 +1,18 @@
-use hound::{SampleFormat, WavSpec, WavWriter};
-use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION};
+use once_cell::sync::Lazy;
 use reqwest::{multipart, Client};
 use serde::Deserialize;
-use std::io::Cursor;
 use std::time::Duration;
 
 const GROQ_BASE_URL: &str = "https://api.groq.com/openai/v1";
+const GROQ_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const WAV_HEADER_BYTES: usize = 44;
+
+static GROQ_HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
+    Client::builder()
+        .timeout(GROQ_REQUEST_TIMEOUT)
+        .build()
+        .expect("Failed to build Groq HTTP client")
+});
 
 #[derive(Debug, Deserialize)]
 struct GroqTranscriptionResponse {
@@ -21,31 +28,35 @@ fn normalize_language(language: &str) -> Option<&str> {
 }
 
 fn build_wav_bytes(samples: &[f32]) -> Result<Vec<u8>, String> {
-    let spec = WavSpec {
-        channels: 1,
-        sample_rate: 16000,
-        bits_per_sample: 16,
-        sample_format: SampleFormat::Int,
-    };
+    let data_size = samples
+        .len()
+        .checked_mul(2)
+        .ok_or_else(|| "Audio too large to encode as WAV".to_string())?;
+    let riff_size = 36usize
+        .checked_add(data_size)
+        .ok_or_else(|| "Audio too large to encode as WAV".to_string())?;
 
-    let mut cursor = Cursor::new(Vec::new());
-    {
-        let mut writer = WavWriter::new(&mut cursor, spec)
-            .map_err(|e| format!("Failed to create in-memory WAV writer: {}", e))?;
+    let mut wav = Vec::with_capacity(WAV_HEADER_BYTES + data_size);
+    wav.extend_from_slice(b"RIFF");
+    wav.extend_from_slice(&(riff_size as u32).to_le_bytes());
+    wav.extend_from_slice(b"WAVE");
+    wav.extend_from_slice(b"fmt ");
+    wav.extend_from_slice(&16u32.to_le_bytes()); // PCM chunk size
+    wav.extend_from_slice(&1u16.to_le_bytes()); // PCM format
+    wav.extend_from_slice(&1u16.to_le_bytes()); // mono
+    wav.extend_from_slice(&16000u32.to_le_bytes()); // sample rate
+    wav.extend_from_slice(&(16000u32 * 2).to_le_bytes()); // byte rate
+    wav.extend_from_slice(&2u16.to_le_bytes()); // block align
+    wav.extend_from_slice(&16u16.to_le_bytes()); // bits per sample
+    wav.extend_from_slice(b"data");
+    wav.extend_from_slice(&(data_size as u32).to_le_bytes());
 
-        for sample in samples {
-            let sample_i16 = (sample * i16::MAX as f32) as i16;
-            writer
-                .write_sample(sample_i16)
-                .map_err(|e| format!("Failed to encode WAV sample: {}", e))?;
-        }
-
-        writer
-            .finalize()
-            .map_err(|e| format!("Failed to finalize in-memory WAV: {}", e))?;
+    for &sample in samples {
+        let sample_i16 = (sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16;
+        wav.extend_from_slice(&sample_i16.to_le_bytes());
     }
 
-    Ok(cursor.into_inner())
+    Ok(wav)
 }
 
 pub async fn transcribe_samples(
@@ -60,20 +71,6 @@ pub async fn transcribe_samples(
     }
 
     let wav = build_wav_bytes(samples)?;
-
-    let mut headers = HeaderMap::new();
-    let auth = format!("Bearer {}", api_key.trim());
-    headers.insert(
-        AUTHORIZATION,
-        HeaderValue::from_str(&auth)
-            .map_err(|e| format!("Invalid Groq API key format for header: {}", e))?,
-    );
-
-    let client = Client::builder()
-        .default_headers(headers)
-        .timeout(Duration::from_secs(90))
-        .build()
-        .map_err(|e| format!("Failed to build Groq HTTP client: {}", e))?;
 
     let endpoint = if translate_to_english {
         "audio/translations"
@@ -96,8 +93,9 @@ pub async fn transcribe_samples(
         form = form.text("language", language.to_string());
     }
 
-    let response = client
+    let response = GROQ_HTTP_CLIENT
         .post(url)
+        .bearer_auth(api_key.trim())
         .multipart(form)
         .send()
         .await
