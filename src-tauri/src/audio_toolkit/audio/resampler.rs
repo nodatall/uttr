@@ -2,7 +2,7 @@ use rubato::{FftFixedIn, Resampler};
 use std::time::Duration;
 
 // Make this a constant you can tweak
-const RESAMPLER_CHUNK_SIZE: usize = 1024;
+const RESAMPLER_CHUNK_SIZE: usize = 512;
 
 pub struct FrameResampler {
     resampler: Option<FftFixedIn<f32>>,

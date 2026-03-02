@@ -296,6 +296,7 @@ fn run_consumer(
 ) {
     const SPEECH_SAMPLE_RATE: usize = crate::audio_toolkit::constants::WHISPER_SAMPLE_RATE as usize;
     const PAUSE_THRESHOLD_SAMPLES: usize = SPEECH_SAMPLE_RATE * 300 / 1000; // 300ms
+    const STARTUP_PASSTHROUGH_SAMPLES: usize = SPEECH_SAMPLE_RATE * 350 / 1000; // 350ms
 
     let mut frame_resampler = FrameResampler::new(
         in_sample_rate as usize,
@@ -308,6 +309,7 @@ fn run_consumer(
     let mut drain_cursor = 0usize;
     let mut silence_run_samples = 0usize;
     let mut saw_pause_since_last_drain = false;
+    let mut startup_passthrough_remaining = 0usize;
 
     // ---------- spectrum visualisation setup ---------------------------- //
     const BUCKETS: usize = 16;
@@ -325,9 +327,19 @@ fn run_consumer(
         recording: bool,
         vad: &Option<Arc<Mutex<Box<dyn vad::VoiceActivityDetector>>>>,
         out_buf: &mut Vec<f32>,
+        startup_passthrough_remaining: &mut usize,
     ) -> bool {
         if !recording {
             return false;
+        }
+
+        // For the first slice after start, bypass VAD gating to avoid clipping
+        // initial words while the detector stabilizes.
+        if *startup_passthrough_remaining > 0 {
+            out_buf.extend_from_slice(samples);
+            *startup_passthrough_remaining =
+                startup_passthrough_remaining.saturating_sub(samples.len());
+            return true;
         }
 
         if let Some(vad_arc) = vad {
@@ -355,6 +367,7 @@ fn run_consumer(
         drain_cursor: &mut usize,
         silence_run_samples: &mut usize,
         saw_pause_since_last_drain: &mut bool,
+        startup_passthrough_remaining: &mut usize,
     ) -> bool {
         match cmd {
             Cmd::Start => {
@@ -363,6 +376,7 @@ fn run_consumer(
                 *drain_cursor = 0;
                 *silence_run_samples = 0;
                 *saw_pause_since_last_drain = false;
+                *startup_passthrough_remaining = STARTUP_PASSTHROUGH_SAMPLES;
                 visualizer.reset(); // Reset visualization buffer
                 if let Some(v) = vad {
                     v.lock().unwrap().reset();
@@ -398,14 +412,22 @@ fn run_consumer(
             Cmd::Stop(reply_tx) => {
                 *recording = false;
 
+                let mut flush_passthrough = 0usize;
                 frame_resampler.finish(&mut |frame: &[f32]| {
                     // we still want to process the last few frames
-                    let _ = handle_frame(frame, true, vad, processed_samples);
+                    let _ = handle_frame(
+                        frame,
+                        true,
+                        vad,
+                        processed_samples,
+                        &mut flush_passthrough,
+                    );
                 });
 
                 *drain_cursor = 0;
                 *silence_run_samples = 0;
                 *saw_pause_since_last_drain = false;
+                *startup_passthrough_remaining = 0;
                 let _ = reply_tx.send(std::mem::take(processed_samples));
                 false
             }
@@ -425,6 +447,7 @@ fn run_consumer(
                 &mut drain_cursor,
                 &mut silence_run_samples,
                 &mut saw_pause_since_last_drain,
+                &mut startup_passthrough_remaining,
             ) {
                 return;
             }
@@ -445,7 +468,13 @@ fn run_consumer(
 
         // ---------- existing pipeline ------------------------------------ //
         frame_resampler.push(&raw, &mut |frame: &[f32]| {
-            let saw_speech = handle_frame(frame, recording, &vad, &mut processed_samples);
+            let saw_speech = handle_frame(
+                frame,
+                recording,
+                &vad,
+                &mut processed_samples,
+                &mut startup_passthrough_remaining,
+            );
             if recording {
                 if saw_speech {
                     silence_run_samples = 0;
@@ -470,6 +499,7 @@ fn run_consumer(
                 &mut drain_cursor,
                 &mut silence_run_samples,
                 &mut saw_pause_since_last_drain,
+                &mut startup_passthrough_remaining,
             ) {
                 return;
             }

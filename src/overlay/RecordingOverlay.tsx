@@ -17,9 +17,12 @@ const WAVE_ENERGY_MAX = 1;
 const WAVE_AMPLITUDE_MIN = 0.9;
 const WAVE_AMPLITUDE_RANGE = 3.1;
 const WAVE_AMPLITUDE_CAP = 4.4;
+const WAVE_AMPLITUDE_BOOST = 1.5625;
+const WAVE_MAX_AMPLITUDE_FACTOR = 0.75;
 const WAVE_SPEED_MIN = 0.1;
 const WAVE_SPEED_RANGE = 0.24;
 const WAVE_SPEED_CAP = 0.36;
+const IOS9_BASELINE_OFFSET_PX = 6;
 const RECORDING_CURVES = [
   { color: "255,255,255", supportLine: true },
   { color: "102,217,255" },
@@ -37,6 +40,11 @@ const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
 
 const RecordingOverlay: React.FC = () => {
+  const [waveHostWidth, setWaveHostWidth] = useState(0);
+  const [waveHostHeight, setWaveHostHeight] = useState(0);
+  const [devicePixelRatio, setDevicePixelRatio] = useState(
+    window.devicePixelRatio || 1,
+  );
   const [isVisible, setIsVisible] = useState(true);
   const [state, setState] = useState<OverlayState>("recording");
   const [levels, setLevels] = useState<number[]>(Array(16).fill(0));
@@ -103,9 +111,47 @@ const RecordingOverlay: React.FC = () => {
 
   useEffect(() => {
     const host = waveContainerRef.current;
+    if (!host) {
+      return;
+    }
+
+    const syncWaveMetrics = () => {
+      const nextWidth = host.clientWidth;
+      const nextHeight = host.clientHeight;
+      const nextDpr = window.devicePixelRatio || 1;
+      const yShift = IOS9_BASELINE_OFFSET_PX / nextDpr;
+      host.style.setProperty("--siriwave-y-shift", `${yShift}px`);
+
+      setWaveHostWidth((prev) => (prev !== nextWidth ? nextWidth : prev));
+      setWaveHostHeight((prev) => (prev !== nextHeight ? nextHeight : prev));
+      setDevicePixelRatio((prev) =>
+        Math.abs(prev - nextDpr) > 0.001 ? nextDpr : prev,
+      );
+    };
+
+    syncWaveMetrics();
+
+    const resizeObserver = new ResizeObserver(syncWaveMetrics);
+    resizeObserver.observe(host);
+    window.addEventListener("resize", syncWaveMetrics);
+    const dprPoll = window.setInterval(syncWaveMetrics, 300);
+
+    return () => {
+      window.removeEventListener("resize", syncWaveMetrics);
+      resizeObserver.disconnect();
+      window.clearInterval(dprPoll);
+    };
+  }, []);
+
+  useEffect(() => {
+    const host = waveContainerRef.current;
     if (!host || !isVisible || !showWave) {
       siriWaveRef.current?.dispose();
       siriWaveRef.current = null;
+      return undefined;
+    }
+
+    if (waveHostWidth <= 0 || waveHostHeight <= 0) {
       return undefined;
     }
 
@@ -113,8 +159,9 @@ const RecordingOverlay: React.FC = () => {
     siriWaveRef.current = new SiriWave({
       container: host,
       style: "ios9",
-      width: host.clientWidth,
-      height: host.clientHeight,
+      ratio: devicePixelRatio,
+      width: waveHostWidth,
+      height: waveHostHeight,
       autostart: true,
       amplitude: WAVE_AMPLITUDE_MIN,
       speed: WAVE_SPEED_MIN,
@@ -136,7 +183,14 @@ const RecordingOverlay: React.FC = () => {
       siriWaveRef.current?.dispose();
       siriWaveRef.current = null;
     };
-  }, [isVisible, showWave, isOrangeState]);
+  }, [
+    isVisible,
+    showWave,
+    isOrangeState,
+    waveHostWidth,
+    waveHostHeight,
+    devicePixelRatio,
+  ]);
 
   const waveEnergy = useMemo(() => {
     const average = levels.reduce((sum, level) => sum + level, 0) / levels.length;
@@ -155,9 +209,10 @@ const RecordingOverlay: React.FC = () => {
     }
 
     const amplitude = clamp(
-      WAVE_AMPLITUDE_MIN + waveEnergy * WAVE_AMPLITUDE_RANGE,
+      (WAVE_AMPLITUDE_MIN + waveEnergy * WAVE_AMPLITUDE_RANGE) *
+        WAVE_AMPLITUDE_BOOST,
       WAVE_AMPLITUDE_MIN,
-      WAVE_AMPLITUDE_CAP,
+      WAVE_AMPLITUDE_CAP * WAVE_AMPLITUDE_BOOST * WAVE_MAX_AMPLITUDE_FACTOR,
     );
     const speed = clamp(
       WAVE_SPEED_MIN + waveEnergy * WAVE_SPEED_RANGE,
@@ -183,7 +238,9 @@ const RecordingOverlay: React.FC = () => {
   return (
     <div
       dir={direction}
-      className={`recording-overlay overlay-state-${state} ${isVisible ? "fade-in" : ""}`}
+      className={`recording-overlay ${isOrangeState ? "overlay-state-busy" : ""} ${
+        isVisible ? "fade-in" : ""
+      }`}
     >
       <div className="overlay-middle overlay-middle-full">
         {showWave && (

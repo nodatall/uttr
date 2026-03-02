@@ -5,8 +5,11 @@ use crate::helpers::clamshell;
 use crate::settings::{get_settings, AppSettings};
 use crate::utils;
 use log::{debug, error, info};
-use std::sync::{Arc, Mutex};
-use std::time::Instant;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
+use std::time::{Duration, Instant};
 use tauri::Manager;
 
 fn set_mute(mute: bool) {
@@ -99,6 +102,7 @@ fn set_mute(mute: bool) {
 }
 
 const WHISPER_SAMPLE_RATE: usize = 16000;
+const ON_DEMAND_IDLE_KEEPALIVE: Duration = Duration::from_secs(45);
 
 /* ──────────────────────────────────────────────────────────────── */
 
@@ -122,7 +126,9 @@ fn create_audio_recorder(
 ) -> Result<AudioRecorder, anyhow::Error> {
     let silero = SileroVad::new(vad_path, 0.3)
         .map_err(|e| anyhow::anyhow!("Failed to create SileroVad: {}", e))?;
-    let smoothed_vad = SmoothedVad::new(Box::new(silero), 15, 15, 2);
+    // Less aggressive onset gating helps preserve first spoken words.
+    // Keep generous prefill to include context leading into the first detected voice frame.
+    let smoothed_vad = SmoothedVad::new(Box::new(silero), 24, 12, 1);
 
     // Recorder with VAD plus a spectrum-level callback that forwards updates to
     // the frontend.
@@ -151,6 +157,7 @@ pub struct AudioRecordingManager {
     is_open: Arc<Mutex<bool>>,
     is_recording: Arc<Mutex<bool>>,
     did_mute: Arc<Mutex<bool>>,
+    idle_stop_generation: Arc<AtomicU64>,
 }
 
 impl AudioRecordingManager {
@@ -173,11 +180,23 @@ impl AudioRecordingManager {
             is_open: Arc::new(Mutex::new(false)),
             is_recording: Arc::new(Mutex::new(false)),
             did_mute: Arc::new(Mutex::new(false)),
+            idle_stop_generation: Arc::new(AtomicU64::new(0)),
         };
 
         // Always-on?  Open immediately.
         if matches!(mode, MicrophoneMode::AlwaysOn) {
             manager.start_microphone_stream()?;
+        } else {
+            // Best-effort prewarm for on-demand mode to reduce first-utterance latency.
+            // If this fails (e.g. no device yet), we retry on actual recording start.
+            let manager_clone = manager.clone();
+            tauri::async_runtime::spawn(async move {
+                if let Err(e) = manager_clone.start_microphone_stream() {
+                    debug!("On-demand microphone prewarm failed: {}", e);
+                    return;
+                }
+                manager_clone.schedule_idle_stop();
+            });
         }
 
         Ok(manager)
@@ -308,6 +327,34 @@ impl AudioRecordingManager {
         debug!("Microphone stream stopped");
     }
 
+    fn cancel_idle_stop_timer(&self) {
+        self.idle_stop_generation.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn schedule_idle_stop(&self) {
+        if !matches!(*self.mode.lock().unwrap(), MicrophoneMode::OnDemand) {
+            return;
+        }
+
+        let generation = self.idle_stop_generation.fetch_add(1, Ordering::Relaxed) + 1;
+        let manager = self.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(ON_DEMAND_IDLE_KEEPALIVE).await;
+
+            if manager.idle_stop_generation.load(Ordering::Relaxed) != generation {
+                return;
+            }
+
+            if manager.is_recording() {
+                return;
+            }
+
+            if matches!(*manager.mode.lock().unwrap(), MicrophoneMode::OnDemand) {
+                manager.stop_microphone_stream();
+            }
+        });
+    }
+
     /* ---------- mode switching --------------------------------------------- */
 
     pub fn update_mode(&self, new_mode: MicrophoneMode) -> Result<(), anyhow::Error> {
@@ -338,6 +385,7 @@ impl AudioRecordingManager {
         let mut state = self.state.lock().unwrap();
 
         if let RecordingState::Idle = *state {
+            self.cancel_idle_stop_timer();
             // Ensure microphone is open in on-demand mode
             if matches!(*self.mode.lock().unwrap(), MicrophoneMode::OnDemand) {
                 if let Err(e) = self.start_microphone_stream() {
@@ -397,10 +445,9 @@ impl AudioRecordingManager {
 
                 *self.is_recording.lock().unwrap() = false;
 
-                // In on-demand mode turn the mic off again
-                if matches!(*self.mode.lock().unwrap(), MicrophoneMode::OnDemand) {
-                    self.stop_microphone_stream();
-                }
+                // In on-demand mode keep mic warm briefly to avoid startup lag
+                // for the next utterance.
+                self.schedule_idle_stop();
 
                 // Pad if very short
                 let s_len = samples.len();
@@ -483,10 +530,9 @@ impl AudioRecordingManager {
 
             *self.is_recording.lock().unwrap() = false;
 
-            // In on-demand mode turn the mic off again
-            if matches!(*self.mode.lock().unwrap(), MicrophoneMode::OnDemand) {
-                self.stop_microphone_stream();
-            }
+            // In on-demand mode keep mic warm briefly to avoid startup lag
+            // for the next utterance.
+            self.schedule_idle_stop();
         }
     }
 }
