@@ -1,10 +1,8 @@
 import React from "react";
 import { useTranslation } from "react-i18next";
 import {
-  Cog,
   FlaskConical,
   History,
-  Info,
   Cpu,
   AudioLines,
   KeyRound,
@@ -12,10 +10,8 @@ import {
 import { useSettings } from "../hooks/useSettings";
 import {
   GeneralSettings,
-  AdvancedSettings,
   HistorySettings,
   DebugSettings,
-  AboutSettings,
   ModelsSettings,
   ApiKeysSettings,
 } from "./settings";
@@ -56,12 +52,6 @@ export const SECTIONS_CONFIG = {
     component: ApiKeysSettings,
     enabled: () => true,
   },
-  advanced: {
-    labelKey: "sidebar.advanced",
-    icon: Cog,
-    component: AdvancedSettings,
-    enabled: () => true,
-  },
   history: {
     labelKey: "sidebar.history",
     icon: History,
@@ -73,12 +63,6 @@ export const SECTIONS_CONFIG = {
     icon: FlaskConical,
     component: DebugSettings,
     enabled: (settings) => settings?.debug_mode ?? false,
-  },
-  about: {
-    labelKey: "sidebar.about",
-    icon: Info,
-    component: AboutSettings,
-    enabled: () => true,
   },
 } as const satisfies Record<string, SectionConfig>;
 
