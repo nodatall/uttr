@@ -33,6 +33,10 @@ pub fn is_cloud_model_id(model_id: &str) -> bool {
     model_id.starts_with("groq-")
 }
 
+fn is_user_visible_model_id(model_id: &str) -> bool {
+    is_cloud_model_id(model_id) || model_id == DEFAULT_LOCAL_MODEL_ID
+}
+
 pub fn groq_api_model_name(model_id: &str) -> Option<&'static str> {
     match model_id {
         GROQ_MODEL_WHISPER_LARGE_V3_TURBO => Some("whisper-large-v3-turbo"),
@@ -509,7 +513,11 @@ impl ModelManager {
 
     pub fn get_available_models(&self) -> Vec<ModelInfo> {
         let models = self.available_models.lock().unwrap();
-        models.values().cloned().collect()
+        models
+            .values()
+            .filter(|model| is_user_visible_model_id(&model.id))
+            .cloned()
+            .collect()
     }
 
     pub fn get_model_info(&self, model_id: &str) -> Option<ModelInfo> {
@@ -611,11 +619,12 @@ impl ModelManager {
         if !settings.selected_model.is_empty() {
             let models = self.available_models.lock().unwrap();
             let exists = models.contains_key(&settings.selected_model);
+            let is_visible = is_user_visible_model_id(&settings.selected_model);
             drop(models);
 
-            if !exists {
+            if !exists || !is_visible {
                 info!(
-                    "Selected model '{}' not found in available models, clearing selection",
+                    "Selected model '{}' is no longer available in the user-visible model list, clearing selection",
                     settings.selected_model
                 );
                 settings.selected_model = String::new();

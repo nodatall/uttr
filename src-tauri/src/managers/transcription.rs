@@ -58,6 +58,7 @@ const CHUNK_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const CHUNK_WARMUP_DURATION: Duration = Duration::from_secs(10);
 const STOP_IN_FLIGHT_WAIT: Duration = Duration::from_secs(4);
 const MAX_TOKEN_OVERLAP: usize = 25;
+const MODEL_LOADING_WAIT_TIMEOUT: Duration = Duration::from_secs(12);
 
 struct IncrementalRuntime {
     stop_requested: AtomicBool,
@@ -562,9 +563,19 @@ impl TranscriptionManager {
     }
 
     fn wait_for_loading_if_needed(&self) {
+        let wait_started = Instant::now();
         let mut is_loading = self.is_loading.lock().unwrap();
         while *is_loading {
             if self.cancel_requested.load(Ordering::Relaxed) {
+                break;
+            }
+            if wait_started.elapsed() >= MODEL_LOADING_WAIT_TIMEOUT {
+                warn!(
+                    "Timed out waiting {}s for model loading; clearing loading flag to avoid deadlock",
+                    MODEL_LOADING_WAIT_TIMEOUT.as_secs()
+                );
+                *is_loading = false;
+                self.loading_condvar.notify_all();
                 break;
             }
             let (guard, _) = self
@@ -654,8 +665,6 @@ impl TranscriptionManager {
         if audio.is_empty() {
             return Ok(String::new());
         }
-
-        self.wait_for_loading_if_needed();
 
         let selected_model_id = if settings.selected_model.is_empty() {
             None
@@ -993,15 +1002,50 @@ impl TranscriptionManager {
         }
 
         *is_loading = true;
+        let is_loading_flag = Arc::clone(&self.is_loading);
+        let loading_condvar = Arc::clone(&self.loading_condvar);
         let self_clone = self.clone();
         thread::spawn(move || {
-            let settings = get_settings(&self_clone.app_handle);
-            if let Err(e) = self_clone.load_model(&settings.selected_model) {
-                error!("Failed to load model: {}", e);
+            struct LoadingStateGuard {
+                is_loading: Arc<Mutex<bool>>,
+                loading_condvar: Arc<Condvar>,
             }
-            let mut is_loading = self_clone.is_loading.lock().unwrap();
-            *is_loading = false;
-            self_clone.loading_condvar.notify_all();
+
+            impl Drop for LoadingStateGuard {
+                fn drop(&mut self) {
+                    let mut is_loading = self.is_loading.lock().unwrap();
+                    *is_loading = false;
+                    self.loading_condvar.notify_all();
+                }
+            }
+
+            let _loading_guard = LoadingStateGuard {
+                is_loading: is_loading_flag,
+                loading_condvar,
+            };
+
+            let settings = get_settings(&self_clone.app_handle);
+            let model_id = settings.selected_model.clone();
+            let load_result =
+                catch_unwind(AssertUnwindSafe(|| self_clone.load_model(&model_id)));
+
+            match load_result {
+                Ok(Ok(())) => {}
+                Ok(Err(e)) => error!("Failed to load model '{}': {}", model_id, e),
+                Err(panic_payload) => {
+                    let panic_msg = if let Some(s) = panic_payload.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = panic_payload.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "unknown panic".to_string()
+                    };
+                    error!(
+                        "Model loading panicked for '{}': {}",
+                        model_id, panic_msg
+                    );
+                }
+            }
         });
     }
 
@@ -1438,6 +1482,13 @@ impl TranscriptionManager {
 
 impl Drop for TranscriptionManager {
     fn drop(&mut self) {
+        // This manager is cheaply cloned for worker threads. Only the last live
+        // instance should perform global shutdown of shared background state.
+        if Arc::strong_count(&self.shutdown_signal) > 1 {
+            debug!("Skipping TranscriptionManager shutdown for non-final clone drop");
+            return;
+        }
+
         debug!("Shutting down TranscriptionManager");
 
         self.cancel_incremental_session();
@@ -1459,6 +1510,51 @@ impl Drop for TranscriptionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    fn app_support_dir() -> PathBuf {
+        PathBuf::from(
+            std::env::var("HOME").expect("HOME must be set for local transcription tests"),
+        )
+        .join("Library/Application Support/com.pais.uttr")
+    }
+
+    fn newest_recording_path(recordings_dir: &Path) -> Option<PathBuf> {
+        let mut recordings: Vec<_> = fs::read_dir(recordings_dir)
+            .ok()?
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.path())
+            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("wav"))
+            .collect();
+        recordings.sort_by_key(|path| {
+            fs::metadata(path)
+                .and_then(|meta| meta.modified())
+                .ok()
+                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
+        });
+        recordings.pop()
+    }
+
+    fn load_wav_samples(path: &Path) -> Vec<f32> {
+        let mut reader = hound::WavReader::open(path).expect("failed to open wav recording");
+        let spec = reader.spec();
+        match spec.sample_format {
+            hound::SampleFormat::Float => reader
+                .samples::<f32>()
+                .map(|sample| sample.expect("invalid float sample"))
+                .collect(),
+            hound::SampleFormat::Int => {
+                let max_value = (1_i64 << (spec.bits_per_sample.saturating_sub(1) as u32)) as f32;
+                reader
+                    .samples::<i32>()
+                    .map(|sample| sample.expect("invalid int sample") as f32 / max_value)
+                    .collect()
+            }
+        }
+    }
 
     fn model(id: &str, is_downloaded: bool, is_recommended: bool) -> ModelInfo {
         ModelInfo {
@@ -1561,5 +1657,57 @@ mod tests {
         let mut assembled = "alpha beta".to_string();
         append_stitched_text(&mut assembled, "gamma delta");
         assert_eq!(assembled, "alpha beta gamma delta");
+    }
+
+    #[test]
+    #[ignore = "Uses locally downloaded models and recordings to reproduce transcription hangs"]
+    fn parakeet_transcribes_latest_local_recording_within_timeout() {
+        let app_dir = app_support_dir();
+        let model_dir = app_dir.join("models/parakeet-tdt-0.6b-v3-int8");
+        assert!(
+            model_dir.exists(),
+            "expected parakeet model at {}",
+            model_dir.display()
+        );
+
+        let recordings_dir = app_dir.join("recordings");
+        let recording_path = newest_recording_path(&recordings_dir)
+            .expect("expected at least one local recording to reproduce against");
+        let samples = load_wav_samples(&recording_path);
+        assert!(
+            !samples.is_empty(),
+            "latest recording {} contained no samples",
+            recording_path.display()
+        );
+
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let mut engine = ParakeetEngine::new();
+            let result = engine
+                .load_model_with_params(&model_dir, ParakeetModelParams::int8())
+                .and_then(|_| {
+                    engine.transcribe_samples(
+                        samples,
+                        Some(ParakeetInferenceParams {
+                            timestamp_granularity: TimestampGranularity::Segment,
+                            ..Default::default()
+                        }),
+                    )
+                })
+                .map(|result| result.text)
+                .map_err(|err| err.to_string());
+            let _ = tx.send(result);
+        });
+
+        let transcription = rx
+            .recv_timeout(Duration::from_secs(20))
+            .expect("parakeet transcription timed out");
+
+        let text = transcription.expect("parakeet transcription failed");
+        assert!(
+            !text.trim().is_empty(),
+            "parakeet transcription returned empty text for {}",
+            recording_path.display()
+        );
     }
 }

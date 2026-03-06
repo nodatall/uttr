@@ -19,7 +19,10 @@ use ferrous_opencc::{config::BuiltinConfig, OpenCC};
 use log::{debug, error, warn};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use tauri::Emitter;
@@ -35,6 +38,24 @@ impl Drop for FinishGuard {
         if let Some(c) = self.0.try_state::<TranscriptionCoordinator>() {
             c.notify_processing_finished();
         }
+    }
+}
+
+/// Drop guard that always restores overlay/tray UI state when the
+/// transcription task exits (success, error, or panic unwind).
+struct UiResetGuard(AppHandle);
+impl Drop for UiResetGuard {
+    fn drop(&mut self) {
+        utils::hide_recording_overlay(&self.0);
+        change_tray_icon(&self.0, TrayIconState::Idle);
+    }
+}
+
+/// Marks async task completion for the watchdog.
+struct CompletionGuard(Arc<AtomicBool>);
+impl Drop for CompletionGuard {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
     }
 }
 
@@ -56,7 +77,8 @@ const GROQ_MODEL_PREFERENCES: &[&str] = &[
     "llama-3.1-8b-instant",
     "mixtral-8x7b-32768",
 ];
-const FULL_PASS_TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(45);
+const FULL_PASS_TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(20);
+const POST_PROCESS_TIMEOUT: Duration = Duration::from_secs(12);
 const SHORT_UTTERANCE_SAMPLES: usize = 16_000 * 10;
 
 static AUTO_SELECTED_MODEL_CACHE: Lazy<Mutex<HashMap<String, String>>> =
@@ -444,9 +466,14 @@ impl ShortcutAction for TranscribeAction {
         // When post-processing is enabled in settings, apply it automatically for normal
         // transcription. The dedicated post-process hotkey still forces it on.
         let post_process = self.post_process || settings.post_process_enabled;
+        let task_completed = Arc::new(AtomicBool::new(false));
+        let task_completed_for_worker = Arc::clone(&task_completed);
+        let tm_for_worker = tm.clone();
 
-        tauri::async_runtime::spawn(async move {
+        let transcription_task = tauri::async_runtime::spawn(async move {
             let _guard = FinishGuard(ah.clone());
+            let _completion_guard = CompletionGuard(task_completed_for_worker);
+            let _ui_guard = UiResetGuard(ah.clone());
             let binding_id = binding_id.clone(); // Clone for the inner async task
             debug!(
                 "Starting async transcription task for binding: {}",
@@ -485,17 +512,18 @@ impl ShortcutAction for TranscribeAction {
                 let transcription_result = if samples.len() < SHORT_UTTERANCE_SAMPLES {
                     // Short utterance fast path: run direct transcription with no chunking/fallback
                     // orchestration so <10s clips match pre-chunk latency.
+                    // Keep timeout protection so UI cannot get stuck indefinitely.
                     debug!(
                         "Using short-utterance fast path ({} samples)",
                         samples.len()
                     );
-                    tm.transcribe(samples).await
+                    transcribe_full_pass_with_timeout(&tm_for_worker, samples).await
                 } else {
-                    transcribe_full_pass_with_timeout(&tm, samples).await
+                    transcribe_full_pass_with_timeout(&tm_for_worker, samples).await
                 };
                 match transcription_result {
                     Ok(transcription) => {
-                        if tm.is_cancel_requested() {
+                        if tm_for_worker.is_cancel_requested() {
                             debug!("Transcription was cancelled before output handling");
                             utils::hide_recording_overlay(&ah);
                             change_tray_icon(&ah, TrayIconState::Idle);
@@ -525,7 +553,21 @@ impl ShortcutAction for TranscribeAction {
                                 show_processing_overlay(&ah);
                             }
                             let processed = if post_process {
-                                post_process_transcription(&settings, &final_text).await
+                                match timeout(
+                                    POST_PROCESS_TIMEOUT,
+                                    post_process_transcription(&settings, &final_text),
+                                )
+                                .await
+                                {
+                                    Ok(result) => result,
+                                    Err(_) => {
+                                        warn!(
+                                            "Post-processing timed out after {}s; continuing with base transcription",
+                                            POST_PROCESS_TIMEOUT.as_secs()
+                                        );
+                                        None
+                                    }
+                                }
                             } else {
                                 None
                             };
@@ -622,7 +664,7 @@ impl ShortcutAction for TranscribeAction {
                         }
                     }
                     Err(err) => {
-                        if tm.is_cancel_requested() {
+                        if tm_for_worker.is_cancel_requested() {
                             debug!("Transcription task cancelled");
                             utils::hide_recording_overlay(&ah);
                             change_tray_icon(&ah, TrayIconState::Idle);
@@ -640,6 +682,29 @@ impl ShortcutAction for TranscribeAction {
                 change_tray_icon(&ah, TrayIconState::Idle);
             }
         });
+
+        {
+            let app_for_watchdog = app.clone();
+            let tm_for_watchdog = tm.clone();
+            let task_completed = Arc::clone(&task_completed);
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(12)).await;
+                if task_completed.load(Ordering::Relaxed) {
+                    return;
+                }
+
+                warn!(
+                    "Transcription watchdog fired after 12s; forcing cancellation and coordinator reset"
+                );
+                tm_for_watchdog.request_cancel();
+                transcription_task.abort();
+                utils::cancel_current_operation(&app_for_watchdog);
+                let _ = app_for_watchdog.emit(
+                    "transcription-error",
+                    "Transcription timed out. Please try again.".to_string(),
+                );
+            });
+        }
 
         debug!(
             "TranscribeAction::stop completed in {:?}",

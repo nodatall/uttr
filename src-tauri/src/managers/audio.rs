@@ -303,27 +303,43 @@ impl AudioRecordingManager {
     }
 
     pub fn stop_microphone_stream(&self) {
-        let mut open_flag = self.is_open.lock().unwrap();
-        if !*open_flag {
-            return;
-        }
-
-        let mut did_mute_guard = self.did_mute.lock().unwrap();
-        if *did_mute_guard {
-            set_mute(false);
-        }
-        *did_mute_guard = false;
-
-        if let Some(rec) = self.recorder.lock().unwrap().as_mut() {
-            // If still recording, stop first.
-            if *self.is_recording.lock().unwrap() {
-                let _ = rec.stop();
-                *self.is_recording.lock().unwrap() = false;
+        {
+            let mut open_flag = self.is_open.lock().unwrap();
+            if !*open_flag {
+                return;
             }
-            let _ = rec.close();
+            *open_flag = false;
         }
 
-        *open_flag = false;
+        {
+            let mut did_mute_guard = self.did_mute.lock().unwrap();
+            if *did_mute_guard {
+                set_mute(false);
+            }
+            *did_mute_guard = false;
+        }
+
+        let was_recording = {
+            let mut guard = self.is_recording.lock().unwrap();
+            let was_recording = *guard;
+            *guard = false;
+            was_recording
+        };
+
+        let recorder = self.recorder.lock().unwrap().take();
+        debug!("Microphone stream stopping");
+
+        if let Some(mut rec) = recorder {
+            std::thread::spawn(move || {
+                if was_recording {
+                    let _ = rec.stop();
+                }
+                if let Err(err) = rec.close() {
+                    error!("Failed to close microphone stream: {err}");
+                }
+            });
+        }
+
         debug!("Microphone stream stopped");
     }
 
