@@ -32,6 +32,25 @@
   height: 100%;
 }
 
+.overlay-split {
+  position: relative;
+  padding: 0;
+  justify-content: center;
+}
+
+.overlay-spinner-pane {
+  position: absolute;
+  top: 0;
+  right: 10px;
+  bottom: 0;
+  width: 21px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2;
+}
+
 .siriwave-host {
   position: absolute;
   inset: 0;
@@ -47,8 +66,8 @@
   transition: opacity 120ms linear;
 }
 
-.siriwave-host.siriwave-hidden {
-  opacity: 0;
+.siriwave-host-processing canvas {
+  transform: translate(-24px, var(--siriwave-y-shift, 0px));
 }
 
 .siriwave-host canvas {
@@ -64,46 +83,29 @@
       drop-shadow(0 0 5px rgb(86 208 255 / 28%));
 }
 
-.transcribing-shimmer {
-  font-family: "JetBrains Mono", "Fira Code", "SFMono-Regular", monospace;
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  z-index: 2;
-  transform: translate(-50%, -50%);
-  pointer-events: none;
-  font-size: 14px;
-  font-weight: 400;
-  letter-spacing: 0.04em;
-  line-height: 1;
-  white-space: nowrap;
-  background: linear-gradient(
-    90deg,
-    rgb(233 229 219 / 36%) 0%,
-    rgb(245 242 235 / 72%) 38%,
-    rgb(255 252 246) 50%,
-    rgb(245 242 235 / 72%) 62%,
-    rgb(233 229 219 / 36%) 100%
-  );
-  background-size: 180% 100%;
-  background-repeat: no-repeat;
-  background-position: 0% 50%;
-  -webkit-background-clip: text;
-  background-clip: text;
-  -webkit-text-fill-color: transparent;
-  color: rgb(244 240 232 / 55%);
-  animation: transcribing-shimmer 2s linear infinite;
+.overlay-spinner {
+  width: 16px;
+  padding: 3px;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 92%);
+  --spinner-mask:
+    conic-gradient(#0000 10%, #000),
+    linear-gradient(#000 0 0) content-box;
+  -webkit-mask: var(--spinner-mask);
+  mask: var(--spinner-mask);
+  -webkit-mask-composite: source-out;
+  mask-composite: subtract;
+  box-shadow: 0 0 10px rgb(255 255 255 / 18%);
+  animation: overlay-spinner-rotate 1s infinite linear;
 }
 
 .recording-overlay.fade-in {
   opacity: 1;
 }
 
-@keyframes transcribing-shimmer {
-  0% {
-    background-position: 120% 50%;
-  }
-  100% {
-    background-position: -20% 50%;
+@keyframes overlay-spinner-rotate {
+  to {
+    transform: rotate(1turn);
   }
 }

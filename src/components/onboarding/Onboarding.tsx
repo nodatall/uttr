@@ -33,10 +33,19 @@ const Onboarding: React.FC<OnboardingProps> = ({ onModelSelected }) => {
   const storedGroqApiKey = settings?.post_process_api_keys?.groq ?? "";
   const [groqApiKeyDraft, setGroqApiKeyDraft] = useState(storedGroqApiKey);
   const isGroqApiKeyUpdating = isUpdating("post_process_api_key:groq");
+  const hasGroqApiKeyDraft = groqApiKeyDraft.trim().length > 0;
 
   const isDownloading = selectedModelId !== null;
-  const hasAnyDownloadedModel = models.some((model) => model.is_downloaded);
-  const canContinue = Boolean(currentModel) || hasAnyDownloadedModel;
+  const hasAnyLocalDownloadedModel = models.some(
+    (model) => model.is_downloaded && !isCloudModel(model.id),
+  );
+  const canContinue = Boolean(currentModel) || hasAnyLocalDownloadedModel;
+  const localModels = models.filter((model) => !isCloudModel(model.id));
+  const cloudModels = models.filter((model) => isCloudModel(model.id));
+  const featuredLocalModels = localModels.filter((model) => model.is_recommended);
+  const otherLocalModels = localModels
+    .filter((model) => !model.is_recommended)
+    .sort((a, b) => Number(a.size_mb) - Number(b.size_mb));
 
   useEffect(() => {
     setGroqApiKeyDraft(storedGroqApiKey);
@@ -74,9 +83,10 @@ const Onboarding: React.FC<OnboardingProps> = ({ onModelSelected }) => {
     onModelSelected,
   ]);
 
-  const handleDownloadModel = async (modelId: string) => {
+  const handleSelectModel = async (modelId: string) => {
     if (isCloudModel(modelId)) {
-      if (!storedGroqApiKey.trim()) {
+      const trimmedGroqApiKey = groqApiKeyDraft.trim();
+      if (!trimmedGroqApiKey) {
         toast.error(
           t("onboarding.groq.missingKey", {
             defaultValue:
@@ -85,6 +95,9 @@ const Onboarding: React.FC<OnboardingProps> = ({ onModelSelected }) => {
         );
         setSelectedModelId(null);
         return;
+      }
+      if (trimmedGroqApiKey !== storedGroqApiKey) {
+        await updatePostProcessApiKey("groq", trimmedGroqApiKey);
       }
       const success = await selectModel(modelId);
       if (success) {
@@ -100,6 +113,19 @@ const Onboarding: React.FC<OnboardingProps> = ({ onModelSelected }) => {
       return;
     }
 
+    const success = await selectModel(modelId);
+    if (success) {
+      onModelSelected();
+    } else {
+      toast.error(
+        t("onboarding.errors.selectModel", {
+          defaultValue: "Failed to select model.",
+        }),
+      );
+    }
+  };
+
+  const handleDownloadModel = async (modelId: string) => {
     setSelectedModelId(modelId);
 
     const success = await downloadModel(modelId);
@@ -123,7 +149,9 @@ const Onboarding: React.FC<OnboardingProps> = ({ onModelSelected }) => {
       return;
     }
 
-    const downloadedModel = models.find((model) => model.is_downloaded);
+    const downloadedModel = models.find(
+      (model) => model.is_downloaded && !isCloudModel(model.id),
+    );
     if (!downloadedModel) {
       toast.error(
         t("onboarding.continueMissingModel", {
@@ -147,8 +175,11 @@ const Onboarding: React.FC<OnboardingProps> = ({ onModelSelected }) => {
   };
 
   const getModelStatus = (modelId: string): ModelCardStatus => {
+    const model = models.find((entry) => entry.id === modelId);
+    if (modelId === currentModel) return "active";
     if (modelId in extractingModels) return "extracting";
     if (modelId in downloadingModels) return "downloading";
+    if (isCloudModel(modelId) || model?.is_downloaded) return "available";
     return "downloadable";
   };
 
@@ -201,42 +232,52 @@ const Onboarding: React.FC<OnboardingProps> = ({ onModelSelected }) => {
               />
             </div>
 
-            {models
-              .filter((m: ModelInfo) => !m.is_downloaded)
-              .filter((model: ModelInfo) => model.is_recommended)
-              .map((model: ModelInfo) => (
-                <ModelCard
-                  key={model.id}
-                  model={model}
-                  variant="featured"
-                  status={getModelStatus(model.id)}
-                  disabled={isDownloading}
-                  onSelect={handleDownloadModel}
-                  onDownload={handleDownloadModel}
-                  downloadProgress={getModelDownloadProgress(model.id)}
-                  downloadSpeed={getModelDownloadSpeed(model.id)}
-                />
-              ))}
+            {featuredLocalModels.map((model: ModelInfo) => (
+              <ModelCard
+                key={model.id}
+                model={model}
+                variant="featured"
+                status={getModelStatus(model.id)}
+                disabled={isDownloading}
+                onSelect={handleSelectModel}
+                onDownload={handleDownloadModel}
+                downloadProgress={getModelDownloadProgress(model.id)}
+                downloadSpeed={getModelDownloadSpeed(model.id)}
+              />
+            ))}
 
-            {models
-              .filter((m: ModelInfo) => !m.is_downloaded)
-              .filter((model: ModelInfo) => !model.is_recommended)
-              .sort(
-                (a: ModelInfo, b: ModelInfo) =>
-                  Number(a.size_mb) - Number(b.size_mb),
-              )
-              .map((model: ModelInfo) => (
-                <ModelCard
-                  key={model.id}
-                  model={model}
-                  status={getModelStatus(model.id)}
-                  disabled={isDownloading}
-                  onSelect={handleDownloadModel}
-                  onDownload={handleDownloadModel}
-                  downloadProgress={getModelDownloadProgress(model.id)}
-                  downloadSpeed={getModelDownloadSpeed(model.id)}
-                />
-              ))}
+            {otherLocalModels.map((model: ModelInfo) => (
+              <ModelCard
+                key={model.id}
+                model={model}
+                status={getModelStatus(model.id)}
+                disabled={isDownloading}
+                onSelect={handleSelectModel}
+                onDownload={handleDownloadModel}
+                downloadProgress={getModelDownloadProgress(model.id)}
+                downloadSpeed={getModelDownloadSpeed(model.id)}
+              />
+            ))}
+
+            {cloudModels.length > 0 && hasGroqApiKeyDraft && (
+              <div className="space-y-3 text-left">
+                <h2 className="text-sm font-semibold text-text">
+                  {t("settings.models.groq.cloudModelsTitle", {
+                    defaultValue: "Cloud models",
+                  })}
+                </h2>
+                {cloudModels.map((model: ModelInfo) => (
+                  <ModelCard
+                    key={model.id}
+                    model={model}
+                    status={getModelStatus(model.id)}
+                    disabled={isDownloading || isGroqApiKeyUpdating}
+                    onSelect={handleSelectModel}
+                    onDownload={handleDownloadModel}
+                  />
+                ))}
+              </div>
+            )}
 
             <div className="pt-2 flex justify-end">
               <Button
@@ -244,7 +285,7 @@ const Onboarding: React.FC<OnboardingProps> = ({ onModelSelected }) => {
                 onClick={() => {
                   void handleContinue();
                 }}
-                disabled={isGroqApiKeyUpdating}
+                disabled={!canContinue || isGroqApiKeyUpdating}
               >
                 {t("onboarding.continue", { defaultValue: "Continue" })}
               </Button>

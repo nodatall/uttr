@@ -2,6 +2,8 @@ import React from "react";
 import { useTranslation } from "react-i18next";
 import { ShowOverlay } from "../ShowOverlay";
 import { SettingsGroup } from "../../ui/SettingsGroup";
+import { SettingContainer } from "../../ui/SettingContainer";
+import { Button } from "../../ui/Button";
 import { StartHidden } from "../StartHidden";
 import { AutostartToggle } from "../AutostartToggle";
 import { ShowTrayIcon } from "../ShowTrayIcon";
@@ -14,6 +16,7 @@ import { PostProcessingSettingsApi } from "../PostProcessingSettingsApi";
 import { HistoryLimit } from "../HistoryLimit";
 import { RecordingRetentionPeriodSelector } from "../RecordingRetentionPeriod";
 import { useSettings } from "../../../hooks/useSettings";
+import { requestShowModelOnboarding } from "@/lib/events/onboarding";
 
 export const AdvancedSettings: React.FC = () => {
   const { t } = useTranslation();
@@ -27,6 +30,22 @@ export const AdvancedSettings: React.FC = () => {
         <AutostartToggle descriptionMode="tooltip" grouped={true} />
         <ShowTrayIcon descriptionMode="tooltip" grouped={true} />
         <ShowOverlay descriptionMode="tooltip" grouped={true} />
+        <SettingContainer
+          title={t("settings.advanced.onboarding.title", {
+            defaultValue: "Model onboarding",
+          })}
+          description={t("settings.advanced.onboarding.description", {
+            defaultValue:
+              "Open the model onboarding screen again to review or change the initial setup flow.",
+          })}
+          grouped={true}
+        >
+          <Button variant="secondary" onClick={requestShowModelOnboarding}>
+            {t("settings.advanced.onboarding.action", {
+              defaultValue: "Show onboarding",
+            })}
+          </Button>
+        </SettingContainer>
       </SettingsGroup>
 
       <SettingsGroup title={t("settings.advanced.groups.output")}>

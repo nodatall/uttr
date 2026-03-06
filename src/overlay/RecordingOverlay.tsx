@@ -47,19 +47,15 @@ const RecordingOverlay: React.FC = () => {
   const siriWaveRef = useRef<SiriWave | null>(null);
   const smoothedLevelsRef = useRef<number[]>(Array(16).fill(0));
   const isVisibleRef = useRef(true);
-  const stateRef = useRef<OverlayState>("recording");
   const lastHideAtRef = useRef(0);
+  const previousStateRef = useRef<OverlayState>("recording");
   const direction = getLanguageDirection(i18n.language);
-  const showWave = state === "recording";
-  const showTranscribingText = state === "transcribing" || state === "processing";
+  const isRecordingState = state === "recording";
+  const isProcessingState = state === "transcribing" || state === "processing";
 
   useEffect(() => {
     isVisibleRef.current = isVisible;
   }, [isVisible]);
-
-  useEffect(() => {
-    stateRef.current = state;
-  }, [state]);
 
   useEffect(() => {
     let isDisposed = false;
@@ -71,7 +67,6 @@ const RecordingOverlay: React.FC = () => {
         // Sync language from settings each time overlay is shown
         await syncLanguageFromSettings();
         const overlayState = event.payload as OverlayState;
-        stateRef.current = overlayState;
         isVisibleRef.current = true;
         setState(overlayState);
         setIsVisible(true);
@@ -95,7 +90,6 @@ const RecordingOverlay: React.FC = () => {
           if (Date.now() - lastHideAtRef.current < 450) {
             return;
           }
-          stateRef.current = "recording";
           isVisibleRef.current = true;
           setState("recording");
           setIsVisible(true);
@@ -217,7 +211,7 @@ const RecordingOverlay: React.FC = () => {
   }, [levels]);
 
   useEffect(() => {
-    if (!isVisible || !showWave) {
+    if (!isVisible) {
       return;
     }
 
@@ -226,10 +220,16 @@ const RecordingOverlay: React.FC = () => {
       return;
     }
 
-    if (!showWave) {
-      siriWave.setAmplitude(0);
-      siriWave.setSpeed(0.02);
+    if (isProcessingState) {
+      if (previousStateRef.current === "recording" && siriWave.run) {
+        siriWave.stop();
+      }
+      previousStateRef.current = state;
       return;
+    }
+
+    if (!siriWave.run) {
+      siriWave.start();
     }
 
     const amplitude = clamp(
@@ -248,23 +248,26 @@ const RecordingOverlay: React.FC = () => {
     );
     siriWave.setAmplitude(amplitude);
     siriWave.setSpeed(speed);
-  }, [isVisible, showWave, waveEnergy]);
+    previousStateRef.current = state;
+  }, [isVisible, isProcessingState, state, waveEnergy]);
 
   return (
     <div
       dir={direction}
       className={`recording-overlay ${isVisible ? "fade-in" : ""}`}
     >
-      <div className="overlay-middle overlay-middle-full">
+      <div
+        className={`overlay-middle ${isRecordingState ? "overlay-middle-full" : "overlay-split"}`}
+      >
         <div
           ref={waveContainerRef}
-          className={`siriwave-host ${showWave ? "" : "siriwave-hidden"}`}
+          className={`siriwave-host ${isProcessingState ? "siriwave-host-processing" : ""}`}
           role="presentation"
           aria-hidden
         />
-        {showTranscribingText && (
-          <div className="transcribing-shimmer" aria-live="polite">
-            Transcribing...
+        {isProcessingState && (
+          <div className="overlay-spinner-pane" aria-hidden>
+            <div className="overlay-spinner" />
           </div>
         )}
       </div>

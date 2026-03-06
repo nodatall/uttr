@@ -259,6 +259,11 @@
         "label": "Show Tray Icon",
         "description": "Display the Uttr icon in the system tray."
       },
+      "onboarding": {
+        "title": "Model onboarding",
+        "description": "Open the model onboarding screen again to review or change the initial setup flow.",
+        "action": "Show onboarding"
+      },
       "overlay": {
         "title": "Overlay Position",
         "description": "Display visual feedback overlay during recording and transcription. On Linux 'None' is recommended.",

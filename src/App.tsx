@@ -15,6 +15,7 @@ import { Sidebar, SidebarSection, SECTIONS_CONFIG } from "./components/Sidebar";
 import { useSettings } from "./hooks/useSettings";
 import { useSettingsStore } from "./stores/settingsStore";
 import { commands } from "@/bindings";
+import { SHOW_MODEL_ONBOARDING_EVENT } from "@/lib/events/onboarding";
 import { getLanguageDirection, initializeRTL } from "@/lib/utils/rtl";
 
 type OnboardingStep = "accessibility" | "model" | "done";
@@ -47,6 +48,24 @@ function App() {
 
   useEffect(() => {
     checkOnboardingStatus();
+  }, []);
+
+  useEffect(() => {
+    const handleShowModelOnboarding = () => {
+      setOnboardingStep("model");
+    };
+
+    window.addEventListener(
+      SHOW_MODEL_ONBOARDING_EVENT,
+      handleShowModelOnboarding,
+    );
+
+    return () => {
+      window.removeEventListener(
+        SHOW_MODEL_ONBOARDING_EVENT,
+        handleShowModelOnboarding,
+      );
+    };
   }, []);
 
   // Initialize RTL direction when language changes
