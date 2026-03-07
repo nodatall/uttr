@@ -1,5 +1,6 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { getVersion } from "@tauri-apps/api/app";
 import {
   FlaskConical,
   History,
@@ -15,6 +16,7 @@ import {
   ModelsSettings,
   ApiKeysSettings,
 } from "./settings";
+import UpdateChecker from "./update-checker";
 
 export type SidebarSection = keyof typeof SECTIONS_CONFIG;
 
@@ -77,6 +79,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   const { t } = useTranslation();
   const { settings } = useSettings();
+  const [version, setVersion] = useState("");
+
+  useEffect(() => {
+    const fetchVersion = async () => {
+      try {
+        setVersion(await getVersion());
+      } catch (error) {
+        console.error("Failed to get app version:", error);
+        setVersion("0.1.2");
+      }
+    };
+
+    void fetchVersion();
+  }, []);
 
   const availableSections = Object.entries(SECTIONS_CONFIG)
     .filter(([_, config]) => config.enabled(settings))
@@ -89,7 +105,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {t("sidebar.workspace", { defaultValue: "Uttr" })}
         </p>
       </div>
-      <div className="flex flex-col w-full gap-1.5 overflow-y-auto uttr-scrollbar">
+      <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto uttr-scrollbar">
         {availableSections.map((section) => {
           const Icon = section.icon;
           const isActive = activeSection === section.id;
@@ -124,6 +140,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
           );
         })}
+      </div>
+      <div className="mt-4 shrink-0 border-t border-white/6 px-2 pt-4">
+        <div className="flex flex-col gap-1.5 text-xs text-text/48">
+          <UpdateChecker className="min-w-0" />
+          {/* eslint-disable-next-line i18next/no-literal-string */}
+          <span className="text-text/28">v{version}</span>
+        </div>
       </div>
     </div>
   );
