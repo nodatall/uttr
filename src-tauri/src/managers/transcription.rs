@@ -105,6 +105,60 @@ fn looks_like_network_error(error_message: &str) -> bool {
     .any(|needle| lower.contains(needle))
 }
 
+fn normalized_silence_hallucination_text(text: &str) -> String {
+    text.chars()
+        .flat_map(|ch| ch.to_lowercase())
+        .map(|ch| if ch.is_alphanumeric() { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn audio_levels(audio: &[f32]) -> Option<(f32, f32)> {
+    if audio.is_empty() {
+        return None;
+    }
+
+    let mut sum_squares = 0.0f64;
+    let mut peak = 0.0f32;
+
+    for &sample in audio {
+        let abs = sample.abs();
+        peak = peak.max(abs);
+        sum_squares += f64::from(sample) * f64::from(sample);
+    }
+
+    let rms = (sum_squares / audio.len() as f64).sqrt() as f32;
+    Some((rms, peak))
+}
+
+fn is_effectively_silent(levels: (f32, f32)) -> bool {
+    const MAX_SILENT_RMS: f32 = 0.0035;
+    const MAX_SILENT_PEAK: f32 = 0.02;
+
+    levels.0 <= MAX_SILENT_RMS && levels.1 <= MAX_SILENT_PEAK
+}
+
+fn should_suppress_silence_hallucination(
+    levels: Option<(f32, f32)>,
+    transcription: &str,
+) -> bool {
+    const SILENCE_HALLUCINATIONS: &[&str] =
+        &["thank you", "thanks for watching", "thank you for watching"];
+
+    let normalized = normalized_silence_hallucination_text(transcription);
+    if !SILENCE_HALLUCINATIONS.contains(&normalized.as_str()) {
+        return false;
+    }
+
+    let Some(levels) = levels else {
+        return false;
+    };
+
+    is_effectively_silent(levels)
+}
+
 fn choose_local_fallback_model_id(
     available_models: Vec<ModelInfo>,
     preferred_local_model_id: Option<&str>,
@@ -1444,6 +1498,13 @@ impl TranscriptionManager {
             return Ok(String::new());
         }
 
+        let levels = audio_levels(&audio);
+        if levels.is_some_and(is_effectively_silent) {
+            info!("Skipping transcription for effectively silent audio");
+            self.maybe_unload_immediately("silent audio");
+            return Ok(String::new());
+        }
+
         if self.cancel_requested.load(Ordering::Relaxed) {
             return Err(anyhow::anyhow!("Transcription cancelled"));
         }
@@ -1452,7 +1513,14 @@ impl TranscriptionManager {
         let raw_transcription = self
             .transcribe_raw_with_settings(audio, &settings, true)
             .await?;
-        let filtered_result = self.apply_transcription_filters(raw_transcription, &settings);
+        let mut filtered_result = self.apply_transcription_filters(raw_transcription, &settings);
+        if should_suppress_silence_hallucination(levels, &filtered_result) {
+            info!(
+                "Suppressing likely silence hallucination for near-silent audio: {}",
+                filtered_result
+            );
+            filtered_result.clear();
+        }
 
         let et = std::time::Instant::now();
         let translation_note = if settings.translate_to_english {
@@ -1657,6 +1725,24 @@ mod tests {
         let mut assembled = "alpha beta".to_string();
         append_stitched_text(&mut assembled, "gamma delta");
         assert_eq!(assembled, "alpha beta gamma delta");
+    }
+
+    #[test]
+    fn silence_hallucination_detection_normalizes_punctuation_and_case() {
+        let quiet_levels = audio_levels(&[0.0, 0.0005, -0.0004, 0.0003, 0.0]);
+        assert!(should_suppress_silence_hallucination(
+            quiet_levels,
+            "Thank you!"
+        ));
+    }
+
+    #[test]
+    fn silence_hallucination_detection_does_not_suppress_real_speech_levels() {
+        let speech_levels = audio_levels(&[0.0, 0.08, -0.07, 0.06, -0.05, 0.04]);
+        assert!(!should_suppress_silence_hallucination(
+            speech_levels,
+            "thank you"
+        ));
     }
 
     #[test]
