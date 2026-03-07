@@ -192,7 +192,7 @@ function App() {
   return (
     <div
       dir={direction}
-      className="relative h-screen overflow-hidden select-none cursor-default bg-[linear-gradient(180deg,rgba(10,15,25,0.985),rgba(6,10,18,0.96))] text-text pt-4"
+      className="relative h-screen overflow-hidden select-none cursor-default bg-[linear-gradient(180deg,rgba(10,15,25,0.985),rgba(6,10,18,0.96))] text-text"
     >
       <Toaster
         theme="system"
@@ -206,14 +206,14 @@ function App() {
           },
         }}
       />
-        <div className="flex h-full flex-col overflow-hidden bg-[linear-gradient(180deg,rgba(10,15,25,0.985),rgba(6,10,18,0.96))] shadow-[inset_0_1px_0_rgba(255,255,255,0.025)] backdrop-blur-xl">
-          <div className="flex min-h-0 flex-1 gap-4 p-5 pt-4">
+        <div className="flex h-full flex-col overflow-hidden bg-[linear-gradient(180deg,rgba(10,15,25,0.985),rgba(6,10,18,0.96))] backdrop-blur-xl">
+          <div className="flex min-h-0 flex-1 gap-4 p-5 pt-1">
             <Sidebar
               activeSection={currentSection}
               onSectionChange={setCurrentSection}
             />
             <div className="min-w-0 flex-1 overflow-hidden rounded-[20px] border border-white/6 bg-[rgba(5,10,18,0.56)] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
-              <div className="flex h-full flex-col overflow-y-auto uttr-scrollbar">
+              <div className="flex h-full flex-col overflow-x-hidden overflow-y-auto uttr-scrollbar">
                 <div className="flex flex-col items-center gap-6 px-6 py-7">
                   <AccessibilityPermissions />
                   {renderSettingsContent(currentSection)}

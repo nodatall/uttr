@@ -21,9 +21,9 @@
         "minHeight": 760,
         "decorations": true,
         "resizable": true,
-        "titleBarStyle": "Overlay",
+        "titleBarStyle": "Transparent",
         "hiddenTitle": true,
-        "backgroundColor": "#0d1117",
+        "backgroundColor": "#0a0f19",
         "theme": "Dark",
         "maximizable": false,
         "visible": false

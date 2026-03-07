@@ -86,7 +86,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     <div className="flex h-full w-[214px] min-w-[214px] flex-col rounded-[18px] border border-white/6 bg-[rgba(4,9,15,0.45)] px-3 py-4">
       <div className="mb-4 px-2">
         <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-text/35">
-          {t("sidebar.workspace", { defaultValue: "Workspace" })}
+          {t("sidebar.workspace", { defaultValue: "Uttr" })}
         </p>
       </div>
       <div className="flex flex-col w-full gap-1.5 overflow-y-auto uttr-scrollbar">
