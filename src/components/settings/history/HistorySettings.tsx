@@ -25,7 +25,7 @@ const OpenRecordingsButton: React.FC<OpenRecordingsButtonProps> = ({
     onClick={onClick}
     variant="secondary"
     size="sm"
-    className="flex items-center gap-2"
+    className="flex items-center gap-2 rounded-full"
     title={label}
   >
     <FolderOpen className="w-4 h-4" />
@@ -137,11 +137,11 @@ export const HistorySettings: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="max-w-3xl w-full mx-auto space-y-6">
+      <div className="mx-auto w-full max-w-3xl space-y-5">
         <div className="space-y-2">
-          <div className="px-4 flex items-center justify-between">
+          <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-xs font-medium text-mid-gray uppercase tracking-wide">
+              <h2 className="text-[11px] font-medium uppercase tracking-[0.18em] text-text/34">
                 {t("settings.history.title")}
               </h2>
             </div>
@@ -150,8 +150,8 @@ export const HistorySettings: React.FC = () => {
               label={t("settings.history.openFolder")}
             />
           </div>
-          <div className="bg-background border border-mid-gray/20 rounded-lg overflow-visible">
-            <div className="px-4 py-3 text-center text-text/60">
+          <div className="overflow-visible rounded-[18px] border border-white/7 bg-white/[0.02]">
+            <div className="px-4 py-6 text-center text-text/50">
               {t("settings.history.loading")}
             </div>
           </div>
@@ -162,11 +162,11 @@ export const HistorySettings: React.FC = () => {
 
   if (historyEntries.length === 0) {
     return (
-      <div className="max-w-3xl w-full mx-auto space-y-6">
+      <div className="mx-auto w-full max-w-3xl space-y-5">
         <div className="space-y-2">
-          <div className="px-4 flex items-center justify-between">
+          <div className="flex items-center justify-between">
             <div>
-              <h2 className="text-xs font-medium text-mid-gray uppercase tracking-wide">
+              <h2 className="text-[11px] font-medium uppercase tracking-[0.18em] text-text/34">
                 {t("settings.history.title")}
               </h2>
             </div>
@@ -175,8 +175,8 @@ export const HistorySettings: React.FC = () => {
               label={t("settings.history.openFolder")}
             />
           </div>
-          <div className="bg-background border border-mid-gray/20 rounded-lg overflow-visible">
-            <div className="px-4 py-3 text-center text-text/60">
+          <div className="overflow-visible rounded-[18px] border border-white/7 bg-white/[0.02]">
+            <div className="px-4 py-6 text-center text-text/50">
               {t("settings.history.empty")}
             </div>
           </div>
@@ -186,21 +186,27 @@ export const HistorySettings: React.FC = () => {
   }
 
   return (
-    <div className="max-w-3xl w-full mx-auto space-y-6">
-      <div className="space-y-2">
-        <div className="px-4 flex items-center justify-between">
-          <div>
-            <h2 className="text-xs font-medium text-mid-gray uppercase tracking-wide">
-              {t("settings.history.title")}
-            </h2>
-          </div>
-          <OpenRecordingsButton
-            onClick={openRecordingsFolder}
-            label={t("settings.history.openFolder")}
-          />
+    <div className="mx-auto w-full max-w-3xl space-y-5">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className="space-y-2">
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-text/34">
+            {t("settings.history.eyebrow", { defaultValue: "Archive" })}
+          </p>
+          <h1 className="text-[28px] font-semibold tracking-tight text-text">
+            {t("settings.history.title")}
+          </h1>
+          <p className="text-sm text-text/50">
+            {t("settings.history.showingLatest", { count: MAX_VISIBLE_HISTORY })}
+          </p>
         </div>
-        <div className="bg-background border border-mid-gray/20 rounded-lg overflow-visible">
-          <div className="divide-y divide-mid-gray/20">
+        <OpenRecordingsButton
+          onClick={openRecordingsFolder}
+          label={t("settings.history.openFolder")}
+        />
+      </div>
+      <div className="space-y-2">
+        <div className="overflow-visible rounded-[18px] border border-white/7 bg-white/[0.02]">
+          <div className="divide-y divide-white/6">
             {visibleEntries.map((entry) => (
               <HistoryEntryComponent
                 key={entry.id}
@@ -213,9 +219,6 @@ export const HistorySettings: React.FC = () => {
             ))}
           </div>
         </div>
-        <p className="px-4 text-xs text-mid-gray">
-          {t("settings.history.showingLatest", { count: MAX_VISIBLE_HISTORY })}
-        </p>
       </div>
     </div>
   );
@@ -263,13 +266,28 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
   const formattedDate = formatDateTime(String(entry.timestamp), i18n.language);
 
   return (
-    <div className="px-4 py-2 pb-5 flex flex-col gap-3">
-      <div className="flex justify-between items-center">
-        <p className="text-sm font-medium">{formattedDate}</p>
-        <div className="flex items-center gap-1">
+    <div className="group flex flex-col gap-3 px-4 py-4">
+      <div className="flex items-start justify-between gap-4">
+        <div className="space-y-2">
+          <p className="text-sm font-medium text-text/86">{formattedDate}</p>
           <button
             onClick={handleCopyText}
-            className="text-text/50 hover:text-logo-primary  hover:border-logo-primary transition-colors cursor-pointer"
+            className="w-full cursor-copy text-left text-[15px] leading-7 text-text/74 transition-colors hover:text-text"
+            title={t("settings.history.copyToClipboard")}
+            style={{
+              display: "-webkit-box",
+              WebkitLineClamp: 3,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+            }}
+          >
+            {displayText}
+          </button>
+        </div>
+        <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
+          <button
+            onClick={handleCopyText}
+            className="rounded-lg p-2 text-text/42 transition-colors hover:bg-white/[0.04] hover:text-text"
             title={t("settings.history.copyToClipboard")}
           >
             {showCopied ? (
@@ -280,10 +298,10 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
           </button>
           <button
             onClick={onToggleSaved}
-            className={`p-2 rounded-md transition-colors cursor-pointer ${
+            className={`rounded-lg p-2 transition-colors cursor-pointer ${
               entry.saved
-                ? "text-logo-primary hover:text-logo-primary/80"
-                : "text-text/50 hover:text-logo-primary"
+                ? "text-logo-primary hover:bg-logo-primary/10"
+                : "text-text/42 hover:bg-white/[0.04] hover:text-text"
             }`}
             title={
               entry.saved
@@ -299,23 +317,17 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
           </button>
           <button
             onClick={handleDeleteEntry}
-            className="text-text/50 hover:text-logo-primary transition-colors cursor-pointer"
+            className="rounded-lg p-2 text-text/42 transition-colors cursor-pointer hover:bg-white/[0.04] hover:text-text"
             title={t("settings.history.delete")}
           >
             <Trash2 width={16} height={16} />
           </button>
         </div>
       </div>
-      <div className="italic text-text/90 text-sm pb-2 select-text cursor-text">
-        <button
-          onClick={handleCopyText}
-          className="text-left w-full cursor-copy hover:text-logo-primary transition-colors"
-          title={t("settings.history.copyToClipboard")}
-        >
-          {displayText}
-        </button>
-      </div>
-      <AudioPlayer onLoadRequest={handleLoadAudio} className="w-full" />
+      <AudioPlayer
+        onLoadRequest={handleLoadAudio}
+        className="w-full border-t border-white/6 pt-3"
+      />
     </div>
   );
 };

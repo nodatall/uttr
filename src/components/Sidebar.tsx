@@ -83,30 +83,45 @@ export const Sidebar: React.FC<SidebarProps> = ({
     .map(([id, config]) => ({ id: id as SidebarSection, ...config }));
 
   return (
-    <div className="flex flex-col w-[220px] min-w-[220px] h-full border-e border-mid-gray/20 bg-black/20 p-3">
+    <div className="flex h-full w-[214px] min-w-[214px] flex-col rounded-[18px] border border-white/6 bg-[rgba(4,9,15,0.45)] px-3 py-4">
+      <div className="mb-4 px-2">
+        <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-text/35">
+          {t("sidebar.workspace", { defaultValue: "Workspace" })}
+        </p>
+      </div>
       <div className="flex flex-col w-full gap-1.5 overflow-y-auto uttr-scrollbar">
         {availableSections.map((section) => {
           const Icon = section.icon;
           const isActive = activeSection === section.id;
 
           return (
-            <div
+            <button
+              type="button"
               key={section.id}
-              className={`flex gap-2.5 items-center p-2.5 w-full rounded-lg cursor-pointer transition-all border ${
+              className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-all ${
                 isActive
-                  ? "border-background-ui/40 bg-background-ui/15 text-text shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]"
-                  : "border-transparent hover:border-mid-gray/30 hover:bg-mid-gray/10 text-text/80"
+                  ? "bg-[linear-gradient(90deg,rgba(29,155,100,0.2),rgba(29,155,100,0.08))] text-text shadow-[inset_0_0_0_1px_rgba(103,215,163,0.32)]"
+                  : "text-text/72 hover:bg-white/[0.04] hover:text-text"
               }`}
               onClick={() => onSectionChange(section.id)}
             >
-              <Icon width={18} height={18} className="shrink-0" />
+              <span
+                className={`h-1.5 w-1.5 rounded-full transition-all ${
+                  isActive ? "bg-logo-primary shadow-[0_0_10px_rgba(103,215,163,0.55)]" : "bg-transparent"
+                }`}
+              />
+              <Icon
+                width={17}
+                height={17}
+                className={`shrink-0 ${isActive ? "text-logo-primary" : ""}`}
+              />
               <p
                 className="text-sm font-medium truncate"
                 title={t(section.labelKey)}
               >
                 {t(section.labelKey)}
               </p>
-            </div>
+            </button>
           );
         })}
       </div>

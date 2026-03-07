@@ -27,9 +27,9 @@ const ModelStatusButton: React.FC<ModelStatusButtonProps> = ({
   const getStatusColor = (status: ModelStatus): string => {
     switch (status) {
       case "ready":
-        return "bg-green-400";
+        return "bg-logo-primary";
       case "loading":
-        return "bg-yellow-400 animate-pulse";
+        return "bg-yellow-300 animate-pulse";
       case "downloading":
         return "bg-logo-primary animate-pulse";
       case "extracting":
@@ -48,11 +48,11 @@ const ModelStatusButton: React.FC<ModelStatusButtonProps> = ({
   return (
     <button
       onClick={onClick}
-      className={`flex items-center gap-2 hover:text-text/80 transition-colors ${className}`}
+      className={`flex items-center gap-2 rounded-full border border-white/8 bg-white/[0.03] px-3 py-1.5 text-text/68 hover:text-text transition-colors ${className}`}
       title={`Model status: ${displayText}`}
     >
-      <div className={`w-2 h-2 rounded-full ${getStatusColor(status)}`} />
-      <span className="max-w-28 truncate">{displayText}</span>
+      <div className={`h-2 w-2 rounded-full ${getStatusColor(status)}`} />
+      <span className="max-w-36 truncate">{displayText}</span>
       <svg
         className={`w-3 h-3 transition-transform ${isDropdownOpen ? "rotate-180" : ""}`}
         fill="none"

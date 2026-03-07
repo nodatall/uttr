@@ -42,6 +42,10 @@ export const ModelsSettings: React.FC = () => {
   const groqApiKey = settings?.post_process_api_keys?.groq ?? "";
   const isGroqApiKeyUpdating = isUpdating("post_process_api_key:groq");
   const hasGroqApiKey = groqApiKey.trim().length > 0;
+  const currentModelInfo = useMemo(
+    () => models.find((model: ModelInfo) => model.id === currentModel) ?? null,
+    [models, currentModel],
+  );
 
   // click outside handler for language dropdown
   useEffect(() => {
@@ -237,48 +241,61 @@ export const ModelsSettings: React.FC = () => {
   }
 
   return (
-    <div className="max-w-3xl w-full mx-auto space-y-4">
-      <div className="mb-4">
-        <h1 className="text-xl font-semibold mb-2">
-          {t("settings.models.title")}
-        </h1>
-        <p className="text-sm text-text/60">
-          {t("settings.models.description")}
-        </p>
+    <div className="mx-auto w-full max-w-3xl space-y-6">
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div className="space-y-2">
+          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-text/34">
+            {t("settings.models.eyebrow", { defaultValue: "Model library" })}
+          </p>
+          <h1 className="text-[28px] font-semibold tracking-tight text-text">
+            {t("settings.models.title")}
+          </h1>
+          <p className="max-w-2xl text-sm leading-relaxed text-text/52">
+            {t("settings.models.description")}
+          </p>
+        </div>
+        {currentModelInfo && (
+          <div className="rounded-full border border-white/8 bg-white/[0.03] px-3 py-2 text-sm text-text/62">
+            <span className="mr-2 text-text/40">
+              {t("modelSelector.active", { defaultValue: "Active" })}
+            </span>
+            <span className="font-medium text-text/88">{currentModelInfo.name}</span>
+          </div>
+        )}
       </div>
       {filteredLocalModels.length > 0 ? (
-        <div className="space-y-6">
-          {/* Downloaded Models Section — header always visible so filter stays accessible */}
+        <div className="space-y-7">
           <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-medium text-text/60">
-                {t("settings.models.yourModels")}
-              </h2>
-              {/* Language filter dropdown */}
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <h2 className="text-[11px] font-medium uppercase tracking-[0.18em] text-text/34">
+                  {t("settings.models.yourModels")}
+                </h2>
+              </div>
               <div className="relative" ref={languageDropdownRef}>
                 <button
                   type="button"
                   onClick={() => setLanguageDropdownOpen(!languageDropdownOpen)}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium rounded-lg transition-colors ${
+                  className={`flex items-center gap-2 rounded-full border px-3 py-2 text-sm transition-colors ${
                     languageFilter !== "all"
-                      ? "bg-logo-primary/20 text-logo-primary"
-                      : "bg-mid-gray/10 text-text/60 hover:bg-mid-gray/20"
+                      ? "border-logo-primary/18 bg-logo-primary/10 text-text"
+                      : "border-white/8 bg-white/[0.03] text-text/62 hover:bg-white/[0.05]"
                   }`}
                 >
-                  <Globe className="w-3.5 h-3.5" />
+                  <Globe className="h-3.5 w-3.5" />
                   <span className="max-w-[120px] truncate">
                     {selectedLanguageLabel}
                   </span>
                   <ChevronDown
-                    className={`w-3.5 h-3.5 transition-transform ${
+                    className={`h-3.5 w-3.5 transition-transform ${
                       languageDropdownOpen ? "rotate-180" : ""
                     }`}
                   />
                 </button>
 
                 {languageDropdownOpen && (
-                  <div className="absolute top-full right-0 mt-1 w-56 bg-background border border-mid-gray/80 rounded-lg shadow-lg z-50 overflow-hidden">
-                    <div className="p-2 border-b border-mid-gray/40">
+                  <div className="absolute top-full right-0 z-50 mt-2 w-56 overflow-hidden rounded-2xl border border-white/10 bg-[rgba(8,14,24,0.96)] shadow-[0_18px_40px_rgba(2,6,23,0.45)] backdrop-blur-xl">
+                    <div className="border-b border-white/7 p-2">
                       <input
                         ref={languageSearchInputRef}
                         type="text"
@@ -300,7 +317,7 @@ export const ModelsSettings: React.FC = () => {
                         placeholder={t(
                           "settings.general.language.searchPlaceholder",
                         )}
-                        className="w-full px-2 py-1 text-sm bg-mid-gray/10 border border-mid-gray/40 rounded-md focus:outline-none focus:ring-1 focus:ring-logo-primary"
+                        className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2 text-sm text-text/88 outline-none transition focus:border-logo-primary/35 focus:ring-1 focus:ring-logo-primary/30"
                       />
                     </div>
                     <div className="max-h-48 overflow-y-auto">
@@ -311,10 +328,10 @@ export const ModelsSettings: React.FC = () => {
                           setLanguageDropdownOpen(false);
                           setLanguageSearch("");
                         }}
-                        className={`w-full px-3 py-1.5 text-sm text-left transition-colors ${
+                        className={`w-full px-3 py-2 text-left text-sm transition-colors ${
                           languageFilter === "all"
-                            ? "bg-logo-primary/20 text-logo-primary font-semibold"
-                            : "hover:bg-mid-gray/10"
+                            ? "bg-logo-primary/10 font-semibold text-text"
+                            : "hover:bg-white/[0.05]"
                         }`}
                       >
                         {t("settings.models.filters.allLanguages")}
@@ -328,17 +345,17 @@ export const ModelsSettings: React.FC = () => {
                             setLanguageDropdownOpen(false);
                             setLanguageSearch("");
                           }}
-                          className={`w-full px-3 py-1.5 text-sm text-left transition-colors ${
+                          className={`w-full px-3 py-2 text-left text-sm transition-colors ${
                             languageFilter === lang.value
-                              ? "bg-logo-primary/20 text-logo-primary font-semibold"
-                              : "hover:bg-mid-gray/10"
+                              ? "bg-logo-primary/10 font-semibold text-text"
+                              : "hover:bg-white/[0.05]"
                           }`}
                         >
                           {lang.label}
                         </button>
                       ))}
                       {filteredLanguages.length === 0 && (
-                        <div className="px-3 py-2 text-sm text-text/50 text-center">
+                        <div className="px-3 py-3 text-center text-sm text-text/46">
                           {t("settings.general.language.noResults")}
                         </div>
                       )}
@@ -365,19 +382,21 @@ export const ModelsSettings: React.FC = () => {
 
           {cloudModels.length > 0 && (
             <div className="space-y-3">
-              <h2 className="text-sm font-medium text-text/60">
-                {t("settings.models.groq.cloudModelsTitle", {
-                  defaultValue: "Cloud Models",
-                })}
-              </h2>
-              {!hasGroqApiKey && (
-                <p className="text-xs text-text/50">
-                  {t("settings.models.groq.enableHint", {
-                    defaultValue:
-                      "Add a Groq API key in API Keys to enable selection.",
+              <div className="flex items-center justify-between gap-4">
+                <h2 className="text-[11px] font-medium uppercase tracking-[0.18em] text-text/34">
+                  {t("settings.models.groq.cloudModelsTitle", {
+                    defaultValue: "Cloud Models",
                   })}
-                </p>
-              )}
+                </h2>
+                {!hasGroqApiKey && (
+                  <div className="rounded-full border border-white/8 bg-white/[0.03] px-3 py-1.5 text-xs text-text/50">
+                    {t("settings.models.groq.enableHint", {
+                      defaultValue:
+                        "Add a Groq API key in API Keys to enable selection.",
+                    })}
+                  </div>
+                )}
+              </div>
               {cloudModels.map((model: ModelInfo) => (
                 <ModelCard
                   key={model.id}
@@ -396,10 +415,9 @@ export const ModelsSettings: React.FC = () => {
             </div>
           )}
 
-          {/* Available Models Section */}
           {availableModels.length > 0 && (
             <div className="space-y-3">
-              <h2 className="text-sm font-medium text-text/60">
+              <h2 className="text-[11px] font-medium uppercase tracking-[0.18em] text-text/34">
                 {t("settings.models.availableModels")}
               </h2>
               {availableModels.map((model: ModelInfo) => (
@@ -420,7 +438,7 @@ export const ModelsSettings: React.FC = () => {
           )}
         </div>
       ) : (
-        <div className="text-center py-8 text-text/50">
+        <div className="rounded-[18px] border border-white/7 bg-white/[0.02] px-4 py-8 text-center text-text/46">
           {t("settings.models.noModelsMatch")}
         </div>
       )}

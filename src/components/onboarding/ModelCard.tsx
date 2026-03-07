@@ -82,23 +82,40 @@ const ModelCard: React.FC<ModelCardProps> = ({
   const displayName = getTranslatedModelName(model, t);
   const displayDescription = getTranslatedModelDescription(model, t);
 
+  const traitLabels = [
+    model.speed_score >= 0.78
+      ? t("settings.models.traits.lowLatency", { defaultValue: "Low latency" })
+      : null,
+    model.accuracy_score >= 0.82
+      ? t("settings.models.traits.highAccuracy", {
+          defaultValue: "High accuracy",
+        })
+      : null,
+  ].filter(Boolean) as string[];
+
+  if (traitLabels.length === 0 && (model.speed_score > 0 || model.accuracy_score > 0)) {
+    traitLabels.push(
+      t("settings.models.traits.balanced", { defaultValue: "Balanced" }),
+    );
+  }
+
   const baseClasses =
-    "flex flex-col rounded-xl px-4 py-3 gap-2 text-left transition-all duration-200";
+    "flex flex-col gap-3 rounded-[18px] border px-4 py-4 text-left transition-all duration-200";
 
   const getVariantClasses = () => {
     if (status === "active") {
-      return "border-2 border-logo-primary/50 bg-logo-primary/10";
+      return "border-logo-primary/34 bg-[linear-gradient(180deg,rgba(103,215,163,0.11),rgba(103,215,163,0.04))] shadow-[0_12px_28px_rgba(16,185,129,0.08)]";
     }
     if (isFeatured) {
-      return "border-2 border-logo-primary/25 bg-logo-primary/5";
+      return "border-logo-primary/20 bg-logo-primary/4";
     }
-    return "border-2 border-mid-gray/20";
+    return "border-white/7 bg-white/[0.025]";
   };
 
   const getInteractiveClasses = () => {
     if (!isClickable) return "";
     if (disabled) return "opacity-50 cursor-not-allowed";
-    return "cursor-pointer hover:border-logo-primary/50 hover:bg-logo-primary/5 hover:shadow-lg hover:scale-[1.01] active:scale-[0.99] group";
+    return "group cursor-pointer hover:-translate-y-0.5 hover:border-white/14 hover:bg-white/[0.045] hover:shadow-[0_14px_32px_rgba(2,6,23,0.24)] active:translate-y-0";
   };
 
   const handleClick = () => {
@@ -132,12 +149,11 @@ const ModelCard: React.FC<ModelCardProps> = ({
         .filter(Boolean)
         .join(" ")}
     >
-      {/* Top section: name/description + score bars */}
-      <div className="flex justify-between items-center w-full">
+      <div className="flex w-full items-start justify-between gap-4">
         <div className="flex flex-col items-start flex-1 min-w-0">
-          <div className="flex items-center gap-3 flex-wrap">
+          <div className="flex flex-wrap items-center gap-2.5">
             <h3
-              className={`text-base font-semibold text-text ${isClickable ? "group-hover:text-logo-primary" : ""} transition-colors`}
+              className={`text-[17px] font-semibold tracking-tight text-text ${isClickable ? "group-hover:text-white" : ""} transition-colors`}
             >
               {displayName}
             </h3>
@@ -166,47 +182,30 @@ const ModelCard: React.FC<ModelCardProps> = ({
               </Badge>
             )}
           </div>
-          <p className="text-text/60 text-sm leading-relaxed">
+          <p className="mt-1 text-sm leading-relaxed text-text/56">
             {displayDescription}
           </p>
         </div>
-        {(model.accuracy_score > 0 || model.speed_score > 0) && (
-          <div className="hidden sm:flex items-center ml-4">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <p className="text-xs text-text/60 w-14 text-right">
-                  {t("onboarding.modelCard.accuracy")}
-                </p>
-                <div className="w-16 h-1.5 bg-mid-gray/20 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-logo-primary rounded-full"
-                    style={{ width: `${model.accuracy_score * 100}%` }}
-                  />
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <p className="text-xs text-text/60 w-14 text-right">
-                  {t("onboarding.modelCard.speed")}
-                </p>
-                <div className="w-16 h-1.5 bg-mid-gray/20 rounded-full overflow-hidden">
-                  <div
-                    className="h-full bg-logo-primary rounded-full"
-                    style={{ width: `${model.speed_score * 100}%` }}
-                  />
-                </div>
-              </div>
-            </div>
+        {traitLabels.length > 0 && (
+          <div className="hidden shrink-0 gap-2 sm:flex">
+            {traitLabels.map((label) => (
+              <span
+                key={label}
+                className="rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-text/56"
+              >
+                {label}
+              </span>
+            ))}
           </div>
         )}
       </div>
 
-      <hr className="w-full border-mid-gray/20" />
+      <div className="h-px w-full bg-white/7" />
 
-      {/* Bottom row: tags + action buttons (full width) */}
-      <div className="flex items-center gap-3 w-full -mb-0.5 mt-0.5 h-5">
+      <div className="flex min-h-5 w-full flex-wrap items-center gap-3 text-xs text-text/48">
         {model.supported_languages.length > 0 && (
           <div
-            className="flex items-center gap-1 text-xs text-text/50"
+            className="flex items-center gap-1"
             title={
               model.supported_languages.length === 1
                 ? t("modelSelector.capabilities.singleLanguage")
@@ -219,7 +218,7 @@ const ModelCard: React.FC<ModelCardProps> = ({
         )}
         {model.supports_translation && (
           <div
-            className="flex items-center gap-1 text-xs text-text/50"
+            className="flex items-center gap-1"
             title={t("modelSelector.capabilities.translation")}
           >
             <Languages className="w-3.5 h-3.5" />
@@ -227,7 +226,7 @@ const ModelCard: React.FC<ModelCardProps> = ({
           </div>
         )}
         {status === "downloadable" && !isCloudModel(model) && (
-          <span className="flex items-center gap-1.5 ml-auto text-xs text-text/50">
+          <span className="ml-auto flex items-center gap-1.5">
             <Download className="w-3.5 h-3.5" />
             <span>{formatModelSize(Number(model.size_mb))}</span>
           </span>
@@ -240,7 +239,7 @@ const ModelCard: React.FC<ModelCardProps> = ({
               size="sm"
               onClick={handleDelete}
               title={t("modelSelector.deleteModel", { modelName: displayName })}
-              className="flex items-center gap-1.5 ml-auto text-logo-primary/85 hover:text-logo-primary hover:bg-logo-primary/10"
+              className="ml-auto flex items-center gap-1.5 text-text/56 hover:text-text"
             >
               <Trash2 className="w-3.5 h-3.5" />
               <span>{t("common.delete")}</span>
