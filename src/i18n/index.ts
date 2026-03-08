@@ -56,9 +56,19 @@ const getSupportedLanguage = (
   langCode: string | null | undefined,
 ): SupportedLanguageCode | null => {
   if (!langCode) return null;
-  const code = langCode.split("-")[0].toLowerCase();
-  const supported = SUPPORTED_LANGUAGES.find((lang) => lang.code === code);
-  return supported ? supported.code : null;
+  const normalizedCode = langCode.toLowerCase();
+  const exactMatch = SUPPORTED_LANGUAGES.find(
+    (lang) => lang.code.toLowerCase() === normalizedCode,
+  );
+  if (exactMatch) {
+    return exactMatch.code;
+  }
+
+  const baseCode = langCode.split("-")[0].toLowerCase();
+  const baseMatch = SUPPORTED_LANGUAGES.find(
+    (lang) => lang.code.toLowerCase() === baseCode,
+  );
+  return baseMatch ? baseMatch.code : null;
 };
 
 // Initialize i18n with English as default

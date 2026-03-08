@@ -180,6 +180,7 @@
       }
     },
     "models": {
+      "eyebrow": "Model library",
       "title": "Transcription Models",
       "description": "Select a transcription model or download additional models. Different models offer varying levels of accuracy and speed.",
       "yourModels": "Downloaded Models",
@@ -203,13 +204,16 @@
       }
     },
     "apiKeys": {
+      "eyebrow": "Cloud access",
       "title": "API Keys",
       "description": "Manage API keys for cloud providers used by transcription and post-processing.",
+      "provider": "Provider",
       "groq": {
         "title": "Groq Cloud",
         "description": "Required for Groq cloud transcription models. This key is shared with Post Process provider settings.",
         "placeholder": "gsk_..."
-      }
+      },
+      "autosave": "Saved automatically when you leave the field."
     },
     "sound": {
       "title": "Sound",
@@ -398,6 +402,7 @@
       }
     },
     "history": {
+      "eyebrow": "Archive",
       "title": "History",
       "openFolder": "Open Recordings Folder",
       "loading": "Loading history...",
@@ -545,7 +550,9 @@
     "off": "Off",
     "yes": "Yes",
     "no": "No",
-    "noOptionsFound": "No options found"
+    "noOptionsFound": "No options found",
+    "connected": "Connected",
+    "notConfigured": "Missing key"
   },
   "accessibility": {
     "permissionsRequired": "Accessibility Permissions Required",

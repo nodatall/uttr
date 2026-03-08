@@ -60,3 +60,42 @@ export const LANGUAGES: Language[] = [
   { value: "br", label: "Breton" },
   { value: "mt", label: "Maltese" },
 ];
+
+const languageLabelFallbacks = new Map(
+  LANGUAGES.map((language) => [language.value, language.label]),
+);
+
+export const getLocalizedLanguageLabel = (
+  languageCode: string,
+  autoLabel: string,
+  displayLocale: string,
+): string => {
+  if (languageCode === "auto") {
+    return autoLabel;
+  }
+
+  if (typeof Intl !== "undefined" && typeof Intl.DisplayNames === "function") {
+    try {
+      const displayNames = new Intl.DisplayNames([displayLocale], {
+        type: "language",
+      });
+      const localizedName = displayNames.of(languageCode);
+      if (localizedName) {
+        return localizedName;
+      }
+    } catch {
+      // Fall back to the static label map when the runtime doesn't know a code.
+    }
+  }
+
+  return languageLabelFallbacks.get(languageCode) ?? languageCode;
+};
+
+export const getLocalizedLanguages = (
+  autoLabel: string,
+  displayLocale: string,
+): Language[] =>
+  LANGUAGES.map((language) => ({
+    value: language.value,
+    label: getLocalizedLanguageLabel(language.value, autoLabel, displayLocale),
+  }));

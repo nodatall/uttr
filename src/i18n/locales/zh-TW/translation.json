@@ -14,7 +14,8 @@
     "postProcessing": "後處理",
     "history": "歷史紀錄",
     "debug": "偵錯",
-    "about": "關於"
+    "about": "關於",
+    "apiKeys": "API 金鑰"
   },
   "onboarding": {
     "subtitle": "首先，請選擇一種模型",
@@ -194,7 +195,13 @@
         "translation": "翻譯",
         "allLanguages": "所有語言"
       },
-      "noModelsMatch": "沒有符合此篩選條件的模型"
+      "noModelsMatch": "沒有符合此篩選條件的模型",
+      "eyebrow": "模型庫",
+      "groq": {
+        "missingKey": "在選擇 Groq 模型之前，請先在 API 金鑰中加入你的 Groq API 金鑰。",
+        "cloudModelsTitle": "雲端模型",
+        "enableHint": "請在 API 金鑰中加入 Groq API 金鑰以啟用選擇。"
+      }
     },
     "sound": {
       "title": "聲音",
@@ -315,6 +322,11 @@
         "placeholder": "新增詞彙",
         "add": "新增",
         "remove": "刪除 {{word}}"
+      },
+      "onboarding": {
+        "title": "模型初始設定",
+        "description": "重新開啟模型初始設定畫面，以檢查或變更最初的設定流程。",
+        "action": "顯示設定"
       }
     },
     "postProcessing": {
@@ -386,7 +398,9 @@
       "save": "儲存轉錄",
       "unsave": "從已儲存中移除",
       "delete": "刪除條目",
-      "deleteError": "刪除條目失敗，請重試"
+      "deleteError": "刪除條目失敗，請重試",
+      "eyebrow": "封存",
+      "showingLatest": "顯示最新的 {{count}} 筆項目（較舊的項目仍會保留）。"
     },
     "debug": {
       "title": "偵錯",
@@ -488,6 +502,18 @@
           "details": "Handy 使用 Whisper.cpp 進行快速的本機語音轉文字處理。感謝 Georgi Gerganov 和貢獻者們的傑出工作"
         }
       }
+    },
+    "apiKeys": {
+      "eyebrow": "雲端存取",
+      "title": "API 金鑰",
+      "description": "管理用於轉錄與後處理的雲端供應商 API 金鑰。",
+      "provider": "供應商",
+      "groq": {
+        "title": "Groq Cloud",
+        "description": "Groq 雲端轉錄模型需要此金鑰。此金鑰會與後處理供應商設定共用。",
+        "placeholder": "gsk_..."
+      },
+      "autosave": "離開欄位後會自動儲存。"
     }
   },
   "footer": {
@@ -524,7 +550,9 @@
     "off": "關",
     "yes": "是",
     "no": "否",
-    "noOptionsFound": "未找到選項"
+    "noOptionsFound": "未找到選項",
+    "connected": "已連線",
+    "notConfigured": "缺少金鑰"
   },
   "accessibility": {
     "permissionsRequired": "需要輔助使用權限",

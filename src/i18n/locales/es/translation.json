@@ -14,7 +14,8 @@
     "postProcessing": "Post Proceso",
     "history": "Historial",
     "debug": "Depuración",
-    "about": "Acerca de"
+    "about": "Acerca de",
+    "apiKeys": "Claves API"
   },
   "onboarding": {
     "subtitle": "Para comenzar, elige un modelo de transcripción",
@@ -152,7 +153,13 @@
       },
       "noModelsMatch": "Ningún modelo coincide con este filtro.",
       "yourModels": "Modelos descargados",
-      "availableModels": "Disponibles para descargar"
+      "availableModels": "Disponibles para descargar",
+      "eyebrow": "Biblioteca de modelos",
+      "groq": {
+        "missingKey": "Añade tu clave API de Groq en Claves API antes de seleccionar un modelo de Groq.",
+        "cloudModelsTitle": "Modelos en la nube",
+        "enableHint": "Añade una clave API de Groq en Claves API para habilitar la selección."
+      }
     },
     "general": {
       "title": "General",
@@ -315,6 +322,11 @@
         "placeholder": "Agregar una palabra",
         "add": "Agregar",
         "remove": "Eliminar {{word}}"
+      },
+      "onboarding": {
+        "title": "Configuración inicial del modelo",
+        "description": "Vuelve a abrir la pantalla de configuración inicial del modelo para revisar o cambiar el flujo de configuración inicial.",
+        "action": "Mostrar configuración inicial"
       }
     },
     "postProcessing": {
@@ -386,7 +398,9 @@
       "save": "Guardar transcripción",
       "unsave": "Eliminar de guardados",
       "delete": "Eliminar entrada",
-      "deleteError": "Error al eliminar la entrada. Por favor, intenta de nuevo."
+      "deleteError": "Error al eliminar la entrada. Por favor, intenta de nuevo.",
+      "eyebrow": "Archivo",
+      "showingLatest": "Mostrando las {{count}} entradas más recientes (las anteriores siguen guardadas)."
     },
     "debug": {
       "title": "Depuración",
@@ -488,6 +502,18 @@
           "details": "Uttr usa Whisper.cpp para procesamiento de voz a texto rápido y local. Gracias al increíble trabajo de Georgi Gerganov y colaboradores."
         }
       }
+    },
+    "apiKeys": {
+      "eyebrow": "Acceso a la nube",
+      "title": "Claves API",
+      "description": "Administra las claves API de los proveedores en la nube usados para la transcripción y el postprocesamiento.",
+      "provider": "Proveedor",
+      "groq": {
+        "title": "Groq Cloud",
+        "description": "Obligatoria para los modelos de transcripción en la nube de Groq. Esta clave se comparte con la configuración del proveedor de postprocesamiento.",
+        "placeholder": "gsk_..."
+      },
+      "autosave": "Se guarda automáticamente al salir del campo."
     }
   },
   "footer": {
@@ -524,7 +550,9 @@
     "off": "Desactivado",
     "yes": "Sí",
     "no": "No",
-    "noOptionsFound": "No se encontraron opciones"
+    "noOptionsFound": "No se encontraron opciones",
+    "connected": "Conectado",
+    "notConfigured": "Falta la clave"
   },
   "accessibility": {
     "permissionsRequired": "Se Requieren Permisos de Accesibilidad",

@@ -14,7 +14,8 @@
     "postProcessing": "Následné zpracování",
     "history": "Historie",
     "debug": "Ladění",
-    "about": "O aplikaci"
+    "about": "O aplikaci",
+    "apiKeys": "Klíče API"
   },
   "onboarding": {
     "subtitle": "Pro začátek vyberte model pro přepis",
@@ -152,7 +153,13 @@
       },
       "noModelsMatch": "Tomuto filtru neodpovídají žádné modely.",
       "yourModels": "Stažené modely",
-      "availableModels": "Dostupné ke stažení"
+      "availableModels": "Dostupné ke stažení",
+      "eyebrow": "Knihovna modelů",
+      "groq": {
+        "missingKey": "Přidejte svůj klíč Groq API v části Klíče API, než vyberete model Groq.",
+        "cloudModelsTitle": "Cloudové modely",
+        "enableHint": "Přidejte klíč Groq API v části Klíče API, aby bylo možné vybírat."
+      }
     },
     "general": {
       "title": "Obecné",
@@ -315,6 +322,11 @@
         "placeholder": "Přidat slovo",
         "add": "Přidat",
         "remove": "Odebrat {{word}}"
+      },
+      "onboarding": {
+        "title": "Úvodní nastavení modelu",
+        "description": "Znovu otevřete obrazovku úvodního nastavení modelu a zkontrolujte nebo změňte počáteční průvodce.",
+        "action": "Zobrazit nastavení"
       }
     },
     "postProcessing": {
@@ -386,7 +398,9 @@
       "save": "Uložit přepis",
       "unsave": "Odebrat z uložených",
       "delete": "Smazat záznam",
-      "deleteError": "Nepodařilo se smazat záznam. Zkuste to prosím znovu."
+      "deleteError": "Nepodařilo se smazat záznam. Zkuste to prosím znovu.",
+      "eyebrow": "Archiv",
+      "showingLatest": "Zobrazuje se posledních {{count}} položek (starší položky jsou stále uložené)."
     },
     "debug": {
       "title": "Ladění",
@@ -488,6 +502,18 @@
           "details": "Uttr používá Whisper.cpp pro rychlé lokální zpracování řeči na text. Díky skvělé práci Georgiho Gerganova a přispěvatelů."
         }
       }
+    },
+    "apiKeys": {
+      "eyebrow": "Cloudový přístup",
+      "title": "Klíče API",
+      "description": "Spravujte klíče API pro cloudové poskytovatele používané pro přepis a následné zpracování.",
+      "provider": "Poskytovatel",
+      "groq": {
+        "title": "Groq Cloud",
+        "description": "Vyžadováno pro cloudové přepisovací modely Groq. Tento klíč je sdílený s nastavením poskytovatele následného zpracování.",
+        "placeholder": "gsk_..."
+      },
+      "autosave": "Po opuštění pole se uloží automaticky."
     }
   },
   "footer": {
@@ -524,7 +550,9 @@
     "off": "Vypnuto",
     "yes": "Ano",
     "no": "Ne",
-    "noOptionsFound": "Nenalezeny žádné možnosti"
+    "noOptionsFound": "Nenalezeny žádné možnosti",
+    "connected": "Připojeno",
+    "notConfigured": "Chybí klíč"
   },
   "accessibility": {
     "permissionsRequired": "Vyžadována oprávnění usnadnění přístupu",

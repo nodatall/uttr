@@ -14,7 +14,8 @@
     "postProcessing": "Postproces",
     "history": "Historia",
     "debug": "Debugowanie",
-    "about": "O programie"
+    "about": "O programie",
+    "apiKeys": "Klucze API"
   },
   "onboarding": {
     "subtitle": "Aby rozpocząć, wybierz model transkrypcji",
@@ -152,7 +153,13 @@
       },
       "noModelsMatch": "Żadne modele nie pasują do tego filtra.",
       "yourModels": "Pobrane modele",
-      "availableModels": "Dostępne do pobrania"
+      "availableModels": "Dostępne do pobrania",
+      "eyebrow": "Biblioteka modeli",
+      "groq": {
+        "missingKey": "Dodaj klucz Groq API w sekcji Klucze API przed wybraniem modelu Groq.",
+        "cloudModelsTitle": "Modele chmurowe",
+        "enableHint": "Dodaj klucz Groq API w sekcji Klucze API, aby włączyć wybór."
+      }
     },
     "general": {
       "title": "Ogólne",
@@ -315,6 +322,11 @@
         "placeholder": "Dodaj słowo",
         "add": "Dodaj",
         "remove": "Usuń {{word}}"
+      },
+      "onboarding": {
+        "title": "Wstępna konfiguracja modelu",
+        "description": "Otwórz ponownie ekran wstępnej konfiguracji modelu, aby sprawdzić lub zmienić początkowy przebieg konfiguracji.",
+        "action": "Pokaż konfigurację"
       }
     },
     "postProcessing": {
@@ -386,7 +398,9 @@
       "save": "Zapisz transkrypcję",
       "unsave": "Usuń z zapisanych",
       "delete": "Usuń wpis",
-      "deleteError": "Nie udało się usunąć wpisu. Spróbuj ponownie."
+      "deleteError": "Nie udało się usunąć wpisu. Spróbuj ponownie.",
+      "eyebrow": "Archiwum",
+      "showingLatest": "Wyświetlanych jest ostatnich {{count}} wpisów (starsze wpisy nadal są przechowywane)."
     },
     "debug": {
       "title": "Debugowanie",
@@ -488,6 +502,18 @@
           "details": "Uttr używa Whisper.cpp do szybkiego, lokalnego przetwarzania mowy na tekst. Dzięki niesamowitej pracy Georgi Gerganova i współtwórców."
         }
       }
+    },
+    "apiKeys": {
+      "eyebrow": "Dostęp do chmury",
+      "title": "Klucze API",
+      "description": "Zarządzaj kluczami API dostawców chmurowych używanych do transkrypcji i post-processingu.",
+      "provider": "Dostawca",
+      "groq": {
+        "title": "Groq Cloud",
+        "description": "Wymagane dla chmurowych modeli transkrypcji Groq. Ten klucz jest współdzielony z ustawieniami dostawcy post-processingu.",
+        "placeholder": "gsk_..."
+      },
+      "autosave": "Zapisuje się automatycznie po opuszczeniu pola."
     }
   },
   "footer": {
@@ -524,7 +550,9 @@
     "off": "Wyłącz",
     "yes": "Tak",
     "no": "Nie",
-    "noOptionsFound": "Nie znaleziono opcji"
+    "noOptionsFound": "Nie znaleziono opcji",
+    "connected": "Połączono",
+    "notConfigured": "Brak klucza"
   },
   "accessibility": {
     "permissionsRequired": "Wymagane uprawnienia dostępności",

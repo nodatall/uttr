@@ -14,7 +14,8 @@
     "postProcessing": "后处理",
     "history": "历史记录",
     "debug": "调试",
-    "about": "关于"
+    "about": "关于",
+    "apiKeys": "API 密钥"
   },
   "onboarding": {
     "subtitle": "请选择一个转录模型以开始使用",
@@ -152,7 +153,13 @@
       },
       "noModelsMatch": "没有符合此筛选条件的模型。",
       "yourModels": "已下载的模型",
-      "availableModels": "可供下载"
+      "availableModels": "可供下载",
+      "eyebrow": "模型库",
+      "groq": {
+        "missingKey": "在选择 Groq 模型之前，请先在 API 密钥中添加你的 Groq API 密钥。",
+        "cloudModelsTitle": "云端模型",
+        "enableHint": "请在 API 密钥中添加 Groq API 密钥以启用选择。"
+      }
     },
     "general": {
       "title": "通用",
@@ -315,6 +322,11 @@
         "placeholder": "添加词汇",
         "add": "添加",
         "remove": "删除 {{word}}"
+      },
+      "onboarding": {
+        "title": "模型初始设置",
+        "description": "重新打开模型初始设置界面，以查看或更改最初的设置流程。",
+        "action": "显示设置"
       }
     },
     "postProcessing": {
@@ -386,7 +398,9 @@
       "save": "保存转录",
       "unsave": "从已保存中移除",
       "delete": "删除条目",
-      "deleteError": "删除条目失败，请重试。"
+      "deleteError": "删除条目失败，请重试。",
+      "eyebrow": "归档",
+      "showingLatest": "显示最新的 {{count}} 条记录（较早的记录仍会保留）。"
     },
     "debug": {
       "title": "调试",
@@ -488,6 +502,18 @@
           "details": "Uttr 使用 Whisper.cpp 进行快速的本地语音转文字处理。感谢 Georgi Gerganov 和贡献者们的出色工作。"
         }
       }
+    },
+    "apiKeys": {
+      "eyebrow": "云访问",
+      "title": "API 密钥",
+      "description": "管理用于转录和后处理的云服务提供商 API 密钥。",
+      "provider": "提供商",
+      "groq": {
+        "title": "Groq Cloud",
+        "description": "Groq 云转录模型需要此密钥。该密钥会与后处理提供商设置共享。",
+        "placeholder": "gsk_..."
+      },
+      "autosave": "离开该字段后会自动保存。"
     }
   },
   "footer": {
@@ -524,7 +550,9 @@
     "off": "关",
     "yes": "是",
     "no": "否",
-    "noOptionsFound": "未找到选项"
+    "noOptionsFound": "未找到选项",
+    "connected": "已连接",
+    "notConfigured": "缺少密钥"
   },
   "accessibility": {
     "permissionsRequired": "需要辅助功能权限",

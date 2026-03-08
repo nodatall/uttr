@@ -3,7 +3,10 @@ import { useTranslation } from "react-i18next";
 import { SettingContainer } from "../ui/SettingContainer";
 import { ResetButton } from "../ui/ResetButton";
 import { useSettings } from "../../hooks/useSettings";
-import { LANGUAGES } from "../../lib/constants/languages";
+import {
+  getLocalizedLanguages,
+  getLocalizedLanguageLabel,
+} from "../../lib/constants/languages";
 
 interface LanguageSelectorProps {
   descriptionMode?: "inline" | "tooltip";
@@ -16,7 +19,7 @@ export const LanguageSelector: React.FC<LanguageSelectorProps> = ({
   grouped = false,
   supportedLanguages,
 }) => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const { getSetting, updateSetting, resetSetting, isUpdating } = useSettings();
   const [isOpen, setIsOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -49,13 +52,18 @@ export const LanguageSelector: React.FC<LanguageSelectorProps> = ({
   }, [isOpen]);
 
   const availableLanguages = useMemo(() => {
+    const localizedLanguages = getLocalizedLanguages(
+      t("settings.general.language.auto"),
+      i18n.resolvedLanguage || i18n.language,
+    );
+
     if (!supportedLanguages || supportedLanguages.length === 0)
-      return LANGUAGES;
-    return LANGUAGES.filter(
+      return localizedLanguages;
+    return localizedLanguages.filter(
       (lang) =>
         lang.value === "auto" || supportedLanguages.includes(lang.value),
     );
-  }, [supportedLanguages]);
+  }, [supportedLanguages, t, i18n.language, i18n.resolvedLanguage]);
 
   const filteredLanguages = useMemo(
     () =>
@@ -66,8 +74,11 @@ export const LanguageSelector: React.FC<LanguageSelectorProps> = ({
   );
 
   const selectedLanguageName =
-    LANGUAGES.find((lang) => lang.value === selectedLanguage)?.label ||
-    t("settings.general.language.auto");
+    getLocalizedLanguageLabel(
+      selectedLanguage,
+      t("settings.general.language.auto"),
+      i18n.resolvedLanguage || i18n.language,
+    ) || t("settings.general.language.auto");
 
   const handleLanguageSelect = async (languageCode: string) => {
     await updateSetting("selected_language", languageCode);

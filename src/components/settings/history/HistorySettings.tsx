@@ -190,7 +190,7 @@ export const HistorySettings: React.FC = () => {
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="space-y-2">
           <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-text/34">
-            {t("settings.history.eyebrow", { defaultValue: "Archive" })}
+            {t("settings.history.eyebrow")}
           </p>
           <h1 className="text-[28px] font-semibold tracking-tight text-text">
             {t("settings.history.title")}
@@ -259,7 +259,7 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
       await deleteAudio(entry.id);
     } catch (error) {
       console.error("Failed to delete entry:", error);
-      alert("Failed to delete entry. Please try again.");
+      alert(t("settings.history.deleteError"));
     }
   };
 

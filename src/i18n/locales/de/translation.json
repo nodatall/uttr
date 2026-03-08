@@ -14,7 +14,8 @@
     "postProcessing": "Nachbearbeitung",
     "history": "Verlauf",
     "debug": "Debug",
-    "about": "Info"
+    "about": "Info",
+    "apiKeys": "API-Schlüssel"
   },
   "onboarding": {
     "subtitle": "Wähle ein Transkriptionsmodell, um loszulegen",
@@ -152,7 +153,13 @@
       },
       "noModelsMatch": "Keine Modelle entsprechen diesem Filter.",
       "yourModels": "Heruntergeladene Modelle",
-      "availableModels": "Zum Download verfügbar"
+      "availableModels": "Zum Download verfügbar",
+      "eyebrow": "Modellbibliothek",
+      "groq": {
+        "missingKey": "Füge deinen Groq-API-Schlüssel unter API-Schlüssel hinzu, bevor du ein Groq-Modell auswählst.",
+        "cloudModelsTitle": "Cloud-Modelle",
+        "enableHint": "Füge unter API-Schlüssel einen Groq-API-Schlüssel hinzu, um die Auswahl zu aktivieren."
+      }
     },
     "general": {
       "title": "Allgemein",
@@ -315,6 +322,11 @@
         "placeholder": "Wort hinzufügen",
         "add": "Hinzufügen",
         "remove": "{{word}} entfernen"
+      },
+      "onboarding": {
+        "title": "Modelleinrichtung",
+        "description": "Öffne die Modelleinrichtung erneut, um den anfänglichen Einrichtungsablauf zu überprüfen oder zu ändern.",
+        "action": "Einrichtung anzeigen"
       }
     },
     "postProcessing": {
@@ -386,7 +398,9 @@
       "save": "Transkription speichern",
       "unsave": "Aus Gespeicherten entfernen",
       "delete": "Eintrag löschen",
-      "deleteError": "Eintrag konnte nicht gelöscht werden. Bitte versuche es erneut."
+      "deleteError": "Eintrag konnte nicht gelöscht werden. Bitte versuche es erneut.",
+      "eyebrow": "Archiv",
+      "showingLatest": "Es werden die neuesten {{count}} Einträge angezeigt (ältere Einträge bleiben weiterhin gespeichert)."
     },
     "debug": {
       "title": "Debug",
@@ -488,6 +502,18 @@
           "details": "Uttr verwendet Whisper.cpp für schnelle, lokale Sprach-zu-Text-Verarbeitung. Dank an Georgi Gerganov und die Mitwirkenden für ihre großartige Arbeit."
         }
       }
+    },
+    "apiKeys": {
+      "eyebrow": "Cloud-Zugriff",
+      "title": "API-Schlüssel",
+      "description": "Verwalte API-Schlüssel für Cloud-Anbieter, die für Transkription und Nachbearbeitung verwendet werden.",
+      "provider": "Anbieter",
+      "groq": {
+        "title": "Groq Cloud",
+        "description": "Erforderlich für Groq-Cloud-Transkriptionsmodelle. Dieser Schlüssel wird mit den Einstellungen des Nachbearbeitungsanbieters geteilt.",
+        "placeholder": "gsk_..."
+      },
+      "autosave": "Wird automatisch gespeichert, sobald du das Feld verlässt."
     }
   },
   "footer": {
@@ -524,7 +550,9 @@
     "off": "Aus",
     "yes": "Ja",
     "no": "Nein",
-    "noOptionsFound": "Keine Optionen gefunden"
+    "noOptionsFound": "Keine Optionen gefunden",
+    "connected": "Verbunden",
+    "notConfigured": "Schlüssel fehlt"
   },
   "accessibility": {
     "permissionsRequired": "Bedienungshilfen-Berechtigungen erforderlich",

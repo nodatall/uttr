@@ -14,7 +14,8 @@
     "postProcessing": "Xử lý sau",
     "history": "Lịch sử",
     "debug": "Gỡ lỗi",
-    "about": "Giới thiệu"
+    "about": "Giới thiệu",
+    "apiKeys": "Khóa API"
   },
   "onboarding": {
     "subtitle": "Để bắt đầu, hãy chọn một mô hình chuyển đổi giọng nói",
@@ -152,7 +153,13 @@
       },
       "noModelsMatch": "Không có mô hình nào khớp với bộ lọc này.",
       "yourModels": "Mô hình đã tải",
-      "availableModels": "Có sẵn để tải xuống"
+      "availableModels": "Có sẵn để tải xuống",
+      "eyebrow": "Thư viện mô hình",
+      "groq": {
+        "missingKey": "Hãy thêm khóa API Groq trong mục Khóa API trước khi chọn một mô hình Groq.",
+        "cloudModelsTitle": "Mô hình đám mây",
+        "enableHint": "Hãy thêm khóa API Groq trong mục Khóa API để bật lựa chọn."
+      }
     },
     "general": {
       "title": "Chung",
@@ -315,6 +322,11 @@
         "placeholder": "Thêm một từ",
         "add": "Thêm",
         "remove": "Xóa {{word}}"
+      },
+      "onboarding": {
+        "title": "Thiết lập ban đầu của mô hình",
+        "description": "Mở lại màn hình thiết lập ban đầu của mô hình để xem lại hoặc thay đổi luồng thiết lập ban đầu.",
+        "action": "Hiển thị thiết lập"
       }
     },
     "postProcessing": {
@@ -386,7 +398,9 @@
       "save": "Lưu bản ghi",
       "unsave": "Xóa khỏi đã lưu",
       "delete": "Xóa mục",
-      "deleteError": "Không thể xóa mục. Vui lòng thử lại."
+      "deleteError": "Không thể xóa mục. Vui lòng thử lại.",
+      "eyebrow": "Lưu trữ",
+      "showingLatest": "Đang hiển thị {{count}} mục mới nhất (các mục cũ hơn vẫn được lưu)."
     },
     "debug": {
       "title": "Gỡ lỗi",
@@ -488,6 +502,18 @@
           "details": "Uttr sử dụng Whisper.cpp để xử lý chuyển đổi giọng nói thành văn bản nhanh, cục bộ. Cảm ơn công việc tuyệt vời của Georgi Gerganov và các cộng tác viên."
         }
       }
+    },
+    "apiKeys": {
+      "eyebrow": "Truy cập đám mây",
+      "title": "Khóa API",
+      "description": "Quản lý khóa API cho các nhà cung cấp đám mây dùng cho phiên âm và hậu xử lý.",
+      "provider": "Nhà cung cấp",
+      "groq": {
+        "title": "Groq Cloud",
+        "description": "Bắt buộc cho các mô hình phiên âm đám mây của Groq. Khóa này được dùng chung với cài đặt nhà cung cấp hậu xử lý.",
+        "placeholder": "gsk_..."
+      },
+      "autosave": "Tự động lưu khi bạn rời khỏi trường."
     }
   },
   "footer": {
@@ -524,7 +550,9 @@
     "off": "Tắt",
     "yes": "Có",
     "no": "Không",
-    "noOptionsFound": "Không tìm thấy tùy chọn"
+    "noOptionsFound": "Không tìm thấy tùy chọn",
+    "connected": "Đã kết nối",
+    "notConfigured": "Thiếu khóa"
   },
   "accessibility": {
     "permissionsRequired": "Cần quyền truy cập",

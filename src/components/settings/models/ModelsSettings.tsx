@@ -7,7 +7,10 @@ import type { ModelCardStatus } from "@/components/onboarding";
 import { ModelCard } from "@/components/onboarding";
 import { useModelStore } from "@/stores/modelStore";
 import { useSettings } from "@/hooks/useSettings";
-import { LANGUAGES } from "@/lib/constants/languages.ts";
+import {
+  getLocalizedLanguages,
+  getLocalizedLanguageLabel,
+} from "@/lib/constants/languages.ts";
 import type { ModelInfo } from "@/bindings";
 
 // check if model supports a language based on its supported_languages list
@@ -18,7 +21,7 @@ const modelSupportsLanguage = (model: ModelInfo, langCode: string): boolean => {
 const isCloudModel = (modelId: string): boolean => modelId.startsWith("groq-");
 
 export const ModelsSettings: React.FC = () => {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const [switchingModelId, setSwitchingModelId] = useState<string | null>(null);
   const [languageFilter, setLanguageFilter] = useState("all");
   const [languageDropdownOpen, setLanguageDropdownOpen] = useState(false);
@@ -42,6 +45,14 @@ export const ModelsSettings: React.FC = () => {
   const groqApiKey = settings?.post_process_api_keys?.groq ?? "";
   const isGroqApiKeyUpdating = isUpdating("post_process_api_key:groq");
   const hasGroqApiKey = groqApiKey.trim().length > 0;
+  const localizedLanguages = useMemo(
+    () =>
+      getLocalizedLanguages(
+        t("settings.general.language.auto"),
+        i18n.resolvedLanguage || i18n.language,
+      ),
+    [t, i18n.language, i18n.resolvedLanguage],
+  );
   const currentModelInfo = useMemo(
     () => models.find((model: ModelInfo) => model.id === currentModel) ?? null,
     [models, currentModel],
@@ -71,20 +82,24 @@ export const ModelsSettings: React.FC = () => {
 
   // filtered languages for dropdown (exclude "auto")
   const filteredLanguages = useMemo(() => {
-    return LANGUAGES.filter(
+    return localizedLanguages.filter(
       (lang) =>
         lang.value !== "auto" &&
         lang.label.toLowerCase().includes(languageSearch.toLowerCase()),
     );
-  }, [languageSearch]);
+  }, [localizedLanguages, languageSearch]);
 
   // Get selected language label
   const selectedLanguageLabel = useMemo(() => {
     if (languageFilter === "all") {
       return t("settings.models.filters.allLanguages");
     }
-    return LANGUAGES.find((lang) => lang.value === languageFilter)?.label || "";
-  }, [languageFilter, t]);
+    return getLocalizedLanguageLabel(
+      languageFilter,
+      t("settings.general.language.auto"),
+      i18n.resolvedLanguage || i18n.language,
+    );
+  }, [languageFilter, t, i18n.language, i18n.resolvedLanguage]);
 
   const getModelStatus = (modelId: string): ModelCardStatus => {
     if (modelId in extractingModels) {

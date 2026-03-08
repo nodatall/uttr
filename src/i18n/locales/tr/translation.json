@@ -14,7 +14,8 @@
     "postProcessing": "Son İşlem",
     "history": "Geçmiş",
     "debug": "Hata Ayıklama",
-    "about": "Hakkında"
+    "about": "Hakkında",
+    "apiKeys": "API Anahtarları"
   },
   "onboarding": {
     "subtitle": "Başlamak için bir transkripsiyon modeli seçin",
@@ -152,7 +153,13 @@
       },
       "noModelsMatch": "Bu filtreyle eşleşen model yok.",
       "yourModels": "İndirilen modeller",
-      "availableModels": "İndirilebilir"
+      "availableModels": "İndirilebilir",
+      "eyebrow": "Model kitaplığı",
+      "groq": {
+        "missingKey": "Bir Groq modeli seçmeden önce API Anahtarları bölümüne Groq API anahtarınızı ekleyin.",
+        "cloudModelsTitle": "Bulut modelleri",
+        "enableHint": "Seçimi etkinleştirmek için API Anahtarları bölümüne bir Groq API anahtarı ekleyin."
+      }
     },
     "general": {
       "title": "Genel",
@@ -315,6 +322,11 @@
         "placeholder": "Kelime ekle",
         "add": "Ekle",
         "remove": "{{word}} Kaldır"
+      },
+      "onboarding": {
+        "title": "Model ilk kurulumu",
+        "description": "İlk kurulum akışını gözden geçirmek veya değiştirmek için model ilk kurulum ekranını yeniden açın.",
+        "action": "Kurulumu göster"
       }
     },
     "postProcessing": {
@@ -386,7 +398,9 @@
       "save": "Transkripsiyonu kaydet",
       "unsave": "Kaydedilenlerden kaldır",
       "delete": "Kaydı sil",
-      "deleteError": "Kayıt silinemedi. Lütfen tekrar deneyin."
+      "deleteError": "Kayıt silinemedi. Lütfen tekrar deneyin.",
+      "eyebrow": "Arşiv",
+      "showingLatest": "En son {{count}} kayıt gösteriliyor (eski kayıtlar hâlâ saklanır)."
     },
     "debug": {
       "title": "Hata Ayıklama",
@@ -488,6 +502,18 @@
           "details": "Uttr, hızlı ve yerel konuşmadan metne dönüştürme için Whisper.cpp kullanır. Georgi Gerganov ve katkıda bulunanların harika çalışmaları için teşekkür ederiz."
         }
       }
+    },
+    "apiKeys": {
+      "eyebrow": "Bulut erişimi",
+      "title": "API Anahtarları",
+      "description": "Transkripsiyon ve son işlem için kullanılan bulut sağlayıcılarının API anahtarlarını yönetin.",
+      "provider": "Sağlayıcı",
+      "groq": {
+        "title": "Groq Cloud",
+        "description": "Groq bulut transkripsiyon modelleri için gereklidir. Bu anahtar, son işlem sağlayıcısı ayarlarıyla paylaşılır.",
+        "placeholder": "gsk_..."
+      },
+      "autosave": "Alanı terk ettiğinizde otomatik olarak kaydedilir."
     }
   },
   "footer": {
@@ -524,7 +550,9 @@
     "off": "Kapalı",
     "yes": "Evet",
     "no": "Hayır",
-    "noOptionsFound": "Seçenek bulunamadı"
+    "noOptionsFound": "Seçenek bulunamadı",
+    "connected": "Bağlandı",
+    "notConfigured": "Anahtar eksik"
   },
   "accessibility": {
     "permissionsRequired": "Erişilebilirlik İzinleri Gerekli",
