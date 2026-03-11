@@ -14,15 +14,17 @@ Use these skills for workflow triggers:
 
 Trigger mapping:
 
-- `start planning "<unformed-plan>"` -> `plan-task`
-- `begin task <task-id> in <plan-key>` -> `execute-task`
-- `begin one-shot in <plan-key>` -> `execute-task`
-- `begin review` -> `review-chain`
-- `begin review <task-id>` -> `review-chain`
+- `start planning "<plan-from-llm>" [--deep-research] [--preserve-planning-artifacts]` -> `plan-task`
+- `begin task <task-id> in <plan-key> [--preserve-review-artifacts]` -> `execute-task`
+- `begin one-shot in <plan-key> [--preserve-review-artifacts]` -> `execute-task`
+- `begin review [--preserve-review-artifacts]` -> `review-chain`
+- `begin review <task-id> [--preserve-review-artifacts]` -> `review-chain`
 
 Planning defaults:
 
 - Planning treats user input as source-plan material to improve and normalize.
+- `--deep-research` runs a substantial pre-draft research pass focused on technical design, rollout/migration, security/ops, and verification strategy; it is not satisfied by a token search burst.
+- `--preserve-planning-artifacts` keeps temporary planning research artifacts under `tasks/tmp/`.
 - Planning always outputs:
   - `tasks/prd-<plan-key>.md`
   - `tasks/tdd-<plan-key>.md`
@@ -35,7 +37,8 @@ Execution behavior:
 
 - `execute-task` requires PRD + TDD + tasks-plan before coding starts.
 - Standard `begin task ...` execution is single-agent.
-- `begin one-shot ...` uses one sequential worker subagent per sub-task, with the main agent owning review, integration, task updates, and commits.
+- `begin one-shot ...` uses one sequential worker subagent per sub-task across the entire remaining unchecked task file, with the main agent owning review, integration, task updates, and commits.
+- One-shot execution must continue until the remaining unchecked task file is fully complete and finalized; a clean intermediate commit boundary is not a valid stopping point.
 - `review-chain` exists for explicit review triggers (`begin review` and `begin review <task-id>`).
 
 Shared references:

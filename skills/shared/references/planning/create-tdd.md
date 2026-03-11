@@ -18,6 +18,7 @@ Run this for every completed planning flow after PRD structure is locked and bef
 - `tasks/prd-<plan-key>.md`
 - source plan or source prompt
 - locked decisions from Socratic refinement
+- deep-research findings when `--deep-research` is active
 - finalized plain-language summary
 
 ## Output
@@ -79,10 +80,11 @@ Do not collapse concrete interface, schema, migration, or verification detail in
 7. Ensure verification strategy is concrete enough to drive task `verify` steps later.
 8. Keep the section order stable so the plain-language summary is the first substantive section a human or agent reads.
 9. Do not omit sections. If a section is truly not relevant, fill it with one explicit, concise note rather than leaving it out.
+10. If `--deep-research` is active, TDD is the primary home for research-backed technical recommendations and rationale.
 
 ## Build gate reminder
 
 Implementation starts only from:
 
-- `begin task <task-id> in <plan-key>`
-- `begin one-shot in <plan-key>`
+- `begin task <task-id> in <plan-key> [--preserve-review-artifacts]`
+- `begin one-shot in <plan-key> [--preserve-review-artifacts]`

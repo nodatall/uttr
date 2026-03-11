@@ -6,11 +6,11 @@ Canonical path and trigger contract for planning, build, and review skills.
 
 ## Accepted triggers
 
-- Planning: `start planning "<unformed-plan>"`
-- Standard task execution: `begin task <task-id> in <plan-key>`
-- One-shot execution: `begin one-shot in <plan-key>`
-- Task review: `begin review <task-id>`
-- Ad-hoc review (default): `begin review`
+- Planning: `start planning "<plan-from-llm>" [--deep-research] [--preserve-planning-artifacts]`
+- Standard task execution: `begin task <task-id> in <plan-key> [--preserve-review-artifacts]`
+- One-shot execution: `begin one-shot in <plan-key> [--preserve-review-artifacts]`
+- Task review: `begin review <task-id> [--preserve-review-artifacts]`
+- Ad-hoc review (default): `begin review [--preserve-review-artifacts]`
 
 ## Plan key resolution
 
@@ -22,12 +22,15 @@ Resolve files exactly as:
 - Required TDD: `tasks/tdd-<plan-key>.md`
 - Required task list: `tasks/tasks-plan-<plan-key>.md`
 
-## Temporary execution files
+## Temporary workflow files
 
+- Planning research memo: `tasks/tmp/research-plan-<plan-key>.md`
 - Per-sub-task plan doc: `tasks/tmp/plan-task-<task-id>.md`
 - Task review log: `tasks/tmp/review-task-<task-id>.md`
 - One-shot final review log: `tasks/tmp/review-task-final-<plan-key>.md`
 - Ad-hoc review log: `tasks/tmp/review-task-ad-hoc-<yyyy-mm-dd>.md`
+
+By default, planning and review temporary files are deleted after successful completion. If the trigger includes `--preserve-planning-artifacts` or `--preserve-review-artifacts`, keep the matching temporary files in place and surface their paths in the final summary.
 
 ## Execution artifact gate
 
@@ -53,11 +56,16 @@ Then:
 - Requires `<task-id>` and `<plan-key>`.
 - Executes the requested task/sub-task in the main agent.
 - Pause for user confirmation between sub-tasks.
+- If `--preserve-review-artifacts` is present, keep per-sub-task temp plan docs and review logs.
 
 ### One-shot mode
 
 - Requires `<plan-key>`.
 - Start at first unchecked sub-task and continue in file order.
+- Continue until there are no unchecked sub-tasks left anywhere in the file; do not stop at parent-task or section boundaries.
+- Do not stop to provide an interim “progress so far” handoff when unchecked sub-tasks remain.
+- A clean commit boundary, milestone boundary, or partially completed checklist is not a valid stopping point.
+- Only return control early when a real blocker remains unresolved after reasonable attempts to proceed, such as missing required artifacts, a dirty-tree branch-creation conflict that needs user choice, or an external approval/dependency failure that prevents continued execution.
 - Use one worker subagent per sub-task.
 - Worker context must include:
   - `tasks/prd-<plan-key>.md`
@@ -67,6 +75,7 @@ Then:
 - Main agent owns task-list updates, review, commits, integration checks, and finalization.
 - No pauses between sub-tasks.
 - Run finalization once after all sub-tasks complete.
+- If `--preserve-review-artifacts` is present, keep per-sub-task temp plan docs and review logs, plus the final full-branch review log.
 
 ## Legacy syntax
 

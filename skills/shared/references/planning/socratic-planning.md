@@ -16,7 +16,7 @@ Planning is not blank-page generation by default. Treat the user's input as sour
 
 Accepted command:
 
-- `start planning "<unformed-plan>"`
+- `start planning "<plan-from-llm>" [--deep-research] [--preserve-planning-artifacts]`
 
 The quoted payload may contain:
 
@@ -31,6 +31,7 @@ Before asking planning questions:
 1. Confirm trigger matches this workflow.
 2. Confirm these references are readable:
    - `skills/shared/references/planning/socratic-planning.md`
+   - `skills/shared/references/planning/deep-research.md`
    - `skills/shared/references/planning/create-prd.md`
    - `skills/shared/references/planning/create-tdd.md`
    - `skills/shared/references/planning/generate-tasks.md`
@@ -44,6 +45,7 @@ Before asking planning questions:
 Default assumption:
 
 - Treat the input as a `rich source plan` unless it is clearly sparse.
+- Treat `"<plan-from-llm>"` as the expected source shape, but continue to support sparse prompts when that is what the user provides.
 
 ## Intake Normalization (Required)
 
@@ -96,6 +98,20 @@ Ask only targeted questions that expose:
 
 Do not re-walk the whole plan if the plan already covers it.
 
+#### Challenge-question minimum
+
+For any non-trivial rich source plan, ask at least one targeted challenge question before document generation unless the plan is clearly small, local-only, and already decision-complete.
+
+Asking at least one challenge question is required when the plan introduces any of:
+
+- new infrastructure, hosting, or deployment behavior
+- new schedulers, background jobs, cron-style automation, or always-on services
+- source-of-truth changes, replication, backup, or sync behavior
+- new external systems, secrets, networking, or connectivity assumptions
+- migration, rollout, backfill, rollback, or operational recovery behavior
+
+The challenge question must test an assumption that could materially change implementation, operations, or ownership. Do not spend the question on something cosmetic or already explicit.
+
 ### Sparse-plan mode
 
 Use this simple loop:
@@ -120,6 +136,7 @@ Rules:
 
 - Ask one follow-up if an answer is vague.
 - If the answer is still vague, choose a reasonable default and state it explicitly.
+- Do not silently default through required challenge-question categories in rich-plan mode.
 - Stop when the plan is decision-complete.
 - Prefer structured dialog questions when client supports them.
 - Fallback to plain-text one-question turns when dialog is unavailable.
@@ -148,6 +165,10 @@ Required planning outputs:
 
 All three are mandatory for execution.
 
+Optional temporary planning artifact:
+
+- `tasks/tmp/research-plan-<plan-key>.md` when `--deep-research --preserve-planning-artifacts` is used
+
 ## Normalization Rules
 
 When transforming a rich source plan into PRD, TDD, and tasks-plan:
@@ -158,6 +179,8 @@ When transforming a rich source plan into PRD, TDD, and tasks-plan:
 4. Preserve product rules, UX rules, missing-data behavior, and non-goals.
 5. Split mixed sections across PRD and TDD only when needed; do not drop any part.
 6. Ensure the tasks-plan is derived from finalized PRD and TDD, not directly from the raw source plan.
+7. If `--deep-research` is active, apply research findings before generating PRD, TDD, and tasks-plan.
+8. If `--deep-research` is active, complete the evidence bar and working memo in `deep-research.md` before document generation begins.
 
 ## Execution Trigger Gate (Hard Stop)
 
@@ -168,14 +191,15 @@ After planning outputs are complete:
 
 Accepted build triggers:
 
-- `begin task <task-id> in <plan-key>`
-- `begin one-shot in <plan-key>`
+- `begin task <task-id> in <plan-key> [--preserve-review-artifacts]`
+- `begin one-shot in <plan-key> [--preserve-review-artifacts]`
 
 Legacy trigger wording with `prd-key`/`prd-id` must be rejected and corrected.
 
 ## Validation Scenarios
 
-- Rich source plan provided: ask only targeted refinement questions, preserve structure, then generate PRD/TDD/tasks-plan.
+- Rich source plan provided: ask only targeted refinement questions, including at least one challenge question when the plan changes infrastructure, operations, scheduling, or source-of-truth behavior, preserve structure, then generate PRD/TDD/tasks-plan.
+- Deep-research planning requested: lock the intake summary first, run the deep research pass, then generate PRD/TDD/tasks-plan from the refined decisions.
 - Sparse request provided: ask enough questions to reach decision completeness, then generate PRD/TDD/tasks-plan.
 - Source plan contains unresolved ambiguity: convert to explicit default or ask until resolved.
 - Source plan contains detailed route/schema/test content: preserve it during normalization.
