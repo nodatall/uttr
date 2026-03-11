@@ -45,7 +45,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 - [ ] 2.0 Preserve recorder output semantics and regression-proof the change
   - covers_prd: `FR-003`, `FR-004`, `FR-005`
   - covers_tdd: `TDR-004`, `TDR-006`, `TDR-007`
-  - [ ] 2.1 Add automated coverage for pre-roll capping, start reset, and no duplicate drains
+  - [x] 2.1 Add automated coverage for pre-roll capping, start reset, and no duplicate drains
     - covers_prd: `FR-003`, `FR-004`
     - covers_tdd: `TDR-004`, `TDR-007`
     - output: `src-tauri/src/audio_toolkit/audio/recorder.rs`

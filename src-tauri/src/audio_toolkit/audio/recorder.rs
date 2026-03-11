@@ -24,7 +24,7 @@ enum Cmd {
     Shutdown,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct DrainResult {
     pub samples: Vec<f32>,
     pub total_speech_samples: usize,
@@ -330,6 +330,55 @@ impl PreRollBuffer {
     }
 }
 
+fn handle_start(
+    processed_samples: &mut Vec<f32>,
+    pre_roll_samples: &PreRollBuffer,
+    recording: &mut bool,
+    drain_cursor: &mut usize,
+    silence_run_samples: &mut usize,
+    saw_pause_since_last_drain: &mut bool,
+    startup_passthrough_remaining: &mut usize,
+    startup_passthrough_samples: usize,
+) {
+    processed_samples.clear();
+    pre_roll_samples.extend_into(processed_samples);
+    *recording = true;
+    *drain_cursor = 0;
+    *silence_run_samples = 0;
+    *saw_pause_since_last_drain = false;
+    *startup_passthrough_remaining = startup_passthrough_samples;
+}
+
+fn drain_recording(
+    recording: bool,
+    processed_samples: &[f32],
+    drain_cursor: &mut usize,
+    saw_pause_since_last_drain: &mut bool,
+) -> DrainResult {
+    if !recording {
+        return DrainResult {
+            samples: Vec::new(),
+            total_speech_samples: 0,
+            saw_pause: false,
+        };
+    }
+
+    if *drain_cursor > processed_samples.len() {
+        *drain_cursor = processed_samples.len();
+    }
+
+    let delta = processed_samples[*drain_cursor..].to_vec();
+    *drain_cursor = processed_samples.len();
+    let saw_pause = *saw_pause_since_last_drain;
+    *saw_pause_since_last_drain = false;
+
+    DrainResult {
+        samples: delta,
+        total_speech_samples: processed_samples.len(),
+        saw_pause,
+    }
+}
+
 fn run_consumer(
     in_sample_rate: u32,
     vad: Option<Arc<Mutex<Box<dyn vad::VoiceActivityDetector>>>>,
@@ -417,13 +466,16 @@ fn run_consumer(
     ) -> bool {
         match cmd {
             Cmd::Start => {
-                processed_samples.clear();
-                pre_roll_samples.extend_into(processed_samples);
-                *recording = true;
-                *drain_cursor = 0;
-                *silence_run_samples = 0;
-                *saw_pause_since_last_drain = false;
-                *startup_passthrough_remaining = STARTUP_PASSTHROUGH_SAMPLES;
+                handle_start(
+                    processed_samples,
+                    pre_roll_samples,
+                    recording,
+                    drain_cursor,
+                    silence_run_samples,
+                    saw_pause_since_last_drain,
+                    startup_passthrough_remaining,
+                    STARTUP_PASSTHROUGH_SAMPLES,
+                );
                 visualizer.reset(); // Reset visualization buffer
                 if let Some(v) = vad {
                     v.lock().unwrap().reset();
@@ -431,29 +483,12 @@ fn run_consumer(
                 false
             }
             Cmd::Drain(reply_tx) => {
-                if !*recording {
-                    let _ = reply_tx.send(DrainResult {
-                        samples: Vec::new(),
-                        total_speech_samples: 0,
-                        saw_pause: false,
-                    });
-                    return false;
-                }
-
-                if *drain_cursor > processed_samples.len() {
-                    *drain_cursor = processed_samples.len();
-                }
-
-                let delta = processed_samples[*drain_cursor..].to_vec();
-                *drain_cursor = processed_samples.len();
-                let saw_pause = *saw_pause_since_last_drain;
-                *saw_pause_since_last_drain = false;
-
-                let _ = reply_tx.send(DrainResult {
-                    samples: delta,
-                    total_speech_samples: processed_samples.len(),
-                    saw_pause,
-                });
+                let _ = reply_tx.send(drain_recording(
+                    *recording,
+                    processed_samples,
+                    drain_cursor,
+                    saw_pause_since_last_drain,
+                ));
                 false
             }
             Cmd::Stop(reply_tx) => {
@@ -555,5 +590,110 @@ fn run_consumer(
                 return;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        drain_recording, handle_start, DrainResult, PreRollBuffer,
+    };
+
+    #[test]
+    fn recorder_pre_roll_buffer_caps_to_latest_samples() {
+        let mut pre_roll = PreRollBuffer::new(5);
+        pre_roll.push_frame(&[1.0, 2.0, 3.0]);
+        pre_roll.push_frame(&[4.0, 5.0, 6.0, 7.0]);
+
+        let mut seeded = Vec::new();
+        pre_roll.extend_into(&mut seeded);
+
+        assert_eq!(seeded, vec![3.0, 4.0, 5.0, 6.0, 7.0]);
+    }
+
+    #[test]
+    fn recorder_start_resets_recording_state_and_seeds_current_pre_roll() {
+        let mut pre_roll = PreRollBuffer::new(4);
+        pre_roll.push_frame(&[7.0, 8.0]);
+
+        let mut processed_samples = vec![1.0, 2.0, 3.0];
+        let mut recording = false;
+        let mut drain_cursor = 9;
+        let mut silence_run_samples = 42;
+        let mut saw_pause_since_last_drain = true;
+        let mut startup_passthrough_remaining = 0;
+
+        handle_start(
+            &mut processed_samples,
+            &pre_roll,
+            &mut recording,
+            &mut drain_cursor,
+            &mut silence_run_samples,
+            &mut saw_pause_since_last_drain,
+            &mut startup_passthrough_remaining,
+            123,
+        );
+
+        assert_eq!(processed_samples, vec![7.0, 8.0]);
+        assert!(recording);
+        assert_eq!(drain_cursor, 0);
+        assert_eq!(silence_run_samples, 0);
+        assert!(!saw_pause_since_last_drain);
+        assert_eq!(startup_passthrough_remaining, 123);
+    }
+
+    #[test]
+    fn recorder_drain_only_emits_new_samples_after_seeded_pre_roll() {
+        let mut pre_roll = PreRollBuffer::new(4);
+        pre_roll.push_frame(&[0.1, 0.2]);
+
+        let mut processed_samples = vec![9.0];
+        let mut recording = false;
+        let mut drain_cursor = 0;
+        let mut silence_run_samples = 12;
+        let mut saw_pause_since_last_drain = true;
+        let mut startup_passthrough_remaining = 0;
+
+        handle_start(
+            &mut processed_samples,
+            &pre_roll,
+            &mut recording,
+            &mut drain_cursor,
+            &mut silence_run_samples,
+            &mut saw_pause_since_last_drain,
+            &mut startup_passthrough_remaining,
+            10,
+        );
+
+        processed_samples.extend_from_slice(&[0.3, 0.4]);
+        let first = drain_recording(
+            recording,
+            &processed_samples,
+            &mut drain_cursor,
+            &mut saw_pause_since_last_drain,
+        );
+        let second = drain_recording(
+            recording,
+            &processed_samples,
+            &mut drain_cursor,
+            &mut saw_pause_since_last_drain,
+        );
+
+        assert_eq!(
+            first,
+            DrainResult {
+                samples: vec![0.1, 0.2, 0.3, 0.4],
+                total_speech_samples: 4,
+                saw_pause: false,
+            }
+        );
+        assert_eq!(
+            second,
+            DrainResult {
+                samples: Vec::new(),
+                total_speech_samples: 4,
+                saw_pause: false,
+            }
+        );
     }
 }
