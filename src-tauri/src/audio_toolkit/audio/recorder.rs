@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     io::Error,
     sync::{mpsc, Arc, Mutex},
     time::Duration,
@@ -287,6 +288,44 @@ impl AudioRecorder {
     }
 }
 
+struct PreRollBuffer {
+    samples: VecDeque<f32>,
+    max_samples: usize,
+}
+
+impl PreRollBuffer {
+    fn new(max_samples: usize) -> Self {
+        Self {
+            samples: VecDeque::with_capacity(max_samples),
+            max_samples,
+        }
+    }
+
+    fn push_frame(&mut self, frame: &[f32]) {
+        if self.max_samples == 0 || frame.is_empty() {
+            return;
+        }
+
+        if frame.len() >= self.max_samples {
+            self.samples.clear();
+            self.samples
+                .extend(frame[frame.len() - self.max_samples..].iter().copied());
+            return;
+        }
+
+        let overflow = self
+            .samples
+            .len()
+            .saturating_add(frame.len())
+            .saturating_sub(self.max_samples);
+        for _ in 0..overflow {
+            self.samples.pop_front();
+        }
+
+        self.samples.extend(frame.iter().copied());
+    }
+}
+
 fn run_consumer(
     in_sample_rate: u32,
     vad: Option<Arc<Mutex<Box<dyn vad::VoiceActivityDetector>>>>,
@@ -295,6 +334,7 @@ fn run_consumer(
     level_cb: Option<Arc<dyn Fn(Vec<f32>) + Send + Sync + 'static>>,
 ) {
     const SPEECH_SAMPLE_RATE: usize = crate::audio_toolkit::constants::WHISPER_SAMPLE_RATE as usize;
+    const PRE_ROLL_SAMPLES: usize = SPEECH_SAMPLE_RATE * 500 / 1000; // 500ms
     const PAUSE_THRESHOLD_SAMPLES: usize = SPEECH_SAMPLE_RATE * 300 / 1000; // 300ms
     const STARTUP_PASSTHROUGH_SAMPLES: usize = SPEECH_SAMPLE_RATE * 350 / 1000; // 350ms
 
@@ -305,6 +345,7 @@ fn run_consumer(
     );
 
     let mut processed_samples = Vec::<f32>::new();
+    let mut pre_roll_samples = PreRollBuffer::new(PRE_ROLL_SAMPLES);
     let mut recording = false;
     let mut drain_cursor = 0usize;
     let mut silence_run_samples = 0usize;
@@ -362,6 +403,7 @@ fn run_consumer(
         recording: &mut bool,
         frame_resampler: &mut FrameResampler,
         processed_samples: &mut Vec<f32>,
+        pre_roll_samples: &mut PreRollBuffer,
         vad: &Option<Arc<Mutex<Box<dyn vad::VoiceActivityDetector>>>>,
         visualizer: &mut AudioVisualiser,
         drain_cursor: &mut usize,
@@ -414,6 +456,7 @@ fn run_consumer(
 
                 let mut flush_passthrough = 0usize;
                 frame_resampler.finish(&mut |frame: &[f32]| {
+                    pre_roll_samples.push_frame(frame);
                     // we still want to process the last few frames
                     let _ = handle_frame(
                         frame,
@@ -442,6 +485,7 @@ fn run_consumer(
                 &mut recording,
                 &mut frame_resampler,
                 &mut processed_samples,
+                &mut pre_roll_samples,
                 &vad,
                 &mut visualizer,
                 &mut drain_cursor,
@@ -468,6 +512,7 @@ fn run_consumer(
 
         // ---------- existing pipeline ------------------------------------ //
         frame_resampler.push(&raw, &mut |frame: &[f32]| {
+            pre_roll_samples.push_frame(frame);
             let saw_speech = handle_frame(
                 frame,
                 recording,
@@ -494,6 +539,7 @@ fn run_consumer(
                 &mut recording,
                 &mut frame_resampler,
                 &mut processed_samples,
+                &mut pre_roll_samples,
                 &vad,
                 &mut visualizer,
                 &mut drain_cursor,

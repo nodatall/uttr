@@ -29,7 +29,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 - [ ] 1.0 Add bounded recorder pre-roll buffering
   - covers_prd: `FR-001`, `FR-002`, `FR-003`
   - covers_tdd: `TDR-001`, `TDR-002`, `TDR-003`, `TDR-005`
-  - [ ] 1.1 Add recorder-worker state for capped pre-roll samples at 16 kHz
+  - [x] 1.1 Add recorder-worker state for capped pre-roll samples at 16 kHz
     - covers_prd: `FR-001`, `FR-002`
     - covers_tdd: `TDR-001`, `TDR-002`
     - output: `src-tauri/src/audio_toolkit/audio/recorder.rs`
