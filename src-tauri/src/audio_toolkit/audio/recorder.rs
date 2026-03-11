@@ -324,6 +324,10 @@ impl PreRollBuffer {
 
         self.samples.extend(frame.iter().copied());
     }
+
+    fn extend_into(&self, out: &mut Vec<f32>) {
+        out.extend(self.samples.iter().copied());
+    }
 }
 
 fn run_consumer(
@@ -414,6 +418,7 @@ fn run_consumer(
         match cmd {
             Cmd::Start => {
                 processed_samples.clear();
+                pre_roll_samples.extend_into(processed_samples);
                 *recording = true;
                 *drain_cursor = 0;
                 *silence_run_samples = 0;

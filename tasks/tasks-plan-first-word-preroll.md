@@ -26,7 +26,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 
 ## Tasks
 
-- [ ] 1.0 Add bounded recorder pre-roll buffering
+- [x] 1.0 Add bounded recorder pre-roll buffering
   - covers_prd: `FR-001`, `FR-002`, `FR-003`
   - covers_tdd: `TDR-001`, `TDR-002`, `TDR-003`, `TDR-005`
   - [x] 1.1 Add recorder-worker state for capped pre-roll samples at 16 kHz
@@ -35,7 +35,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - output: `src-tauri/src/audio_toolkit/audio/recorder.rs`
     - verify: `cargo test --manifest-path src-tauri/Cargo.toml recorder`
     - done_when: The recorder worker continuously stores only the most recent configured speech-rate samples before VAD filtering while idle or recording.
-  - [ ] 1.2 Seed new recordings from the current pre-roll buffer on `Cmd::Start`
+  - [x] 1.2 Seed new recordings from the current pre-roll buffer on `Cmd::Start`
     - covers_prd: `FR-001`, `FR-003`
     - covers_tdd: `TDR-003`, `TDR-005`
     - output: `src-tauri/src/audio_toolkit/audio/recorder.rs`
