@@ -387,6 +387,8 @@ fn run_consumer(
     level_cb: Option<Arc<dyn Fn(Vec<f32>) + Send + Sync + 'static>>,
 ) {
     const SPEECH_SAMPLE_RATE: usize = crate::audio_toolkit::constants::WHISPER_SAMPLE_RATE as usize;
+    // Recorder-local pre-roll only helps while upstream microphone streaming is already warm.
+    // Long-idle stream-closed misses stay explicitly deferred to the audio manager lifecycle.
     const PRE_ROLL_SAMPLES: usize = SPEECH_SAMPLE_RATE * 500 / 1000; // 500ms
     const PAUSE_THRESHOLD_SAMPLES: usize = SPEECH_SAMPLE_RATE * 300 / 1000; // 300ms
     const STARTUP_PASSTHROUGH_SAMPLES: usize = SPEECH_SAMPLE_RATE * 350 / 1000; // 350ms
@@ -692,6 +694,43 @@ mod tests {
             DrainResult {
                 samples: Vec::new(),
                 total_speech_samples: 4,
+                saw_pause: false,
+            }
+        );
+    }
+
+    #[test]
+    fn recorder_drain_reports_pause_once_without_replaying_audio() {
+        let processed_samples = vec![0.5, 0.6, 0.7];
+        let mut drain_cursor = 1;
+        let mut saw_pause_since_last_drain = true;
+
+        let first = drain_recording(
+            true,
+            &processed_samples,
+            &mut drain_cursor,
+            &mut saw_pause_since_last_drain,
+        );
+        let second = drain_recording(
+            true,
+            &processed_samples,
+            &mut drain_cursor,
+            &mut saw_pause_since_last_drain,
+        );
+
+        assert_eq!(
+            first,
+            DrainResult {
+                samples: vec![0.6, 0.7],
+                total_speech_samples: 3,
+                saw_pause: true,
+            }
+        );
+        assert_eq!(
+            second,
+            DrainResult {
+                samples: Vec::new(),
+                total_speech_samples: 3,
                 saw_pause: false,
             }
         );

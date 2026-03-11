@@ -42,7 +42,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - verify: `cargo test --manifest-path src-tauri/Cargo.toml recorder`
     - done_when: Starting a recording clears prior recording state, prepends the current pre-roll once, resets cursors and pause flags, and retains existing VAD reset plus 350 ms startup passthrough behavior.
 
-- [ ] 2.0 Preserve recorder output semantics and regression-proof the change
+- [x] 2.0 Preserve recorder output semantics and regression-proof the change
   - covers_prd: `FR-003`, `FR-004`, `FR-005`
   - covers_tdd: `TDR-004`, `TDR-006`, `TDR-007`
   - [x] 2.1 Add automated coverage for pre-roll capping, start reset, and no duplicate drains
@@ -51,7 +51,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - output: `src-tauri/src/audio_toolkit/audio/recorder.rs`
     - verify: `cargo test --manifest-path src-tauri/Cargo.toml recorder`
     - done_when: Tests fail if pre-roll grows unbounded, carries old recording state into a new start, or is emitted more than once across drains.
-  - [ ] 2.2 Validate upstream assumptions and document the explicit deferred case
+  - [x] 2.2 Validate upstream assumptions and document the explicit deferred case
     - covers_prd: `FR-004`, `FR-005`
     - covers_tdd: `TDR-004`, `TDR-006`, `TDR-007`
     - output: `src-tauri/src/audio_toolkit/audio/recorder.rs`
