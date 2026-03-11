@@ -32,6 +32,8 @@ Load these files before running:
 ## Workflow
 
 1. Run planning preflight from `socratic-planning.md`.
+   - If the agent is currently in collaboration `Plan` mode, alert the user to exit back to collaboration `Default` mode and stop immediately.
+   - Do not ask planning questions or generate artifacts while that mode guard is active.
 2. Intake the source material, classify it as rich source plan or sparse source prompt, and normalize it into `Goal`, `Context`, `Constraints`, and `Done when`.
 3. Run the Socratic refinement loop:
    - one question per turn
@@ -54,7 +56,9 @@ Load these files before running:
 - Do not leave `Open questions` or `Open technical questions` in final artifacts.
 - Preserve substantive source-plan sections; normalize them without dropping content.
 - With `--deep-research`, research defaults to `Tech + Delivery`: technical design, migration/rollout/rollback, security/ops, and verification strategy.
+- With `--deep-research`, live web research is mandatory and the working memo must include at least 5 substantive external primary web sources.
 - With `--deep-research`, do not begin PRD/TDD/tasks drafting until the research memo and completion checks from `deep-research.md` are complete.
+- With `--deep-research`, do not proceed if live web research is unavailable; stop and tell the user the deep-research pass cannot run without web access.
 - `--deep-research` should influence TDD and tasks-plan first; update PRD only when product constraints or defaults materially change.
 - With `--preserve-planning-artifacts`, keep `tasks/tmp/research-plan-<plan-key>.md` and mention it in the final planning summary.
 - Restore traceability from tasks to `FR-*` and `TDR-*` IDs.
