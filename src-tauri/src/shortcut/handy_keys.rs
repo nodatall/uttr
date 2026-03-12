@@ -28,7 +28,7 @@
 //! via Tauri's event system.
 
 use handy_keys::{Hotkey, HotkeyId, HotkeyManager, HotkeyState, KeyboardListener};
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use serde::Serialize;
 use specta::Type;
 use std::collections::HashMap;
@@ -414,6 +414,9 @@ pub fn validate_shortcut(raw: &str) -> Result<(), String> {
     if raw.trim().is_empty() {
         return Err("Shortcut cannot be empty".into());
     }
+    if raw.trim().eq_ignore_ascii_case("fn") {
+        return Err("Fn-only shortcuts are unreliable. Use Fn with another key or choose a non-Fn shortcut.".into());
+    }
     // HandyKeys accepts modifier-only, key-only, and modifier+key combos
     // Just verify the string is parseable
     raw.parse::<Hotkey>()
@@ -426,7 +429,8 @@ pub fn init_shortcuts(app: &AppHandle) -> Result<(), String> {
     let state = HandyKeysState::new(app.clone())?;
 
     let default_bindings = settings::get_default_settings().bindings;
-    let user_settings = settings::load_or_create_app_settings(app);
+    let mut user_settings = settings::load_or_create_app_settings(app);
+    let mut updated_settings = false;
 
     // Register all bindings except cancel (which is dynamic)
     for (id, default_binding) in default_bindings {
@@ -438,11 +442,22 @@ pub fn init_shortcuts(app: &AppHandle) -> Result<(), String> {
             continue;
         }
 
-        let binding = user_settings
+        let mut binding = user_settings
             .bindings
             .get(&id)
             .cloned()
             .unwrap_or(default_binding);
+
+        if let Err(e) = validate_shortcut(&binding.current_binding) {
+            let fallback = binding.default_binding.clone();
+            warn!(
+                "Shortcut '{}' ('{}') is invalid for handy-keys: {}. Resetting to '{}'",
+                id, binding.current_binding, e, fallback
+            );
+            binding.current_binding = fallback;
+            user_settings.bindings.insert(id.clone(), binding.clone());
+            updated_settings = true;
+        }
 
         if let Err(e) = state.register(&binding) {
             error!(
@@ -450,6 +465,10 @@ pub fn init_shortcuts(app: &AppHandle) -> Result<(), String> {
                 id, e
             );
         }
+    }
+
+    if updated_settings {
+        settings::write_settings(app, user_settings);
     }
 
     app.manage(state);
