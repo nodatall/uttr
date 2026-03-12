@@ -432,6 +432,9 @@ impl ShortcutAction for TranscribeAction {
             tm.cancel_incremental_session();
             // Dynamically register the cancel shortcut in a separate task to avoid deadlock
             shortcut::register_cancel_shortcut(app);
+        } else {
+            utils::hide_recording_overlay(app);
+            change_tray_icon(app, TrayIconState::Idle);
         }
 
         debug!(

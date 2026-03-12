@@ -4,7 +4,7 @@ use crate::audio_toolkit::{
 use crate::helpers::clamshell;
 use crate::settings::{get_settings, AppSettings};
 use crate::utils;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
     Arc, Mutex,
@@ -397,11 +397,21 @@ impl AudioRecordingManager {
 
     /* ---------- recording --------------------------------------------------- */
 
-    pub fn try_start_recording(&self, binding_id: &str) -> bool {
-        let mut state = self.state.lock().unwrap();
+    fn start_recorder_command(&self) -> Result<(), String> {
+        let recorder_guard = self.recorder.lock().unwrap();
+        let rec = recorder_guard
+            .as_ref()
+            .ok_or_else(|| "Recorder not available".to_string())?;
+        rec.start()
+            .map_err(|err| format!("Failed to send recorder start command: {err}"))
+    }
 
-        if let RecordingState::Idle = *state {
+    pub fn try_start_recording(&self, binding_id: &str) -> bool {
+        if !matches!(*self.state.lock().unwrap(), RecordingState::Idle) {
+            false
+        } else {
             self.cancel_idle_stop_timer();
+
             // Ensure microphone is open in on-demand mode
             if matches!(*self.mode.lock().unwrap(), MicrophoneMode::OnDemand) {
                 if let Err(e) = self.start_microphone_stream() {
@@ -410,20 +420,25 @@ impl AudioRecordingManager {
                 }
             }
 
-            if let Some(rec) = self.recorder.lock().unwrap().as_ref() {
-                if rec.start().is_ok() {
-                    *self.is_recording.lock().unwrap() = true;
-                    *state = RecordingState::Recording {
-                        binding_id: binding_id.to_string(),
-                    };
-                    debug!("Recording started for binding {binding_id}");
-                    return true;
-                }
+            let start_result = self.start_recorder_command().or_else(|err| {
+                warn!("Recorder start failed; restarting microphone stream: {err}");
+                self.stop_microphone_stream();
+                self.start_microphone_stream()
+                    .map_err(|restart_err| restart_err.to_string())?;
+                self.start_recorder_command()
+            });
+
+            if let Err(err) = start_result {
+                error!("Recorder not available: {err}");
+                return false;
             }
-            error!("Recorder not available");
-            false
-        } else {
-            false
+
+            *self.is_recording.lock().unwrap() = true;
+            *self.state.lock().unwrap() = RecordingState::Recording {
+                binding_id: binding_id.to_string(),
+            };
+            debug!("Recording started for binding {binding_id}");
+            true
         }
     }
 
@@ -446,24 +461,31 @@ impl AudioRecordingManager {
                 *state = RecordingState::Idle;
                 drop(state);
 
-                let samples = if let Some(rec) = self.recorder.lock().unwrap().as_ref() {
-                    match rec.stop() {
-                        Ok(buf) => buf,
-                        Err(e) => {
-                            error!("stop() failed: {e}");
-                            Vec::new()
+                let (samples, should_reset_stream) = {
+                    let recorder_guard = self.recorder.lock().unwrap();
+                    if let Some(rec) = recorder_guard.as_ref() {
+                        match rec.stop() {
+                            Ok(buf) => (buf, false),
+                            Err(e) => {
+                                error!("stop() failed: {e}");
+                                (Vec::new(), true)
+                            }
                         }
+                    } else {
+                        error!("Recorder not available");
+                        (Vec::new(), true)
                     }
-                } else {
-                    error!("Recorder not available");
-                    Vec::new()
                 };
 
                 *self.is_recording.lock().unwrap() = false;
 
-                // In on-demand mode keep mic warm briefly to avoid startup lag
-                // for the next utterance.
-                self.schedule_idle_stop();
+                if should_reset_stream {
+                    self.stop_microphone_stream();
+                } else {
+                    // In on-demand mode keep mic warm briefly to avoid startup lag
+                    // for the next utterance.
+                    self.schedule_idle_stop();
+                }
 
                 // Pad if very short
                 let s_len = samples.len();
