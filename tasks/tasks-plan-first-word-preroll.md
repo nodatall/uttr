@@ -58,10 +58,10 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - verify: `cargo test --manifest-path src-tauri/Cargo.toml`
     - done_when: Recorder outputs remain compatible with incremental transcription assumptions, and the completed implementation keeps long-idle closed-stream misses explicitly deferred instead of changing manager lifecycle behavior.
 
-- [ ] 3.0 Run focused verification for user-visible recording behavior
+- [x] 3.0 Run focused verification for user-visible recording behavior
   - covers_prd: `FR-001`, `FR-004`
   - covers_tdd: `TDR-005`, `TDR-007`
-  - [ ] 3.1 Execute recorder-focused automated tests and warm-stream manual checks
+  - [x] 3.1 Execute recorder-focused automated tests and warm-stream manual checks
     - covers_prd: `FR-001`, `FR-004`
     - covers_tdd: `TDR-005`, `TDR-007`
     - output: `src-tauri/src/audio_toolkit/audio/recorder.rs`
