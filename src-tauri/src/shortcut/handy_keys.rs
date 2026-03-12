@@ -27,11 +27,11 @@
 //! polled from a dedicated recording thread. Events are emitted to the frontend
 //! via Tauri's event system.
 
-use handy_keys::{Hotkey, HotkeyId, HotkeyManager, HotkeyState, KeyboardListener};
+use handy_keys::{Hotkey, HotkeyId, HotkeyManager, HotkeyState, KeyEvent, KeyboardListener};
 use log::{debug, error, info, warn};
 use serde::Serialize;
 use specta::Type;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -119,9 +119,20 @@ impl HandyKeysState {
             }
         };
 
+        // Raw listener for modifier-only shortcuts like `fn`.
+        let modifier_listener = match KeyboardListener::new() {
+            Ok(listener) => Some(listener),
+            Err(e) => {
+                error!("Failed to create handy-keys modifier listener: {}", e);
+                None
+            }
+        };
+
         // Maps binding IDs to HotkeyIds and hotkey strings
         let mut binding_to_hotkey: HashMap<String, HotkeyId> = HashMap::new();
         let mut hotkey_to_binding: HashMap<HotkeyId, (String, String)> = HashMap::new(); // (binding_id, hotkey_string)
+        let mut modifier_only_bindings: HashMap<String, (Hotkey, String)> = HashMap::new();
+        let mut pressed_modifier_only: HashSet<String> = HashSet::new();
 
         loop {
             // Check for hotkey events (non-blocking)
@@ -133,6 +144,17 @@ impl HandyKeysState {
                     );
                     let is_pressed = event.state == HotkeyState::Pressed;
                     handle_shortcut_event(&app, binding_id, hotkey_string, is_pressed);
+                }
+            }
+
+            if let Some(listener) = modifier_listener.as_ref() {
+                while let Some(event) = listener.try_recv() {
+                    Self::dispatch_modifier_only_events(
+                        &app,
+                        &modifier_only_bindings,
+                        &mut pressed_modifier_only,
+                        &event,
+                    );
                 }
             }
 
@@ -148,6 +170,8 @@ impl HandyKeysState {
                             &manager,
                             &mut binding_to_hotkey,
                             &mut hotkey_to_binding,
+                            &mut modifier_only_bindings,
+                            &mut pressed_modifier_only,
                             &binding_id,
                             &hotkey_string,
                         );
@@ -161,6 +185,8 @@ impl HandyKeysState {
                             &manager,
                             &mut binding_to_hotkey,
                             &mut hotkey_to_binding,
+                            &mut modifier_only_bindings,
+                            &mut pressed_modifier_only,
                             &binding_id,
                         );
                         let _ = response.send(result);
@@ -188,12 +214,25 @@ impl HandyKeysState {
         manager: &HotkeyManager,
         binding_to_hotkey: &mut HashMap<String, HotkeyId>,
         hotkey_to_binding: &mut HashMap<HotkeyId, (String, String)>,
+        modifier_only_bindings: &mut HashMap<String, (Hotkey, String)>,
+        pressed_modifier_only: &mut HashSet<String>,
         binding_id: &str,
         hotkey_string: &str,
     ) -> Result<(), String> {
         let hotkey: Hotkey = hotkey_string
             .parse()
             .map_err(|e| format!("Failed to parse hotkey '{}': {}", hotkey_string, e))?;
+
+        if hotkey.key.is_none() {
+            modifier_only_bindings
+                .insert(binding_id.to_string(), (hotkey, hotkey_string.to_string()));
+            pressed_modifier_only.remove(binding_id);
+            debug!(
+                "Registered handy-keys modifier-only shortcut: {} -> {}",
+                binding_id, hotkey_string
+            );
+            return Ok(());
+        }
 
         let id = manager
             .register(hotkey)
@@ -214,8 +253,19 @@ impl HandyKeysState {
         manager: &HotkeyManager,
         binding_to_hotkey: &mut HashMap<String, HotkeyId>,
         hotkey_to_binding: &mut HashMap<HotkeyId, (String, String)>,
+        modifier_only_bindings: &mut HashMap<String, (Hotkey, String)>,
+        pressed_modifier_only: &mut HashSet<String>,
         binding_id: &str,
     ) -> Result<(), String> {
+        if modifier_only_bindings.remove(binding_id).is_some() {
+            pressed_modifier_only.remove(binding_id);
+            debug!(
+                "Unregistered handy-keys modifier-only shortcut: {}",
+                binding_id
+            );
+            return Ok(());
+        }
+
         if let Some(id) = binding_to_hotkey.remove(binding_id) {
             manager
                 .unregister(id)
@@ -224,6 +274,43 @@ impl HandyKeysState {
             debug!("Unregistered handy-keys shortcut: {}", binding_id);
         }
         Ok(())
+    }
+
+    fn dispatch_modifier_only_events(
+        app: &AppHandle,
+        modifier_only_bindings: &HashMap<String, (Hotkey, String)>,
+        pressed_modifier_only: &mut HashSet<String>,
+        event: &KeyEvent,
+    ) {
+        if event.key.is_some() {
+            return;
+        }
+
+        for (binding_id, (hotkey, hotkey_string)) in modifier_only_bindings {
+            match modifier_only_transition(
+                *hotkey,
+                event,
+                pressed_modifier_only.contains(binding_id),
+            ) {
+                Some(true) => {
+                    pressed_modifier_only.insert(binding_id.clone());
+                    debug!(
+                        "handy-keys modifier-only event: binding={}, hotkey={}, state=Pressed",
+                        binding_id, hotkey_string
+                    );
+                    handle_shortcut_event(app, binding_id, hotkey_string, true);
+                }
+                Some(false) => {
+                    pressed_modifier_only.remove(binding_id);
+                    debug!(
+                        "handy-keys modifier-only event: binding={}, hotkey={}, state=Released",
+                        binding_id, hotkey_string
+                    );
+                    handle_shortcut_event(app, binding_id, hotkey_string, false);
+                }
+                None => {}
+            }
+        }
     }
 
     /// Register a shortcut binding
@@ -414,9 +501,6 @@ pub fn validate_shortcut(raw: &str) -> Result<(), String> {
     if raw.trim().is_empty() {
         return Err("Shortcut cannot be empty".into());
     }
-    if raw.trim().eq_ignore_ascii_case("fn") {
-        return Err("Fn-only shortcuts are unreliable. Use Fn with another key or choose a non-Fn shortcut.".into());
-    }
     // HandyKeys accepts modifier-only, key-only, and modifier+key combos
     // Just verify the string is parseable
     raw.parse::<Hotkey>()
@@ -429,8 +513,7 @@ pub fn init_shortcuts(app: &AppHandle) -> Result<(), String> {
     let state = HandyKeysState::new(app.clone())?;
 
     let default_bindings = settings::get_default_settings().bindings;
-    let mut user_settings = settings::load_or_create_app_settings(app);
-    let mut updated_settings = false;
+    let user_settings = settings::load_or_create_app_settings(app);
 
     // Register all bindings except cancel (which is dynamic)
     for (id, default_binding) in default_bindings {
@@ -442,21 +525,18 @@ pub fn init_shortcuts(app: &AppHandle) -> Result<(), String> {
             continue;
         }
 
-        let mut binding = user_settings
+        let binding = user_settings
             .bindings
             .get(&id)
             .cloned()
             .unwrap_or(default_binding);
 
         if let Err(e) = validate_shortcut(&binding.current_binding) {
-            let fallback = binding.default_binding.clone();
             warn!(
-                "Shortcut '{}' ('{}') is invalid for handy-keys: {}. Resetting to '{}'",
-                id, binding.current_binding, e, fallback
+                "Shortcut '{}' ('{}') is invalid for handy-keys: {}. Skipping registration.",
+                id, binding.current_binding, e
             );
-            binding.current_binding = fallback;
-            user_settings.bindings.insert(id.clone(), binding.clone());
-            updated_settings = true;
+            continue;
         }
 
         if let Err(e) = state.register(&binding) {
@@ -467,13 +547,68 @@ pub fn init_shortcuts(app: &AppHandle) -> Result<(), String> {
         }
     }
 
-    if updated_settings {
-        settings::write_settings(app, user_settings);
-    }
-
     app.manage(state);
     info!("handy-keys shortcuts initialized");
     Ok(())
+}
+
+fn modifier_only_transition(hotkey: Hotkey, event: &KeyEvent, was_active: bool) -> Option<bool> {
+    if hotkey.key.is_some() || event.key.is_some() {
+        return None;
+    }
+
+    let is_active = hotkey.modifiers.matches(event.modifiers);
+    if !was_active && event.is_key_down && is_active {
+        Some(true)
+    } else if was_active && !event.is_key_down && !is_active {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn modifier_only_transition_starts_fn_binding_on_press() {
+        let hotkey: Hotkey = "fn".parse().unwrap();
+        let event = KeyEvent {
+            modifiers: handy_keys::Modifiers::FN,
+            key: None,
+            is_key_down: true,
+            changed_modifier: Some(handy_keys::Modifiers::FN),
+        };
+
+        assert_eq!(modifier_only_transition(hotkey, &event, false), Some(true));
+    }
+
+    #[test]
+    fn modifier_only_transition_stops_fn_binding_on_release() {
+        let hotkey: Hotkey = "fn".parse().unwrap();
+        let event = KeyEvent {
+            modifiers: handy_keys::Modifiers::empty(),
+            key: None,
+            is_key_down: false,
+            changed_modifier: Some(handy_keys::Modifiers::FN),
+        };
+
+        assert_eq!(modifier_only_transition(hotkey, &event, true), Some(false));
+    }
+
+    #[test]
+    fn modifier_only_transition_ignores_unrelated_modifier_press() {
+        let hotkey: Hotkey = "fn".parse().unwrap();
+        let event = KeyEvent {
+            modifiers: handy_keys::Modifiers::SHIFT_LEFT,
+            key: None,
+            is_key_down: true,
+            changed_modifier: Some(handy_keys::Modifiers::SHIFT_LEFT),
+        };
+
+        assert_eq!(modifier_only_transition(hotkey, &event, false), None);
+    }
 }
 
 /// Register the cancel shortcut (called when recording starts)
