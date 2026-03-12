@@ -24,6 +24,11 @@ enum Cmd {
     Shutdown,
 }
 
+enum WorkerReady {
+    Ready,
+    Failed(String),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct DrainResult {
     pub samples: Vec<f32>,
@@ -70,6 +75,7 @@ impl AudioRecorder {
 
         let (sample_tx, sample_rx) = mpsc::channel::<Vec<f32>>();
         let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
+        let (ready_tx, ready_rx) = mpsc::channel::<WorkerReady>();
 
         let host = crate::audio_toolkit::get_cpal_host();
         let device = match device {
@@ -85,50 +91,97 @@ impl AudioRecorder {
         let level_cb = self.level_cb.clone();
 
         let worker = std::thread::spawn(move || {
-            let config = AudioRecorder::get_preferred_config(&thread_device)
-                .expect("failed to fetch preferred config");
+            let startup_result = (|| -> Result<(cpal::Stream, u32), String> {
+                let config = AudioRecorder::get_preferred_config(&thread_device)
+                    .map_err(|err| format!("failed to fetch preferred config: {err}"))?;
 
-            let sample_rate = config.sample_rate().0;
-            let channels = config.channels() as usize;
+                let sample_rate = config.sample_rate().0;
+                let channels = config.channels() as usize;
 
-            log::info!(
-                "Using device: {:?}\nSample rate: {}\nChannels: {}\nFormat: {:?}",
-                thread_device.name(),
-                sample_rate,
-                channels,
-                config.sample_format()
-            );
+                log::info!(
+                    "Using device: {:?}\nSample rate: {}\nChannels: {}\nFormat: {:?}",
+                    thread_device.name(),
+                    sample_rate,
+                    channels,
+                    config.sample_format()
+                );
 
-            let stream = match config.sample_format() {
-                cpal::SampleFormat::U8 => {
-                    AudioRecorder::build_stream::<u8>(&thread_device, &config, sample_tx, channels)
-                        .unwrap()
+                let stream = match config.sample_format() {
+                    cpal::SampleFormat::U8 => AudioRecorder::build_stream::<u8>(
+                        &thread_device,
+                        &config,
+                        sample_tx,
+                        channels,
+                    ),
+                    cpal::SampleFormat::I8 => AudioRecorder::build_stream::<i8>(
+                        &thread_device,
+                        &config,
+                        sample_tx,
+                        channels,
+                    ),
+                    cpal::SampleFormat::I16 => AudioRecorder::build_stream::<i16>(
+                        &thread_device,
+                        &config,
+                        sample_tx,
+                        channels,
+                    ),
+                    cpal::SampleFormat::I32 => AudioRecorder::build_stream::<i32>(
+                        &thread_device,
+                        &config,
+                        sample_tx,
+                        channels,
+                    ),
+                    cpal::SampleFormat::F32 => AudioRecorder::build_stream::<f32>(
+                        &thread_device,
+                        &config,
+                        sample_tx,
+                        channels,
+                    ),
+                    _ => return Err("unsupported sample format".to_string()),
                 }
-                cpal::SampleFormat::I8 => {
-                    AudioRecorder::build_stream::<i8>(&thread_device, &config, sample_tx, channels)
-                        .unwrap()
-                }
-                cpal::SampleFormat::I16 => {
-                    AudioRecorder::build_stream::<i16>(&thread_device, &config, sample_tx, channels)
-                        .unwrap()
-                }
-                cpal::SampleFormat::I32 => {
-                    AudioRecorder::build_stream::<i32>(&thread_device, &config, sample_tx, channels)
-                        .unwrap()
-                }
-                cpal::SampleFormat::F32 => {
-                    AudioRecorder::build_stream::<f32>(&thread_device, &config, sample_tx, channels)
-                        .unwrap()
-                }
-                _ => panic!("unsupported sample format"),
-            };
+                .map_err(|err| format!("failed to build input stream: {err}"))?;
 
-            stream.play().expect("failed to start stream");
+                stream
+                    .play()
+                    .map_err(|err| format!("failed to start stream: {err}"))?;
 
-            // keep the stream alive while we process samples
-            run_consumer(sample_rate, vad, sample_rx, cmd_rx, level_cb);
-            // stream is dropped here, after run_consumer returns
+                Ok((stream, sample_rate))
+            })();
+
+            match startup_result {
+                Ok((stream, sample_rate)) => {
+                    let _ = ready_tx.send(WorkerReady::Ready);
+                    // keep the stream alive while we process samples
+                    run_consumer(sample_rate, vad, sample_rx, cmd_rx, level_cb);
+                    // stream is dropped here, after run_consumer returns
+                    drop(stream);
+                }
+                Err(err) => {
+                    let _ = ready_tx.send(WorkerReady::Failed(err));
+                }
+            }
         });
+
+        match ready_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(WorkerReady::Ready) => {}
+            Ok(WorkerReady::Failed(err)) => {
+                let _ = worker.join();
+                return Err(Box::new(Error::new(std::io::ErrorKind::Other, err)));
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                return Err(Box::new(Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "Timed out waiting for recorder worker to become ready",
+                )));
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                let _ = worker.join();
+                return Err(Box::new(Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "Recorder worker exited before reporting readiness",
+                )));
+            }
+        }
 
         self.device = Some(device);
         self.cmd_tx = Some(cmd_tx);
