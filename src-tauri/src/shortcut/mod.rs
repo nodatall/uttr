@@ -20,7 +20,7 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::settings::{
-    self, get_settings, AutoSubmitKey, ClipboardHandling, KeyboardImplementation, LLMPrompt,
+    self, get_settings, AutoSubmitKey, ClipboardHandling, KeyboardImplementation,
     OverlayPosition, PasteMethod, ShortcutBinding, SoundTheme, TypingTool,
     APPLE_INTELLIGENCE_DEFAULT_MODEL_ID, APPLE_INTELLIGENCE_PROVIDER_ID,
 };
@@ -866,76 +866,12 @@ pub fn set_post_process_provider(app: AppHandle, provider_id: String) -> Result<
 
 #[tauri::command]
 #[specta::specta]
-pub fn add_post_process_prompt(
+pub fn change_post_process_cleaning_prompt_preset(
     app: AppHandle,
-    name: String,
-    prompt: String,
-) -> Result<LLMPrompt, String> {
-    let mut settings = settings::get_settings(&app);
-
-    // Generate unique ID using timestamp and random component
-    let id = format!("prompt_{}", chrono::Utc::now().timestamp_millis());
-
-    let new_prompt = LLMPrompt {
-        id: id.clone(),
-        name,
-        prompt,
-    };
-
-    settings.post_process_prompts.push(new_prompt.clone());
-    settings::write_settings(&app, settings);
-
-    Ok(new_prompt)
-}
-
-#[tauri::command]
-#[specta::specta]
-pub fn update_post_process_prompt(
-    app: AppHandle,
-    id: String,
-    name: String,
-    prompt: String,
+    preset: settings::CleaningPromptPreset,
 ) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
-
-    if let Some(existing_prompt) = settings
-        .post_process_prompts
-        .iter_mut()
-        .find(|p| p.id == id)
-    {
-        existing_prompt.name = name;
-        existing_prompt.prompt = prompt;
-        settings::write_settings(&app, settings);
-        Ok(())
-    } else {
-        Err(format!("Prompt with id '{}' not found", id))
-    }
-}
-
-#[tauri::command]
-#[specta::specta]
-pub fn delete_post_process_prompt(app: AppHandle, id: String) -> Result<(), String> {
-    let mut settings = settings::get_settings(&app);
-
-    // Don't allow deleting the last prompt
-    if settings.post_process_prompts.len() <= 1 {
-        return Err("Cannot delete the last prompt".to_string());
-    }
-
-    // Find and remove the prompt
-    let original_len = settings.post_process_prompts.len();
-    settings.post_process_prompts.retain(|p| p.id != id);
-
-    if settings.post_process_prompts.len() == original_len {
-        return Err(format!("Prompt with id '{}' not found", id));
-    }
-
-    // If the deleted prompt was selected, select the first one or None
-    if settings.post_process_selected_prompt_id.as_ref() == Some(&id) {
-        settings.post_process_selected_prompt_id =
-            settings.post_process_prompts.first().map(|p| p.id.clone());
-    }
-
+    settings.post_process_cleaning_prompt_preset = preset;
     settings::write_settings(&app, settings);
     Ok(())
 }
@@ -987,15 +923,18 @@ pub async fn fetch_post_process_models(
 
 #[tauri::command]
 #[specta::specta]
-pub fn set_post_process_selected_prompt(app: AppHandle, id: String) -> Result<(), String> {
+pub fn change_post_process_timeout_setting(app: AppHandle, timeout_secs: u64) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
+    settings.post_process_timeout_secs = timeout_secs;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
 
-    // Verify the prompt exists
-    if !settings.post_process_prompts.iter().any(|p| p.id == id) {
-        return Err(format!("Prompt with id '{}' not found", id));
-    }
-
-    settings.post_process_selected_prompt_id = Some(id);
+#[tauri::command]
+#[specta::specta]
+pub fn change_post_process_system_prompt_setting(app: AppHandle, system_prompt: String) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.post_process_system_prompt = system_prompt;
     settings::write_settings(&app, settings);
     Ok(())
 }

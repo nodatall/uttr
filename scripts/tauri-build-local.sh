@@ -40,4 +40,9 @@ if [[ ! -x "${TAURI_BIN}" ]]; then
   exit 1
 fi
 
+if [[ "${TAURI_CMD}" == "dev" ]]; then
+  VITE_PORT="${VITE_PORT:-1420}"
+  exec "${TAURI_BIN}" dev --config "{\"build\":{\"devUrl\":\"http://localhost:${VITE_PORT}\"}}" "${@:2}"
+fi
+
 exec "${TAURI_BIN}" "$@"

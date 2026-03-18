@@ -121,8 +121,12 @@ const settingUpdaters: {
   history_limit: (value) => commands.updateHistoryLimit(value as number),
   post_process_enabled: (value) =>
     commands.changePostProcessEnabledSetting(value as boolean),
-  post_process_selected_prompt_id: (value) =>
-    commands.setPostProcessSelectedPrompt(value as string),
+  post_process_timeout_secs: (value) =>
+    commands.changePostProcessTimeoutSetting(value as number),
+  post_process_cleaning_prompt_preset: (value) =>
+    commands.changePostProcessCleaningPromptPreset(value as any),
+  post_process_system_prompt: (value) =>
+    commands.changePostProcessSystemPromptSetting(value as string),
   mute_while_recording: (value) =>
     commands.changeMuteWhileRecordingSetting(value as boolean),
   append_trailing_space: (value) =>
