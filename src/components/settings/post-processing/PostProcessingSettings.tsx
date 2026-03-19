@@ -1,18 +1,15 @@
 import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RefreshCcw } from "lucide-react";
-import { commands } from "@/bindings";
 
 import { Alert } from "../../ui/Alert";
 import {
-  Dropdown,
   SettingContainer,
   SettingsGroup,
-  Textarea,
+  Slider,
 } from "@/components/ui";
 import { Button } from "../../ui/Button";
 import { ResetButton } from "../../ui/ResetButton";
-import { Input } from "../../ui/Input";
 
 import { ProviderSelect } from "../PostProcessingSettingsApi/ProviderSelect";
 import { BaseUrlField } from "../PostProcessingSettingsApi/BaseUrlField";
@@ -95,7 +92,7 @@ const PostProcessingSettingsApiComponent: React.FC = () => {
         </>
       )}
 
-      {!state.isAppleProvider && !state.isGroqProvider && (
+      {!state.isAppleProvider && (
         <SettingContainer
           title={t("settings.postProcessing.api.model.title")}
           description={
@@ -142,285 +139,135 @@ const PostProcessingSettingsApiComponent: React.FC = () => {
   );
 };
 
-const PostProcessingSettingsPromptsComponent: React.FC = () => {
-  const { t } = useTranslation();
-  const { getSetting, updateSetting, isUpdating, refreshSettings } =
-    useSettings();
-  const [isCreating, setIsCreating] = useState(false);
-  const [draftName, setDraftName] = useState("");
-  const [draftText, setDraftText] = useState("");
-
-  const prompts = getSetting("post_process_prompts") || [];
-  const selectedPromptId = getSetting("post_process_selected_prompt_id") || "";
-  const selectedPrompt =
-    prompts.find((prompt) => prompt.id === selectedPromptId) || null;
-
-  useEffect(() => {
-    if (isCreating) return;
-
-    if (selectedPrompt) {
-      setDraftName(selectedPrompt.name);
-      setDraftText(selectedPrompt.prompt);
-    } else {
-      setDraftName("");
-      setDraftText("");
-    }
-  }, [
-    isCreating,
-    selectedPromptId,
-    selectedPrompt?.name,
-    selectedPrompt?.prompt,
-  ]);
-
-  const handlePromptSelect = (promptId: string | null) => {
-    if (!promptId) return;
-    updateSetting("post_process_selected_prompt_id", promptId);
-    setIsCreating(false);
-  };
-
-  const handleCreatePrompt = async () => {
-    if (!draftName.trim() || !draftText.trim()) return;
-
-    try {
-      const result = await commands.addPostProcessPrompt(
-        draftName.trim(),
-        draftText.trim(),
-      );
-      if (result.status === "ok") {
-        await refreshSettings();
-        updateSetting("post_process_selected_prompt_id", result.data.id);
-        setIsCreating(false);
-      }
-    } catch (error) {
-      console.error("Failed to create prompt:", error);
-    }
-  };
-
-  const handleUpdatePrompt = async () => {
-    if (!selectedPromptId || !draftName.trim() || !draftText.trim()) return;
-
-    try {
-      await commands.updatePostProcessPrompt(
-        selectedPromptId,
-        draftName.trim(),
-        draftText.trim(),
-      );
-      await refreshSettings();
-    } catch (error) {
-      console.error("Failed to update prompt:", error);
-    }
-  };
-
-  const handleDeletePrompt = async (promptId: string) => {
-    if (!promptId) return;
-
-    try {
-      await commands.deletePostProcessPrompt(promptId);
-      await refreshSettings();
-      setIsCreating(false);
-    } catch (error) {
-      console.error("Failed to delete prompt:", error);
-    }
-  };
-
-  const handleCancelCreate = () => {
-    setIsCreating(false);
-    if (selectedPrompt) {
-      setDraftName(selectedPrompt.name);
-      setDraftText(selectedPrompt.prompt);
-    } else {
-      setDraftName("");
-      setDraftText("");
-    }
-  };
-
-  const handleStartCreate = () => {
-    setIsCreating(true);
-    setDraftName("");
-    setDraftText("");
-  };
-
-  const hasPrompts = prompts.length > 0;
-  const isDirty =
-    !!selectedPrompt &&
-    (draftName.trim() !== selectedPrompt.name ||
-      draftText.trim() !== selectedPrompt.prompt.trim());
-
-  return (
-    <SettingContainer
-      title={t("settings.postProcessing.prompts.selectedPrompt.title")}
-      description={t(
-        "settings.postProcessing.prompts.selectedPrompt.description",
-      )}
-      descriptionMode="tooltip"
-      layout="stacked"
-      grouped={true}
-    >
-      <div className="space-y-3">
-        <div className="flex gap-2">
-          <Dropdown
-            selectedValue={selectedPromptId || null}
-            options={prompts.map((p) => ({
-              value: p.id,
-              label: p.name,
-            }))}
-            onSelect={(value) => handlePromptSelect(value)}
-            placeholder={
-              prompts.length === 0
-                ? t("settings.postProcessing.prompts.noPrompts")
-                : t("settings.postProcessing.prompts.selectPrompt")
-            }
-            disabled={
-              isUpdating("post_process_selected_prompt_id") || isCreating
-            }
-            className="flex-1"
-          />
-          <Button
-            onClick={handleStartCreate}
-            variant="primary"
-            size="md"
-            disabled={isCreating}
-          >
-            {t("settings.postProcessing.prompts.createNew")}
-          </Button>
-        </div>
-
-        {!isCreating && hasPrompts && selectedPrompt && (
-          <div className="space-y-3">
-            <div className="space-y-2 flex flex-col">
-              <label className="text-sm font-semibold">
-                {t("settings.postProcessing.prompts.promptLabel")}
-              </label>
-              <Input
-                type="text"
-                value={draftName}
-                onChange={(e) => setDraftName(e.target.value)}
-                placeholder={t(
-                  "settings.postProcessing.prompts.promptLabelPlaceholder",
-                )}
-                variant="compact"
-              />
-            </div>
-
-            <div className="space-y-2 flex flex-col">
-              <label className="text-sm font-semibold">
-                {t("settings.postProcessing.prompts.promptInstructions")}
-              </label>
-              <Textarea
-                value={draftText}
-                onChange={(e) => setDraftText(e.target.value)}
-                placeholder={t(
-                  "settings.postProcessing.prompts.promptInstructionsPlaceholder",
-                )}
-              />
-              <p
-                className="text-xs text-mid-gray/70"
-                dangerouslySetInnerHTML={{
-                  __html: t("settings.postProcessing.prompts.promptTip"),
-                }}
-              />
-            </div>
-
-            <div className="flex gap-2 pt-2">
-              <Button
-                onClick={handleUpdatePrompt}
-                variant="primary"
-                size="md"
-                disabled={!draftName.trim() || !draftText.trim() || !isDirty}
-              >
-                {t("settings.postProcessing.prompts.updatePrompt")}
-              </Button>
-              <Button
-                onClick={() => handleDeletePrompt(selectedPromptId)}
-                variant="secondary"
-                size="md"
-                disabled={!selectedPromptId || prompts.length <= 1}
-              >
-                {t("settings.postProcessing.prompts.deletePrompt")}
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {!isCreating && !selectedPrompt && (
-          <div className="p-3 bg-mid-gray/5 rounded-md border border-mid-gray/20">
-            <p className="text-sm text-mid-gray">
-              {hasPrompts
-                ? t("settings.postProcessing.prompts.selectToEdit")
-                : t("settings.postProcessing.prompts.createFirst")}
-            </p>
-          </div>
-        )}
-
-        {isCreating && (
-          <div className="space-y-3">
-            <div className="space-y-2 block flex flex-col">
-              <label className="text-sm font-semibold text-text">
-                {t("settings.postProcessing.prompts.promptLabel")}
-              </label>
-              <Input
-                type="text"
-                value={draftName}
-                onChange={(e) => setDraftName(e.target.value)}
-                placeholder={t(
-                  "settings.postProcessing.prompts.promptLabelPlaceholder",
-                )}
-                variant="compact"
-              />
-            </div>
-
-            <div className="space-y-2 flex flex-col">
-              <label className="text-sm font-semibold">
-                {t("settings.postProcessing.prompts.promptInstructions")}
-              </label>
-              <Textarea
-                value={draftText}
-                onChange={(e) => setDraftText(e.target.value)}
-                placeholder={t(
-                  "settings.postProcessing.prompts.promptInstructionsPlaceholder",
-                )}
-              />
-              <p
-                className="text-xs text-mid-gray/70"
-                dangerouslySetInnerHTML={{
-                  __html: t("settings.postProcessing.prompts.promptTip"),
-                }}
-              />
-            </div>
-
-            <div className="flex gap-2 pt-2">
-              <Button
-                onClick={handleCreatePrompt}
-                variant="primary"
-                size="md"
-                disabled={!draftName.trim() || !draftText.trim()}
-              >
-                {t("settings.postProcessing.prompts.createPrompt")}
-              </Button>
-              <Button
-                onClick={handleCancelCreate}
-                variant="secondary"
-                size="md"
-              >
-                {t("settings.postProcessing.prompts.cancel")}
-              </Button>
-            </div>
-          </div>
-        )}
-      </div>
-    </SettingContainer>
-  );
-};
-
 export const PostProcessingSettingsApi = React.memo(
   PostProcessingSettingsApiComponent,
 );
 PostProcessingSettingsApi.displayName = "PostProcessingSettingsApi";
 
-export const PostProcessingSettingsPrompts = React.memo(
-  PostProcessingSettingsPromptsComponent,
+type CleaningPromptPreset = "strict" | "nuanced" | "custom";
+
+const PRESET_OPTIONS: { value: CleaningPromptPreset; label: string; hint: string }[] = [
+  { value: "strict", label: "Strict", hint: "8B+ friendly" },
+  { value: "nuanced", label: "Nuanced", hint: "70B recommended" },
+  { value: "custom", label: "Custom", hint: "" },
+];
+
+// Matches STRICT_CLEANING_PROMPT in settings.rs — used as the default starting point for Custom
+const STRICT_PROMPT_DEFAULT = `You are a transcript cleaning assistant. Clean the transcript in the user message following these rules:
+1. Fix spelling, capitalisation, and punctuation errors.
+2. Convert number words to digits (twenty-five → 25, ten percent → 10%, five dollars → $5).
+3. Replace spoken punctuation with symbols (period → ., comma → ,, question mark → ?).
+4. Remove filler words (um, uh, "like" used as a filler).
+5. Keep the original language.
+6. Preserve exact meaning and word order. Do not paraphrase or reorder content.
+
+Return only the cleaned transcript.
+No explanation.`;
+
+const PostProcessingSettingsAdvancedComponent: React.FC = () => {
+  const { getSetting, updateSetting, isUpdating } = useSettings();
+
+  const timeoutSecs = (getSetting("post_process_timeout_secs") as number) ?? 60;
+  const preset = (getSetting("post_process_cleaning_prompt_preset") as CleaningPromptPreset) ?? "strict";
+  const systemPrompt = (getSetting("post_process_system_prompt") as string) ?? "";
+
+  const [draftSystemPrompt, setDraftSystemPrompt] = useState(systemPrompt);
+  const isSystemPromptDirty = draftSystemPrompt !== systemPrompt;
+
+  useEffect(() => {
+    setDraftSystemPrompt(systemPrompt);
+  }, [systemPrompt]);
+
+  const handlePresetSelect = (value: CleaningPromptPreset) => {
+    if (value === "custom" && !systemPrompt.trim()) {
+      setDraftSystemPrompt(STRICT_PROMPT_DEFAULT);
+    }
+    updateSetting("post_process_cleaning_prompt_preset", value as any);
+  };
+
+  return (
+    <>
+      <SettingContainer
+        title="Cleaning Prompt"
+        description="Controls how the LLM rewrites your transcript."
+        descriptionMode="tooltip"
+        layout="stacked"
+        grouped={true}
+      >
+        <div className="space-y-3">
+          <div className="flex gap-2">
+            {PRESET_OPTIONS.map((option) => (
+              <button
+                key={option.value}
+                onClick={() => handlePresetSelect(option.value)}
+                className={`flex flex-1 flex-col items-center px-4 py-2 rounded-md border text-sm font-medium transition-colors ${
+                  preset === option.value
+                    ? "border-logo-primary/70 bg-logo-primary/10 text-text"
+                    : "border-mid-gray/30 bg-white/5 text-mid-gray hover:border-mid-gray/50 hover:text-text"
+                }`}
+              >
+                <span>{option.label}</span>
+                {option.hint && (
+                  <span className="text-xs text-mid-gray/60 font-normal mt-0.5">{option.hint}</span>
+                )}
+              </button>
+            ))}
+          </div>
+
+          {preset === "custom" && (
+            <div className="space-y-2">
+              <textarea
+                value={draftSystemPrompt}
+                onChange={(e) => setDraftSystemPrompt(e.target.value)}
+                onMouseUp={(e) => { const t = e.target as HTMLTextAreaElement; setTimeout(() => t.select(), 0); }}
+                rows={6}
+                placeholder="Write your cleaning instructions here."
+                className="w-full rounded-md border border-mid-gray/30 bg-white/5 px-3 py-2 text-sm text-text font-mono resize-none overflow-hidden cursor-pointer focus:cursor-text focus:outline-none focus:ring-1 focus:ring-logo-primary/50 focus:border-logo-primary/50"
+              />
+              {isSystemPromptDirty && (
+                <div className="flex gap-2 pt-1">
+                  <Button
+                    onClick={() => updateSetting("post_process_system_prompt", draftSystemPrompt)}
+                    variant="primary"
+                    size="md"
+                    disabled={isUpdating("post_process_system_prompt")}
+                  >
+                    Save
+                  </Button>
+                  <Button
+                    onClick={() => setDraftSystemPrompt(systemPrompt)}
+                    variant="secondary"
+                    size="md"
+                  >
+                    Cancel
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </SettingContainer>
+      <Slider
+        value={timeoutSecs}
+        onChange={(val) => updateSetting("post_process_timeout_secs", Math.round(val))}
+        min={5}
+        max={120}
+        step={1}
+        label="Timeout"
+        description="Maximum time to wait for post-processing before falling back to the raw transcript."
+        descriptionMode="tooltip"
+        grouped={true}
+        formatValue={(v) => `${Math.round(v)}s`}
+        disabled={isUpdating("post_process_timeout_secs")}
+      />
+    </>
+  );
+};
+
+export const PostProcessingSettingsAdvanced = React.memo(
+  PostProcessingSettingsAdvancedComponent,
 );
-PostProcessingSettingsPrompts.displayName = "PostProcessingSettingsPrompts";
+PostProcessingSettingsAdvanced.displayName = "PostProcessingSettingsAdvanced";
 
 export const PostProcessingSettings: React.FC = () => {
   const { t } = useTranslation();
@@ -429,6 +276,9 @@ export const PostProcessingSettings: React.FC = () => {
     <div className="max-w-3xl w-full mx-auto space-y-6">
       <SettingsGroup title={t("settings.postProcessing.api.title")}>
         <PostProcessingSettingsApi />
+      </SettingsGroup>
+      <SettingsGroup title="Advanced">
+        <PostProcessingSettingsAdvanced />
       </SettingsGroup>
     </div>
   );

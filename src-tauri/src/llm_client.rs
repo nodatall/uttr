@@ -84,6 +84,7 @@ pub async fn send_chat_completion(
     api_key: String,
     model: &str,
     prompt: String,
+    system_prompt: Option<&str>,
 ) -> Result<Option<String>, String> {
     let base_url = provider.base_url.trim_end_matches('/');
     let url = format!("{}/chat/completions", base_url);
@@ -92,12 +93,23 @@ pub async fn send_chat_completion(
 
     let client = create_client(provider, &api_key)?;
 
+    let mut messages = Vec::new();
+    if let Some(sys) = system_prompt {
+        if !sys.trim().is_empty() {
+            messages.push(ChatMessage {
+                role: "system".to_string(),
+                content: sys.to_string(),
+            });
+        }
+    }
+    messages.push(ChatMessage {
+        role: "user".to_string(),
+        content: prompt,
+    });
+
     let request_body = ChatCompletionRequest {
         model: model.to_string(),
-        messages: vec![ChatMessage {
-            role: "user".to_string(),
-            content: prompt,
-        }],
+        messages,
     };
 
     let response = client

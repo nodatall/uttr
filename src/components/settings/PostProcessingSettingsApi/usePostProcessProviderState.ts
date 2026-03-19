@@ -178,20 +178,39 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
     const seen = new Set<string>();
     const options: ModelOption[] = [];
 
-    const upsert = (value: string | null | undefined) => {
-      const trimmed = value?.trim();
-      if (!trimmed || seen.has(trimmed)) return;
-      seen.add(trimmed);
-      options.push({ value: trimmed, label: trimmed });
+    // Exclude models not suited for text cleanup: speech-to-text, safety classifiers,
+    // TTS, agentic compound models, and non-English focused models.
+    const EXCLUDED_PATTERNS = ["whisper", "guard", "safeguard", "orpheus", "compound", "kimi"];
+    const isExcluded = (id: string) =>
+      EXCLUDED_PATTERNS.some((p) => id.toLowerCase().includes(p));
+
+    // Strip provider prefix for display (e.g. "meta-llama/llama-4-scout" → "llama-4-scout")
+    const displayLabel = (id: string) => id.includes("/") ? id.split("/").pop()! : id;
+
+    // Extract model size in billions for sorting (e.g. "70b" → 70, "22m" → 0.022, missing → Infinity)
+    const modelSizeB = (id: string): number => {
+      const match = id.toLowerCase().match(/(\d+(?:\.\d+)?)(b|m)/);
+      if (!match) return Infinity;
+      const num = parseFloat(match[1]);
+      return match[2] === "m" ? num / 1000 : num;
     };
 
-    // Add available models from API
-    for (const candidate of availableModelsRaw) {
-      upsert(candidate);
+    const filtered = availableModelsRaw.filter((id) => !isExcluded(id));
+    filtered.sort((a, b) => modelSizeB(a) - modelSizeB(b));
+
+    for (const candidate of filtered) {
+      const trimmed = candidate.trim();
+      if (!trimmed || seen.has(trimmed)) continue;
+      seen.add(trimmed);
+      options.push({ value: trimmed, label: displayLabel(trimmed) });
     }
 
     // Ensure current model is in the list
-    upsert(model);
+    const currentTrimmed = model?.trim();
+    if (currentTrimmed && !seen.has(currentTrimmed)) {
+      seen.add(currentTrimmed);
+      options.push({ value: currentTrimmed, label: displayLabel(currentTrimmed) });
+    }
 
     return options;
   }, [availableModelsRaw, model]);

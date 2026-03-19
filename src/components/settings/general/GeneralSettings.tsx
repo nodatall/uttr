@@ -10,6 +10,7 @@ import { ShowTrayIcon } from "../ShowTrayIcon";
 import { TypingToolSetting } from "../TypingTool";
 import { PostProcessingToggle } from "../PostProcessingToggle";
 import { PostProcessingSettingsApi } from "../PostProcessingSettingsApi";
+import { PostProcessingSettingsAdvanced } from "../post-processing/PostProcessingSettings";
 import { HistoryLimit } from "../HistoryLimit";
 import { RecordingRetentionPeriodSelector } from "../RecordingRetentionPeriod";
 import { AppLanguageSelector } from "../AppLanguageSelector";
@@ -28,6 +29,7 @@ export const GeneralSettings: React.FC = () => {
     <div className="max-w-3xl w-full mx-auto space-y-6">
       <SettingsGroup title={t("settings.general.title")}>
         <ShortcutInput shortcutId="transcribe" grouped={true} />
+        <ShortcutInput shortcutId="transcribe_with_post_process" grouped={true} />
         <PushToTalk descriptionMode="tooltip" grouped={true} />
         <AutostartToggle descriptionMode="tooltip" grouped={true} />
         <ShowTrayIcon descriptionMode="tooltip" grouped={true} />
@@ -59,6 +61,7 @@ export const GeneralSettings: React.FC = () => {
         <TypingToolSetting descriptionMode="tooltip" grouped={true} />
         <PostProcessingToggle descriptionMode="tooltip" grouped={true} />
         {postProcessEnabled && <PostProcessingSettingsApi />}
+        {postProcessEnabled && <PostProcessingSettingsAdvanced />}
       </SettingsGroup>
       <SettingsGroup title={t("settings.advanced.groups.history")}>
         <HistoryLimit descriptionMode="tooltip" grouped={true} />

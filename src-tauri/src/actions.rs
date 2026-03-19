@@ -7,7 +7,8 @@ use crate::managers::history::HistoryManager;
 use crate::managers::model::is_cloud_model_id;
 use crate::managers::transcription::TranscriptionManager;
 use crate::settings::{
-    get_settings, AppSettings, PostProcessProvider, APPLE_INTELLIGENCE_PROVIDER_ID,
+    get_settings, AppSettings, CleaningPromptPreset, PostProcessProvider,
+    APPLE_INTELLIGENCE_PROVIDER_ID, NUANCED_CLEANING_PROMPT, STRICT_CLEANING_PROMPT,
 };
 use crate::shortcut;
 use crate::tray::{change_tray_icon, TrayIconState};
@@ -78,7 +79,7 @@ const GROQ_MODEL_PREFERENCES: &[&str] = &[
     "mixtral-8x7b-32768",
 ];
 const FULL_PASS_TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(20);
-const POST_PROCESS_TIMEOUT: Duration = Duration::from_secs(12);
+const POST_PROCESS_TIMEOUT_DEFAULT: Duration = Duration::from_secs(60);
 const SHORT_UTTERANCE_SAMPLES: usize = 16_000 * 10;
 
 static AUTO_SELECTED_MODEL_CACHE: Lazy<Mutex<HashMap<String, String>>> =
@@ -191,41 +192,13 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
         None => return None,
     };
 
-    let selected_prompt_id = match &settings.post_process_selected_prompt_id {
-        Some(id) => id.clone(),
-        None => {
-            debug!("Post-processing skipped because no prompt is selected");
-            return None;
-        }
-    };
-
-    let prompt = match settings
-        .post_process_prompts
-        .iter()
-        .find(|prompt| prompt.id == selected_prompt_id)
-    {
-        Some(prompt) => prompt.prompt.clone(),
-        None => {
-            debug!(
-                "Post-processing skipped because prompt '{}' was not found",
-                selected_prompt_id
-            );
-            return None;
-        }
-    };
-
-    if prompt.trim().is_empty() {
-        debug!("Post-processing skipped because the selected prompt is empty");
-        return None;
-    }
-
     debug!(
-        "Starting LLM post-processing with provider '{}' (model: {})",
-        provider.id, model
+        "Starting LLM post-processing with provider '{}' (model: {}), cleaning prompt preset: {:?}",
+        provider.id, model, settings.post_process_cleaning_prompt_preset
     );
 
-    // Replace ${output} variable in the prompt with the actual text
-    let processed_prompt = prompt.replace("${output}", transcription);
+    // Hardcoded user message template — injects the transcript for the model to fill
+    let processed_prompt = format!("# Input\n{}\n\n# Output\n", transcription);
     debug!("Processed prompt length: {} chars", processed_prompt.len());
 
     if provider.id == APPLE_INTELLIGENCE_PROVIDER_ID {
@@ -264,8 +237,21 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
         }
     }
 
+    // Resolve system prompt from the selected preset
+    let resolved_system_prompt = match settings.post_process_cleaning_prompt_preset {
+        CleaningPromptPreset::Strict => Some(STRICT_CLEANING_PROMPT),
+        CleaningPromptPreset::Nuanced => Some(NUANCED_CLEANING_PROMPT),
+        CleaningPromptPreset::Custom => {
+            if settings.post_process_system_prompt.trim().is_empty() {
+                None
+            } else {
+                Some(settings.post_process_system_prompt.as_str())
+            }
+        }
+    };
+
     // Send the chat completion request
-    match crate::llm_client::send_chat_completion(&provider, api_key, &model, processed_prompt)
+    match crate::llm_client::send_chat_completion(&provider, api_key, &model, processed_prompt, resolved_system_prompt)
         .await
     {
         Ok(Some(content)) => {
@@ -555,9 +541,14 @@ impl ShortcutAction for TranscribeAction {
                             if post_process {
                                 show_processing_overlay(&ah);
                             }
+                            let post_process_timeout = if settings.post_process_timeout_secs > 0 {
+                                Duration::from_secs(settings.post_process_timeout_secs)
+                            } else {
+                                POST_PROCESS_TIMEOUT_DEFAULT
+                            };
                             let processed = if post_process {
                                 match timeout(
-                                    POST_PROCESS_TIMEOUT,
+                                    post_process_timeout,
                                     post_process_transcription(&settings, &final_text),
                                 )
                                 .await
@@ -566,7 +557,7 @@ impl ShortcutAction for TranscribeAction {
                                     Err(_) => {
                                         warn!(
                                             "Post-processing timed out after {}s; continuing with base transcription",
-                                            POST_PROCESS_TIMEOUT.as_secs()
+                                            post_process_timeout.as_secs()
                                         );
                                         None
                                     }
@@ -578,16 +569,12 @@ impl ShortcutAction for TranscribeAction {
                                 post_processed_text = Some(processed_text.clone());
                                 final_text = processed_text;
 
-                                // Get the prompt that was used
-                                if let Some(prompt_id) = &settings.post_process_selected_prompt_id {
-                                    if let Some(prompt) = settings
-                                        .post_process_prompts
-                                        .iter()
-                                        .find(|p| &p.id == prompt_id)
-                                    {
-                                        post_process_prompt = Some(prompt.prompt.clone());
-                                    }
-                                }
+                                // Record the system prompt that was used
+                                post_process_prompt = Some(match settings.post_process_cleaning_prompt_preset {
+                                    CleaningPromptPreset::Strict => STRICT_CLEANING_PROMPT.to_string(),
+                                    CleaningPromptPreset::Nuanced => NUANCED_CLEANING_PROMPT.to_string(),
+                                    CleaningPromptPreset::Custom => settings.post_process_system_prompt.clone(),
+                                });
                             } else if final_text != transcription {
                                 // Chinese conversion was applied but no LLM post-processing
                                 post_processed_text = Some(final_text.clone());
