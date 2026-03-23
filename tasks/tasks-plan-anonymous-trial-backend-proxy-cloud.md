@@ -57,7 +57,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 - [ ] 2.0 Add durable Supabase billing and access state
   - covers_prd: `FR-001`, `FR-006`, `FR-009`
   - covers_tdd: `TDR-002`, `TDR-003`, `TDR-004`
-  - [ ] 2.1 Create database schema for trials, claims, entitlements, usage, and webhook events
+  - [x] 2.1 Create database schema for trials, claims, entitlements, usage, and webhook events
     - covers_prd: `FR-001`, `FR-006`, `FR-009`
     - covers_tdd: `TDR-002`, `TDR-003`, `TDR-004`
     - output: `marketing-site/supabase/migrations/*`
