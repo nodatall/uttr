@@ -38,7 +38,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 
 ## Tasks
 
-- [ ] 1.0 Move `marketing-site` to a Fly-ready standalone backend deployment
+- [x] 1.0 Move `marketing-site` to a Fly-ready standalone backend deployment
   - covers_prd: `FR-003`, `FR-004`
   - covers_tdd: `TDR-008`
   - [x] 1.1 Enable standalone Next.js output and add Fly deployment assets
@@ -47,7 +47,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - output: `marketing-site/next.config.ts`, `marketing-site/Dockerfile`, `marketing-site/fly.toml`
     - verify: `npm -C marketing-site run build`
     - done_when: `marketing-site` builds into a standalone server image that can be deployed on Fly.io.
-  - [ ] 1.2 Document the new deployment and environment contract
+  - [x] 1.2 Document the new deployment and environment contract
     - covers_prd: `FR-003`, `FR-004`
     - covers_tdd: `TDR-008`
     - output: `marketing-site/README.md`, `marketing-site/lib/env.ts`
