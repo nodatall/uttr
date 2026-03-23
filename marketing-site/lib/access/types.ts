@@ -13,6 +13,13 @@ export const entitlementStates = [
 ] as const;
 export type EntitlementState = (typeof entitlementStates)[number];
 
+export const usageEventSources = [
+  "cloud_default",
+  "cloud_byok",
+  "local_fallback",
+] as const;
+export type UsageEventSource = (typeof usageEventSources)[number];
+
 export interface AnonymousTrialRow {
   id: string;
   install_id: string;
@@ -47,4 +54,13 @@ export interface AccessDecision {
   trialState: TrialState;
   accessState: AccessState;
   entitlementState: EntitlementState;
+}
+
+export interface UsageEventRow {
+  id: string;
+  anonymous_trial_id: string | null;
+  user_id: string | null;
+  source: UsageEventSource;
+  audio_seconds: number;
+  created_at: string;
 }

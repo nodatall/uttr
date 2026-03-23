@@ -79,7 +79,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - output: `marketing-site/app/api/trial/bootstrap/route.ts`, `marketing-site/app/api/entitlement/route.ts`, `marketing-site/lib/access/*`
     - verify: `npm -C marketing-site run lint`
     - done_when: The backend can create or recover install-linked trial state, issue install tokens, and return access decisions without starting the trial early.
-  - [ ] 3.2 Implement the Groq proxy transcription route with upload enforcement and timing telemetry
+  - [x] 3.2 Implement the Groq proxy transcription route with upload enforcement and timing telemetry
     - covers_prd: `FR-002`, `FR-006`, `FR-010`
     - covers_tdd: `TDR-001`, `TDR-007`, `TDR-008`
     - output: `marketing-site/app/api/transcribe/cloud/route.ts`, `marketing-site/lib/groq/*`

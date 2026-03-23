@@ -2,6 +2,7 @@ import { readSupabaseConfig } from "@/lib/env";
 import type {
   AnonymousTrialRow,
   EntitlementRow,
+  UsageEventRow,
   TrialState,
 } from "./types";
 
@@ -120,7 +121,15 @@ export async function upsertAnonymousTrialHeartbeat(params: {
 export async function patchAnonymousTrialById(
   id: string,
   patch: Partial<
-    Pick<AnonymousTrialRow, "device_fingerprint_hash" | "last_seen_at" | "status">
+    Pick<
+      AnonymousTrialRow,
+      | "device_fingerprint_hash"
+      | "last_seen_at"
+      | "status"
+      | "trial_started_at"
+      | "trial_ends_at"
+      | "user_id"
+    >
   >,
 ) {
   const response = await supabaseRequest(
@@ -141,6 +150,26 @@ export async function patchAnonymousTrialById(
   return firstOrNull(
     (await parseJsonArray(response)) as AnonymousTrialRow[],
   );
+}
+
+export async function insertUsageEvent(
+  row: Omit<UsageEventRow, "id" | "created_at">,
+) {
+  const response = await supabaseRequest(
+    "usage_events",
+    {
+      method: "POST",
+      body: JSON.stringify(row),
+      headers: {
+        prefer: "return=representation",
+      },
+    },
+    {
+      select: "*",
+    },
+  );
+
+  return firstOrNull((await parseJsonArray(response)) as UsageEventRow[]);
 }
 
 export async function fetchEntitlementByUserId(userId: string) {

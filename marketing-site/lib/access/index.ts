@@ -12,6 +12,7 @@ export {
   fetchAnonymousTrialById,
   fetchAnonymousTrialByInstallId,
   fetchEntitlementByUserId,
+  insertUsageEvent,
   isAnonymousTrialExpired,
   patchAnonymousTrialById,
   upsertAnonymousTrialHeartbeat,
