@@ -73,7 +73,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 - [ ] 3.0 Build backend trial, entitlement, and proxy APIs
   - covers_prd: `FR-001`, `FR-002`, `FR-005`, `FR-006`, `FR-010`
   - covers_tdd: `TDR-001`, `TDR-002`, `TDR-003`, `TDR-006`, `TDR-007`, `TDR-008`
-  - [ ] 3.1 Implement bootstrap and entitlement routes for install-linked access
+  - [x] 3.1 Implement bootstrap and entitlement routes for install-linked access
     - covers_prd: `FR-001`, `FR-006`
     - covers_tdd: `TDR-002`, `TDR-006`
     - output: `marketing-site/app/api/trial/bootstrap/route.ts`, `marketing-site/app/api/entitlement/route.ts`, `marketing-site/lib/access/*`
