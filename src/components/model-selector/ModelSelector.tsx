@@ -37,6 +37,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ onError }) => {
     downloadStats,
     extractingModels,
     selectModel,
+    autoSelectDownloadedModelId,
   } = useModelStore();
 
   const [modelStatus, setModelStatus] = useState<ModelStatus>("unloaded");
@@ -105,6 +106,10 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ onError }) => {
       "model-download-complete",
       (event) => {
         const modelId = event.payload;
+        if (autoSelectDownloadedModelId !== modelId) {
+          return;
+        }
+
         setTimeout(async () => {
           try {
             const isRecording = await commands.isRecording();
@@ -141,7 +146,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ onError }) => {
       modelStateUnlisten.then((fn) => fn());
       downloadCompleteUnlisten.then((fn) => fn());
     };
-  }, [selectModel]);
+  }, [autoSelectDownloadedModelId, selectModel]);
 
   const handleModelSelect = async (modelId: string) => {
     setPendingModelId(modelId);

@@ -108,7 +108,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - verify: `npm -C marketing-site run lint`
     - done_when: Paid or already-entitled users can return from the site to the app, and existing subscribers can manage billing through Stripe’s customer portal.
 
-- [ ] 5.0 Replace desktop default cloud behavior with install-linked backend access
+- [x] 5.0 Replace desktop default cloud behavior with install-linked backend access
   - covers_prd: `FR-001`, `FR-002`, `FR-005`, `FR-006`, `FR-007`, `FR-010`
   - covers_tdd: `TDR-001`, `TDR-002`, `TDR-006`, `TDR-007`
   - [x] 5.1 Add install identity, trial state, access state, and entitlement refresh commands
@@ -123,7 +123,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - output: `src-tauri/src/groq_client.rs`, `src-tauri/src/managers/transcription.rs`
     - verify: `cargo test --manifest-path src-tauri/Cargo.toml`
     - done_when: Default cloud transcription routes through the backend, expired unpaid installs are blocked, and local fallback runs only for active trial or paid users.
-  - [ ] 5.3 Replace onboarding with immediate-use flow and background Parakeet V3 download
+  - [x] 5.3 Replace onboarding with immediate-use flow and background Parakeet V3 download
     - covers_prd: `FR-007`
     - covers_tdd: `TDR-006`
     - output: `src/components/onboarding/Onboarding.tsx`, `src/stores/modelStore.ts`, `src/components/model-selector/**`

@@ -1,294 +1,220 @@
-import React, { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type FC } from "react";
 import { useTranslation } from "react-i18next";
+import { Cloud, Download, Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import type { ModelInfo } from "@/bindings";
 import WindowDragRegion from "@/components/ui/WindowDragRegion";
 import { Button } from "@/components/ui/Button";
-import { Input } from "@/components/ui/Input";
-import type { ModelCardStatus } from "./ModelCard";
-import ModelCard from "./ModelCard";
 import { useModelStore } from "../../stores/modelStore";
-import { useSettings } from "@/hooks/useSettings";
 
 interface OnboardingProps {
   onModelSelected: () => void;
 }
 
-const isCloudModel = (modelId: string): boolean => modelId.startsWith("groq-");
+const DEFAULT_CLOUD_MODEL_ID = "groq-whisper-large-v3";
+const BACKGROUND_MODEL_ID = "parakeet-tdt-0.6b-v3";
 
-const Onboarding: React.FC<OnboardingProps> = ({ onModelSelected }) => {
+const Onboarding: FC<OnboardingProps> = ({ onModelSelected }) => {
   const { t } = useTranslation();
   const {
-    models,
     currentModel,
-    downloadModel,
     selectModel,
-    downloadingModels,
-    extractingModels,
+    prefetchModel,
     downloadProgress,
-    downloadStats,
-  } = useModelStore();
-  const { settings, updatePostProcessApiKey, isUpdating } = useSettings();
-  const [selectedModelId, setSelectedModelId] = useState<string | null>(null);
-  const storedGroqApiKey = settings?.post_process_api_keys?.groq ?? "";
-  const [groqApiKeyDraft, setGroqApiKeyDraft] = useState(storedGroqApiKey);
-  const isGroqApiKeyUpdating = isUpdating("post_process_api_key:groq");
-  const hasGroqApiKeyDraft = groqApiKeyDraft.trim().length > 0;
-
-  const isDownloading = selectedModelId !== null;
-  const hasAnyLocalDownloadedModel = models.some(
-    (model) => model.is_downloaded && !isCloudModel(model.id),
-  );
-  const canContinue = Boolean(currentModel) || hasAnyLocalDownloadedModel;
-  const localModels = models.filter((model) => !isCloudModel(model.id));
-  const cloudModels = models.filter((model) => isCloudModel(model.id));
-  const featuredLocalModels = localModels.filter((model) => model.is_recommended);
-  const otherLocalModels = localModels
-    .filter((model) => !model.is_recommended)
-    .sort((a, b) => Number(a.size_mb) - Number(b.size_mb));
-
-  useEffect(() => {
-    setGroqApiKeyDraft(storedGroqApiKey);
-  }, [storedGroqApiKey]);
-
-  // Watch for the selected model to finish downloading + extracting
-  useEffect(() => {
-    if (!selectedModelId) return;
-
-    const model = models.find((m) => m.id === selectedModelId);
-    if (model?.is_downloaded) {
-      const modelIdToSelect = selectedModelId;
-      // Prevent repeated selection attempts while model list/events are still updating.
-      setSelectedModelId(null);
-      // Model is ready — select it and transition
-      selectModel(modelIdToSelect).then((success) => {
-        if (success) {
-          onModelSelected();
-        } else {
-          toast.error(
-            t("onboarding.errors.selectModel", {
-              defaultValue: "Failed to select model.",
-            }),
-          );
-          setSelectedModelId(null);
-        }
-      });
-    }
-  }, [
-    selectedModelId,
-    models,
-    downloadingModels,
     extractingModels,
-    selectModel,
-    onModelSelected,
-  ]);
+    models,
+  } = useModelStore();
+  const [isBootstrapping, setIsBootstrapping] = useState(true);
+  const [bootstrapError, setBootstrapError] = useState<string | null>(null);
+  const didStartRef = useRef(false);
 
-  const handleSelectModel = async (modelId: string) => {
-    if (isCloudModel(modelId)) {
-      const trimmedGroqApiKey = groqApiKeyDraft.trim();
-      if (!trimmedGroqApiKey) {
-        toast.error(
-          t("onboarding.groq.missingKey", {
-            defaultValue:
-              "Add your Groq API key before selecting a Groq cloud model.",
-          }),
-        );
-        setSelectedModelId(null);
-        return;
-      }
-      if (trimmedGroqApiKey !== storedGroqApiKey) {
-        await updatePostProcessApiKey("groq", trimmedGroqApiKey);
-      }
-      const success = await selectModel(modelId);
-      if (success) {
-        onModelSelected();
-      } else {
-        toast.error(
-          t("onboarding.errors.selectModel", {
-            defaultValue: "Failed to select model.",
-          }),
-        );
-        setSelectedModelId(null);
-      }
+  const backgroundProgress = downloadProgress[BACKGROUND_MODEL_ID];
+  const backgroundModel = models.find(
+    (model) => model.id === BACKGROUND_MODEL_ID,
+  );
+  const cloudModel = models.find(
+    (model) => model.id === DEFAULT_CLOUD_MODEL_ID,
+  );
+
+  const startImmediateUse = useCallback(async () => {
+    if (currentModel.trim().length > 0) {
+      onModelSelected();
       return;
     }
 
-    const success = await selectModel(modelId);
+    setIsBootstrapping(true);
+    setBootstrapError(null);
+
+    void prefetchModel(BACKGROUND_MODEL_ID).then((success) => {
+      if (!success) {
+        toast.error(
+          t("onboarding.backgroundDownloadFailed", {
+            defaultValue:
+              "Parakeet V3 could not start downloading in the background.",
+          }),
+        );
+      }
+    });
+
+    const success = await selectModel(DEFAULT_CLOUD_MODEL_ID);
     if (success) {
       onModelSelected();
-    } else {
-      toast.error(
-        t("onboarding.errors.selectModel", {
-          defaultValue: "Failed to select model.",
-        }),
+      return;
+    }
+
+    const errorMessage = t("onboarding.errors.selectModel", {
+      defaultValue: "Failed to prepare the default cloud model.",
+    });
+    setBootstrapError(errorMessage);
+    setIsBootstrapping(false);
+    toast.error(errorMessage);
+  }, [currentModel, onModelSelected, prefetchModel, selectModel, t]);
+
+  useEffect(() => {
+    if (didStartRef.current) {
+      return;
+    }
+    didStartRef.current = true;
+    void startImmediateUse();
+    // startImmediateUse intentionally depends on current model state so retries pick up the latest store value.
+  }, [startImmediateUse]);
+
+  const backgroundStatus = (() => {
+    if (extractingModels[BACKGROUND_MODEL_ID]) {
+      return t("onboarding.background.extracting", {
+        defaultValue: "Finishing the offline model setup in the background.",
+      });
+    }
+
+    if (backgroundProgress) {
+      const percentage = Math.max(
+        0,
+        Math.min(100, Math.round(backgroundProgress.percentage)),
       );
-    }
-  };
-
-  const handleDownloadModel = async (modelId: string) => {
-    setSelectedModelId(modelId);
-
-    const success = await downloadModel(modelId);
-    if (!success) {
-      toast.error(t("onboarding.downloadFailed"));
-      setSelectedModelId(null);
-    }
-  };
-
-  const handleGroqApiKeyBlur = async () => {
-    const trimmed = groqApiKeyDraft.trim();
-    if (trimmed === storedGroqApiKey) {
-      return;
-    }
-    await updatePostProcessApiKey("groq", trimmed);
-  };
-
-  const handleContinue = async () => {
-    if (currentModel) {
-      onModelSelected();
-      return;
+      return t("onboarding.background.downloading", {
+        defaultValue: `Downloading Parakeet V3 in the background (${percentage}%).`,
+      });
     }
 
-    const downloadedModel = models.find(
-      (model) => model.is_downloaded && !isCloudModel(model.id),
-    );
-    if (!downloadedModel) {
-      toast.error(
-        t("onboarding.continueMissingModel", {
-          defaultValue: "Download a model first, then continue.",
-        }),
-      );
-      return;
+    if (backgroundModel?.is_downloading) {
+      return t("onboarding.background.preparing", {
+        defaultValue: "Preparing the background download.",
+      });
     }
 
-    const success = await selectModel(downloadedModel.id);
-    if (!success) {
-      toast.error(
-        t("onboarding.errors.selectModel", {
-          defaultValue: "Failed to select model.",
-        }),
-      );
-      return;
-    }
-
-    onModelSelected();
-  };
-
-  const getModelStatus = (modelId: string): ModelCardStatus => {
-    const model = models.find((entry) => entry.id === modelId);
-    if (modelId === currentModel) return "active";
-    if (modelId in extractingModels) return "extracting";
-    if (modelId in downloadingModels) return "downloading";
-    if (isCloudModel(modelId) || model?.is_downloaded) return "available";
-    return "downloadable";
-  };
-
-  const getModelDownloadProgress = (modelId: string): number | undefined => {
-    return downloadProgress[modelId]?.percentage;
-  };
-
-  const getModelDownloadSpeed = (modelId: string): number | undefined => {
-    return downloadStats[modelId]?.speed;
-  };
+    return t("onboarding.background.ready", {
+      defaultValue: "Background download will start automatically.",
+    });
+  })();
 
   return (
-    <div className="relative h-screen w-screen flex flex-col inset-0">
+    <div className="relative flex h-screen w-screen flex-col inset-0">
       <WindowDragRegion />
-      <div className="flex-1 flex flex-col p-6 gap-4">
-        <div className="flex flex-col items-center gap-2 shrink-0 text-center">
-          {/* eslint-disable-next-line i18next/no-literal-string */}
-          <p className="text-[11px] tracking-[0.3em] uppercase text-logo-primary/70">
-            Uttr
-          </p>
-          <p className="text-text/70 max-w-md font-medium mx-auto">
-            {t("onboarding.subtitle")}
-          </p>
-        </div>
+      <div className="flex flex-1 items-center justify-center p-6">
+        <div className="w-full max-w-[680px] rounded-[28px] border border-white/8 bg-[linear-gradient(180deg,rgba(9,14,24,0.98),rgba(7,12,20,0.95))] px-6 py-7 shadow-[0_24px_64px_rgba(0,0,0,0.28)]">
+          <div className="flex flex-col gap-6">
+            <div className="flex items-start justify-between gap-4">
+              <div className="space-y-2">
+                {/* eslint-disable-next-line i18next/no-literal-string */}
+                <p className="text-[11px] uppercase tracking-[0.32em] text-logo-primary/70">
+                  Uttr
+                </p>
+                <h1 className="text-2xl font-semibold tracking-tight text-text">
+                  {t("onboarding.immediate.title", {
+                    defaultValue: "Ready to start right away.",
+                  })}
+                </h1>
+                <p className="max-w-xl text-sm leading-relaxed text-text/66">
+                  {t("onboarding.immediate.subtitle", {
+                    defaultValue:
+                      "Uttr is selecting the cloud transcription model now and will keep Parakeet V3 downloading in the background for offline use.",
+                  })}
+                </p>
+              </div>
 
-        <div className="max-w-[600px] w-full mx-auto text-center flex-1 flex flex-col min-h-0">
-          <div className="flex flex-col gap-4 pb-6">
-            <div className="rounded-xl border border-mid-gray/30 bg-mid-gray/10 px-4 py-3 space-y-2 text-left">
-              <h2 className="text-sm font-semibold text-text">
-                {t("onboarding.groq.title", { defaultValue: "Groq API Key" })}
-              </h2>
-              <p className="text-xs text-text/60">
-                {t("onboarding.groq.description", {
-                  defaultValue:
-                    "Required only for Groq cloud models. You can also add this later in API Keys.",
-                })}
-              </p>
-              <Input
-                type="password"
-                value={groqApiKeyDraft}
-                onChange={(event) => setGroqApiKeyDraft(event.target.value)}
-                onBlur={() => {
-                  void handleGroqApiKeyBlur();
-                }}
-                placeholder={t("onboarding.groq.placeholder", {
-                  defaultValue: "gsk_...",
-                })}
-                disabled={isGroqApiKeyUpdating}
-                className="w-full"
-              />
+              <div className="flex h-11 w-11 items-center justify-center rounded-2xl border border-logo-primary/16 bg-logo-primary/10 text-logo-primary">
+                <Cloud className="h-5 w-5" />
+              </div>
             </div>
 
-            {featuredLocalModels.map((model: ModelInfo) => (
-              <ModelCard
-                key={model.id}
-                model={model}
-                variant="featured"
-                status={getModelStatus(model.id)}
-                disabled={isDownloading}
-                onSelect={handleSelectModel}
-                onDownload={handleDownloadModel}
-                downloadProgress={getModelDownloadProgress(model.id)}
-                downloadSpeed={getModelDownloadSpeed(model.id)}
-              />
-            ))}
-
-            {otherLocalModels.map((model: ModelInfo) => (
-              <ModelCard
-                key={model.id}
-                model={model}
-                status={getModelStatus(model.id)}
-                disabled={isDownloading}
-                onSelect={handleSelectModel}
-                onDownload={handleDownloadModel}
-                downloadProgress={getModelDownloadProgress(model.id)}
-                downloadSpeed={getModelDownloadSpeed(model.id)}
-              />
-            ))}
-
-            {cloudModels.length > 0 && hasGroqApiKeyDraft && (
-              <div className="space-y-3 text-left">
-                <h2 className="text-sm font-semibold text-text">
-                  {t("settings.models.groq.cloudModelsTitle", {
-                    defaultValue: "Cloud models",
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-text">
+                  <Cloud className="h-4 w-4 text-logo-primary" />
+                  {t("onboarding.immediate.cloudTitle", {
+                    defaultValue: "Cloud transcription",
                   })}
-                </h2>
-                {cloudModels.map((model: ModelInfo) => (
-                  <ModelCard
-                    key={model.id}
-                    model={model}
-                    status={getModelStatus(model.id)}
-                    disabled={isDownloading || isGroqApiKeyUpdating}
-                    onSelect={handleSelectModel}
-                    onDownload={handleDownloadModel}
-                  />
-                ))}
+                </div>
+                <p className="mt-2 text-sm leading-relaxed text-text/60">
+                  {t("onboarding.immediate.cloudBody", {
+                    defaultValue:
+                      "The default cloud model is being enabled automatically, so no key or model choice is required up front.",
+                  })}
+                </p>
+                <p className="mt-2 text-xs uppercase tracking-[0.24em] text-text/42">
+                  {cloudModel?.name || DEFAULT_CLOUD_MODEL_ID}
+                </p>
               </div>
-            )}
 
-            <div className="pt-2 flex justify-end">
-              <Button
-                variant="primary-soft"
-                onClick={() => {
-                  void handleContinue();
-                }}
-                disabled={!canContinue || isGroqApiKeyUpdating}
-              >
-                {t("onboarding.continue", { defaultValue: "Continue" })}
-              </Button>
+              <div className="rounded-2xl border border-white/8 bg-white/[0.03] px-4 py-4">
+                <div className="flex items-center gap-2 text-sm font-medium text-text">
+                  <Download className="h-4 w-4 text-logo-primary" />
+                  {t("onboarding.immediate.downloadTitle", {
+                    defaultValue: "Offline model setup",
+                  })}
+                </div>
+                <p className="mt-2 text-sm leading-relaxed text-text/60">
+                  {backgroundStatus}
+                </p>
+                {backgroundProgress && (
+                  <div className="mt-3">
+                    <div className="h-1.5 overflow-hidden rounded-full bg-white/8">
+                      <div
+                        className="h-full rounded-full bg-logo-primary transition-all duration-300"
+                        style={{ width: `${backgroundProgress.percentage}%` }}
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            <div className="flex items-center justify-between gap-4 rounded-2xl border border-mid-gray/20 bg-mid-gray/10 px-4 py-3">
+              <div className="flex items-center gap-3">
+                {isBootstrapping ? (
+                  <Loader2 className="h-4 w-4 animate-spin text-logo-primary" />
+                ) : (
+                  <Cloud className="h-4 w-4 text-logo-primary" />
+                )}
+                <div>
+                  <p className="text-sm font-medium text-text">
+                    {isBootstrapping
+                      ? t("onboarding.immediate.starting", {
+                          defaultValue: "Setting up your first session.",
+                        })
+                      : t("onboarding.immediate.ready", {
+                          defaultValue: "Ready to continue.",
+                        })}
+                  </p>
+                  <p className="text-xs text-text/55">
+                    {bootstrapError ||
+                      t("onboarding.immediate.detail", {
+                        defaultValue:
+                          "The app will continue in the background while setup finishes.",
+                      })}
+                  </p>
+                </div>
+              </div>
+
+              {bootstrapError && (
+                <Button
+                  variant="primary-soft"
+                  onClick={() => {
+                    void startImmediateUse();
+                  }}
+                >
+                  {t("common.retry", { defaultValue: "Retry" })}
+                </Button>
+              )}
             </div>
           </div>
         </div>
