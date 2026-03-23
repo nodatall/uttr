@@ -22,7 +22,7 @@ use tauri_plugin_autostart::ManagerExt;
 use crate::settings::{
     self, get_settings, AutoSubmitKey, ClipboardHandling, KeyboardImplementation, OverlayPosition,
     PasteMethod, ShortcutBinding, SoundTheme, TypingTool, APPLE_INTELLIGENCE_DEFAULT_MODEL_ID,
-    APPLE_INTELLIGENCE_PROVIDER_ID,
+    APPLE_INTELLIGENCE_PROVIDER_ID, ByokValidationState,
 };
 use crate::tray;
 
@@ -836,11 +836,9 @@ pub fn change_post_process_api_key_setting(
     let mut settings = settings::get_settings(&app);
     validate_provider_exists(&settings, &provider_id)?;
     if provider_id == "groq" {
-        if api_key.trim().is_empty() {
-            crate::byok_secrets::store_groq_api_key(&app, &settings, "")?;
-        } else {
-            crate::byok_secrets::store_groq_api_key(&app, &settings, &api_key)?;
-        }
+        crate::byok_secrets::store_groq_api_key(&app, &settings, &api_key)?;
+        settings.byok_validation_state = ByokValidationState::Unknown;
+        settings.byok_enabled = false;
         settings
             .post_process_api_keys
             .insert(provider_id, String::new());

@@ -6,7 +6,6 @@ import { ChevronDown, Globe } from "lucide-react";
 import type { ModelCardStatus } from "@/components/onboarding";
 import { ModelCard } from "@/components/onboarding";
 import { useModelStore } from "@/stores/modelStore";
-import { useSettings } from "@/hooks/useSettings";
 import {
   getLocalizedLanguages,
   getLocalizedLanguageLabel,
@@ -41,10 +40,6 @@ export const ModelsSettings: React.FC = () => {
     selectModel,
     deleteModel,
   } = useModelStore();
-  const { settings, isUpdating } = useSettings();
-  const groqApiKey = settings?.post_process_api_keys?.groq ?? "";
-  const isGroqApiKeyUpdating = isUpdating("post_process_api_key:groq");
-  const hasGroqApiKey = groqApiKey.trim().length > 0;
   const localizedLanguages = useMemo(
     () =>
       getLocalizedLanguages(
@@ -135,18 +130,6 @@ export const ModelsSettings: React.FC = () => {
   };
 
   const handleModelSelect = async (modelId: string) => {
-    if (modelId.startsWith("groq-")) {
-      if (!groqApiKey.trim()) {
-        toast.error(
-          t("settings.models.groq.missingKey", {
-            defaultValue:
-              "Add your Groq API key in API Keys before selecting a Groq model.",
-          }),
-        );
-        return;
-      }
-    }
-
     setSwitchingModelId(modelId);
     try {
       const success = await selectModel(modelId);
@@ -274,7 +257,9 @@ export const ModelsSettings: React.FC = () => {
             <span className="mr-2 text-text/40">
               {t("modelSelector.active", { defaultValue: "Active" })}
             </span>
-            <span className="font-medium text-text/88">{currentModelInfo.name}</span>
+            <span className="font-medium text-text/88">
+              {currentModelInfo.name}
+            </span>
           </div>
         )}
       </div>
@@ -403,21 +388,12 @@ export const ModelsSettings: React.FC = () => {
                     defaultValue: "Cloud Models",
                   })}
                 </h2>
-                {!hasGroqApiKey && (
-                  <div className="rounded-full border border-white/8 bg-white/[0.03] px-3 py-1.5 text-xs text-text/50">
-                    {t("settings.models.groq.enableHint", {
-                      defaultValue:
-                        "Add a Groq API key in API Keys to enable selection.",
-                    })}
-                  </div>
-                )}
               </div>
               {cloudModels.map((model: ModelInfo) => (
                 <ModelCard
                   key={model.id}
                   model={model}
                   status={getModelStatus(model.id)}
-                  disabled={!hasGroqApiKey || isGroqApiKeyUpdating}
                   onSelect={handleModelSelect}
                   onDownload={handleModelDownload}
                   onDelete={handleModelDelete}

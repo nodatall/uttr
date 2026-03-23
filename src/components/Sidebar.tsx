@@ -1,13 +1,7 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getVersion } from "@tauri-apps/api/app";
-import {
-  FlaskConical,
-  History,
-  Cpu,
-  AudioLines,
-  KeyRound,
-} from "lucide-react";
+import { FlaskConical, History, Cpu, AudioLines, KeyRound } from "lucide-react";
 import { useSettings } from "../hooks/useSettings";
 import {
   GeneralSettings,
@@ -80,6 +74,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const { t } = useTranslation();
   const { settings } = useSettings();
   const [version, setVersion] = useState("");
+  const [byokUnlocked, setByokUnlocked] = useState(false);
+  const versionTapCountRef = useRef(0);
+  const versionTapTimerRef = useRef<number | null>(null);
 
   useEffect(() => {
     const fetchVersion = async () => {
@@ -94,9 +91,51 @@ export const Sidebar: React.FC<SidebarProps> = ({
     void fetchVersion();
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (versionTapTimerRef.current !== null) {
+        window.clearTimeout(versionTapTimerRef.current);
+      }
+    };
+  }, []);
+
+  const hasVisibleByokAccess =
+    byokUnlocked ||
+    settings?.byok_enabled === true ||
+    settings?.byok_validation_state === "valid";
+
+  const handleVersionTap = () => {
+    versionTapCountRef.current += 1;
+    if (versionTapTimerRef.current === null) {
+      versionTapTimerRef.current = window.setTimeout(() => {
+        versionTapCountRef.current = 0;
+        versionTapTimerRef.current = null;
+      }, 1200);
+    }
+    if (versionTapCountRef.current >= 5) {
+      if (versionTapTimerRef.current !== null) {
+        window.clearTimeout(versionTapTimerRef.current);
+        versionTapTimerRef.current = null;
+      }
+      versionTapCountRef.current = 0;
+      setByokUnlocked(true);
+    }
+  };
+
   const availableSections = Object.entries(SECTIONS_CONFIG)
-    .filter(([_, config]) => config.enabled(settings))
+    .filter(([sectionId, config]) => {
+      if (sectionId === "apiKeys") {
+        return hasVisibleByokAccess;
+      }
+      return config.enabled(settings);
+    })
     .map(([id, config]) => ({ id: id as SidebarSection, ...config }));
+
+  useEffect(() => {
+    if (activeSection === "apiKeys" && !hasVisibleByokAccess) {
+      onSectionChange("general");
+    }
+  }, [activeSection, hasVisibleByokAccess, onSectionChange]);
 
   return (
     <div className="flex h-full w-[214px] min-w-[214px] flex-col rounded-[18px] border border-white/6 bg-[rgba(4,9,15,0.45)] px-3 py-4">
@@ -123,7 +162,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
             >
               <span
                 className={`h-1.5 w-1.5 rounded-full transition-all ${
-                  isActive ? "bg-logo-primary shadow-[0_0_10px_rgba(103,215,163,0.55)]" : "bg-transparent"
+                  isActive
+                    ? "bg-logo-primary shadow-[0_0_10px_rgba(103,215,163,0.55)]"
+                    : "bg-transparent"
                 }`}
               />
               <Icon
@@ -144,8 +185,20 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="mt-4 shrink-0 border-t border-white/6 px-2 pt-4">
         <div className="flex flex-col gap-1.5 text-xs text-text/48">
           <UpdateChecker className="min-w-0" />
-          {/* eslint-disable-next-line i18next/no-literal-string */}
-          <span className="text-text/28">v{version}</span>
+          <button
+            type="button"
+            onClick={handleVersionTap}
+            className="w-fit rounded-md px-1 py-0.5 text-left text-text/28 transition hover:bg-white/[0.04] hover:text-text/42"
+            aria-label={t("sidebar.version", { defaultValue: "App version" })}
+          >
+            {t("sidebar.versionPrefix", { defaultValue: "v" })}
+            {version}
+          </button>
+          {byokUnlocked && (
+            <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-logo-primary/80">
+              {t("settings.byok.unlocked", { defaultValue: "BYOK unlocked" })}
+            </span>
+          )}
         </div>
       </div>
     </div>

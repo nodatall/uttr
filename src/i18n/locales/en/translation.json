@@ -198,9 +198,9 @@
       },
       "noModelsMatch": "No models match this filter.",
       "groq": {
-        "missingKey": "Add your Groq API key in API Keys before selecting a Groq model.",
+        "missingKey": "Groq cloud selection no longer depends on a visible API key.",
         "cloudModelsTitle": "Cloud Models",
-        "enableHint": "Add a Groq API key in API Keys to enable selection."
+        "enableHint": "Groq cloud models stay selectable without a local key."
       }
     },
     "apiKeys": {
@@ -208,12 +208,42 @@
       "title": "API Keys",
       "description": "Manage API keys for cloud providers used by transcription and post-processing.",
       "provider": "Provider",
+      "validation": {
+        "unknown": "Not validated",
+        "valid": "Validated",
+        "invalid": "Invalid"
+      },
       "groq": {
         "title": "Groq Cloud",
         "description": "Required for Groq cloud transcription models. This key is shared with Post Process provider settings.",
         "placeholder": "gsk_..."
       },
       "autosave": "Saved automatically when you leave the field."
+    },
+    "byok": {
+      "eyebrow": "Hidden access",
+      "title": "BYOK controls",
+      "description": "Manage the optional Groq Bring Your Own Key path. The key is stored securely and only used when BYOK is enabled and validated.",
+      "status": "Status",
+      "secretStored": "Secret stored in Stronghold",
+      "noSecret": "No stored secret",
+      "enableLabel": "Enable BYOK",
+      "enableDescription": "Use the stored Groq key for direct routing only after the key validates successfully.",
+      "enableGuard": "Save and validate a Groq key before enabling direct BYOK routing.",
+      "save": "Save key",
+      "validate": "Validate key",
+      "validateFailed": "Failed to validate the Groq key.",
+      "clear": "Clear key",
+      "unlocked": "BYOK unlocked",
+      "groq": {
+        "sectionLabel": "Groq BYOK",
+        "title": "Direct Groq routing",
+        "description": "Unlock the key entry, save the secret, validate it, and then enable BYOK to bypass subscription gating when the key is valid.",
+        "keyLabel": "Groq API key",
+        "stored": "Secret stored in Stronghold",
+        "placeholder": "gsk_...",
+        "storageNote": "The key is not shown after saving. Replace it here, or clear it to remove the stored secret."
+      }
     },
     "sound": {
       "title": "Sound",

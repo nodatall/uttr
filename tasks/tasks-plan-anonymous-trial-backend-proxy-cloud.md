@@ -130,7 +130,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - verify: `npm run lint`
     - done_when: New users are no longer asked for a Groq key or visible model choice during onboarding, and Parakeet V3 begins downloading automatically in the background.
 
-- [ ] 6.0 Add hidden BYOK with secure storage
+- [x] 6.0 Add hidden BYOK with secure storage
   - covers_prd: `FR-008`
   - covers_tdd: `TDR-005`, `TDR-006`
   - [x] 6.1 Add Tauri Stronghold and migrate BYOK secret storage off plain settings
@@ -139,7 +139,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - output: `src-tauri/Cargo.toml`, `src-tauri/src/lib.rs`, `package.json`, `src-tauri/capabilities/**`
     - verify: `cargo test --manifest-path src-tauri/Cargo.toml`
     - done_when: The app has Stronghold configured and BYOK secrets are no longer stored in plain settings data.
-  - [ ] 6.2 Add hidden unlock gesture, BYOK validation UI, and direct-Groq routing
+  - [x] 6.2 Add hidden unlock gesture, BYOK validation UI, and direct-Groq routing
     - covers_prd: `FR-008`
     - covers_tdd: `TDR-005`, `TDR-006`
     - output: `src/components/settings/**`, `src/hooks/useSettings.ts`, `src-tauri/src/groq_client.rs`

@@ -1,11 +1,16 @@
 import { create } from "zustand";
 import { subscribeWithSelector } from "zustand/middleware";
-import type { AppSettings as Settings, AudioDevice } from "@/bindings";
+import type {
+  AppSettings as Settings,
+  AudioDevice,
+  InstallAccessSnapshot,
+} from "@/bindings";
 import { commands } from "@/bindings";
 
 interface SettingsStore {
   settings: Settings | null;
   defaultSettings: Settings | null;
+  installAccess: InstallAccessSnapshot | null;
   isLoading: boolean;
   isUpdating: Record<string, boolean>;
   audioDevices: AudioDevice[];
@@ -22,6 +27,7 @@ interface SettingsStore {
   ) => Promise<void>;
   resetSetting: (key: keyof Settings) => Promise<void>;
   refreshSettings: () => Promise<void>;
+  refreshInstallAccess: () => Promise<void>;
   refreshAudioDevices: () => Promise<void>;
   refreshOutputDevices: () => Promise<void>;
   updateBinding: (id: string, binding: string) => Promise<void>;
@@ -45,12 +51,14 @@ interface SettingsStore {
     apiKey: string,
   ) => Promise<void>;
   updatePostProcessModel: (providerId: string, model: string) => Promise<void>;
+  validateByokGroqKey: () => Promise<void>;
   fetchPostProcessModels: (providerId: string) => Promise<string[]>;
   setPostProcessModelOptions: (providerId: string, models: string[]) => void;
 
   // Internal state setters
   setSettings: (settings: Settings | null) => void;
   setDefaultSettings: (defaultSettings: Settings | null) => void;
+  setInstallAccess: (installAccess: InstallAccessSnapshot | null) => void;
   setLoading: (loading: boolean) => void;
   setUpdating: (key: string, updating: boolean) => void;
   setAudioDevices: (devices: AudioDevice[]) => void;
@@ -121,6 +129,7 @@ const settingUpdaters: {
   history_limit: (value) => commands.updateHistoryLimit(value as number),
   post_process_enabled: (value) =>
     commands.changePostProcessEnabledSetting(value as boolean),
+  byok_enabled: (value) => commands.changeByokEnabledSetting(value as boolean),
   post_process_timeout_secs: (value) =>
     commands.changePostProcessTimeoutSetting(value as number),
   post_process_cleaning_prompt_preset: (value) =>
@@ -141,6 +150,7 @@ export const useSettingsStore = create<SettingsStore>()(
   subscribeWithSelector((set, get) => ({
     settings: null,
     defaultSettings: null,
+    installAccess: null,
     isLoading: true,
     isUpdating: {},
     audioDevices: [],
@@ -151,6 +161,7 @@ export const useSettingsStore = create<SettingsStore>()(
     // Internal setters
     setSettings: (settings) => set({ settings }),
     setDefaultSettings: (defaultSettings) => set({ defaultSettings }),
+    setInstallAccess: (installAccess) => set({ installAccess }),
     setLoading: (isLoading) => set({ isLoading }),
     setUpdating: (key, updating) =>
       set((state) => ({
@@ -186,6 +197,22 @@ export const useSettingsStore = create<SettingsStore>()(
       } catch (error) {
         console.error("Failed to load settings:", error);
         set({ isLoading: false });
+      }
+    },
+
+    refreshInstallAccess: async () => {
+      try {
+        const result = await commands.getInstallAccessSnapshot();
+        if (result.status === "ok") {
+          set({ installAccess: result.data });
+        } else {
+          console.error(
+            "Failed to load install access snapshot:",
+            result.error,
+          );
+        }
+      } catch (error) {
+        console.error("Failed to load install access snapshot:", error);
       }
     },
 
@@ -268,6 +295,9 @@ export const useSettingsStore = create<SettingsStore>()(
         const updater = settingUpdaters[key];
         if (updater) {
           await updater(value);
+          if (key === "byok_enabled") {
+            await get().refreshInstallAccess();
+          }
         } else if (key !== "bindings" && key !== "selected_model") {
           console.warn(`No handler for setting: ${String(key)}`);
         }
@@ -447,7 +477,33 @@ export const useSettingsStore = create<SettingsStore>()(
           [providerId]: [],
         },
       }));
-      return get().updatePostProcessSetting("api_key", providerId, apiKey);
+      await get().updatePostProcessSetting("api_key", providerId, apiKey);
+      if (providerId === "groq") {
+        await get().refreshInstallAccess();
+      }
+    },
+
+    validateByokGroqKey: async () => {
+      const { setUpdating, refreshSettings, refreshInstallAccess } = get();
+      const updateKey = "byok_validation:groq";
+
+      setUpdating(updateKey, true);
+
+      try {
+        const result = await commands.validateByokGroqKey();
+        if (result.status === "error") {
+          throw new Error(result.error);
+        }
+
+        set({ installAccess: result.data });
+        await refreshSettings();
+      } catch (error) {
+        await refreshSettings();
+        await refreshInstallAccess();
+        throw error;
+      } finally {
+        setUpdating(updateKey, false);
+      }
     },
 
     updatePostProcessModel: async (providerId, model) => {
@@ -503,7 +559,12 @@ export const useSettingsStore = create<SettingsStore>()(
 
     // Initialize everything
     initialize: async () => {
-      const { refreshSettings, checkCustomSounds, loadDefaultSettings } = get();
+      const {
+        refreshSettings,
+        refreshInstallAccess,
+        checkCustomSounds,
+        loadDefaultSettings,
+      } = get();
 
       // Note: Audio devices are NOT refreshed here. The frontend (App.tsx)
       // is responsible for calling refreshAudioDevices/refreshOutputDevices
@@ -512,6 +573,7 @@ export const useSettingsStore = create<SettingsStore>()(
       await Promise.all([
         loadDefaultSettings(),
         refreshSettings(),
+        refreshInstallAccess(),
         checkCustomSounds(),
       ]);
     },

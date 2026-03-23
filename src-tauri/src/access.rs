@@ -60,6 +60,7 @@ pub struct InstallAccessSnapshot {
     pub entitlement_state: EntitlementState,
     pub byok_enabled: bool,
     pub byok_validation_state: ByokValidationState,
+    pub has_byok_secret: bool,
     pub has_install_token: bool,
 }
 
@@ -89,7 +90,7 @@ fn backend_url(path: &str) -> String {
     format!("{}/{}", backend_base_url(), path.trim_start_matches('/'))
 }
 
-fn access_snapshot(settings: &AppSettings) -> InstallAccessSnapshot {
+fn access_snapshot(settings: &AppSettings, has_byok_secret: bool) -> InstallAccessSnapshot {
     InstallAccessSnapshot {
         install_id: settings.install_id.clone(),
         device_fingerprint_hash: settings.device_fingerprint_hash.clone(),
@@ -98,8 +99,15 @@ fn access_snapshot(settings: &AppSettings) -> InstallAccessSnapshot {
         entitlement_state: settings.entitlement_state,
         byok_enabled: settings.byok_enabled,
         byok_validation_state: settings.byok_validation_state,
+        has_byok_secret,
         has_install_token: !settings.install_token.trim().is_empty(),
     }
+}
+
+fn has_groq_secret(app: &AppHandle, settings: &AppSettings) -> bool {
+    crate::byok_secrets::load_groq_api_key(app, settings)
+        .map(|value| value.is_some())
+        .unwrap_or(false)
 }
 
 fn ensure_identity(app: &AppHandle) -> AppSettings {
@@ -144,7 +152,11 @@ async fn bootstrap_install_state_internal(
     settings.install_token = backend.install_token;
     write_settings(app, settings);
 
-    Ok(access_snapshot(&get_settings(app)))
+    let refreshed_settings = get_settings(app);
+    Ok(access_snapshot(
+        &refreshed_settings,
+        has_groq_secret(app, &refreshed_settings),
+    ))
 }
 
 async fn refresh_entitlement_state_internal(
@@ -185,7 +197,11 @@ async fn refresh_entitlement_state_internal(
     settings.entitlement_state = backend.entitlement_state;
     write_settings(app, settings);
 
-    Ok(access_snapshot(&get_settings(app)))
+    let refreshed_settings = get_settings(app);
+    Ok(access_snapshot(
+        &refreshed_settings,
+        has_groq_secret(app, &refreshed_settings),
+    ))
 }
 
 async fn request_claim_token_internal(app: &AppHandle) -> Result<ClaimTokenResult, String> {
@@ -242,7 +258,7 @@ pub async fn request_claim_token(app: &AppHandle) -> Result<ClaimTokenResult, St
 
 pub fn get_install_access_snapshot(app: &AppHandle) -> InstallAccessSnapshot {
     let settings = ensure_identity(app);
-    access_snapshot(&settings)
+    access_snapshot(&settings, has_groq_secret(app, &settings))
 }
 
 #[cfg(test)]

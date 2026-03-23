@@ -412,6 +412,22 @@ async openAppDataDir() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async changeByokEnabledSetting(enabled: boolean) : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("change_byok_enabled_setting", { enabled }) };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async validateByokGroqKey() : Promise<Result<InstallAccessSnapshot, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("validate_byok_groq_key") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async bootstrapInstallAccess() : Promise<Result<InstallAccessSnapshot, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("bootstrap_install_access") };
@@ -767,7 +783,7 @@ export type ImplementationChangeResult = { success: boolean;
  * List of binding IDs that were reset to defaults due to incompatibility
  */
 reset_bindings: string[] }
-export type InstallAccessSnapshot = { install_id: string; device_fingerprint_hash: string; trial_state: TrialState; access_state: AccessState; entitlement_state: EntitlementState; byok_enabled: boolean; byok_validation_state: ByokValidationState; has_install_token: boolean }
+export type InstallAccessSnapshot = { install_id: string; device_fingerprint_hash: string; trial_state: TrialState; access_state: AccessState; entitlement_state: EntitlementState; byok_enabled: boolean; byok_validation_state: ByokValidationState; has_byok_secret: boolean; has_install_token: boolean }
 export type KeyboardImplementation = "tauri" | "handy_keys"
 export type LogLevel = "trace" | "debug" | "info" | "warn" | "error"
 export type ModelInfo = { id: string; name: string; description: string; filename: string; url: string | null; size_mb: number; is_downloaded: boolean; is_downloading: boolean; partial_size: number; is_directory: boolean; engine_type: EngineType; accuracy_score: number; speed_score: number; supports_translation: boolean; is_recommended: boolean; supported_languages: string[]; is_custom: boolean }

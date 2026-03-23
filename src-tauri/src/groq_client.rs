@@ -131,7 +131,10 @@ pub async fn transcribe_samples_direct(
     translate_to_english: bool,
 ) -> Result<String, String> {
     if api_key.trim().is_empty() {
-        return Err("Groq API key is required. Add it in Models > Groq Cloud API key.".to_string());
+        return Err(
+            "Groq API key is required. Unlock BYOK in Settings, save the key, and validate it there."
+                .to_string(),
+        );
     }
 
     let wav = build_wav_bytes(samples)?;

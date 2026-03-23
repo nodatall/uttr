@@ -306,6 +306,8 @@ pub fn run() {
         commands::open_recordings_folder,
         commands::open_log_dir,
         commands::open_app_data_dir,
+        commands::change_byok_enabled_setting,
+        commands::validate_byok_groq_key,
         commands::access::bootstrap_install_access,
         commands::access::refresh_install_entitlement,
         commands::access::create_trial_claim,
