@@ -70,7 +70,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - verify: `npm -C marketing-site run lint`
     - done_when: Duplicate Stripe events are ignored using persisted event IDs rather than in-memory state.
 
-- [ ] 3.0 Build backend trial, entitlement, and proxy APIs
+- [x] 3.0 Build backend trial, entitlement, and proxy APIs
   - covers_prd: `FR-001`, `FR-002`, `FR-005`, `FR-006`, `FR-010`
   - covers_tdd: `TDR-001`, `TDR-002`, `TDR-003`, `TDR-006`, `TDR-007`, `TDR-008`
   - [x] 3.1 Implement bootstrap and entitlement routes for install-linked access
@@ -85,7 +85,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - output: `marketing-site/app/api/transcribe/cloud/route.ts`, `marketing-site/lib/groq/*`
     - verify: `npm -C marketing-site run lint`
     - done_when: The backend starts trials on first use, blocks expired unpaid installs, forwards valid uploads to Groq with the server-held key, and emits timing metadata.
-  - [ ] 3.3 Implement claim-token creation and anonymous-to-account linking
+  - [x] 3.3 Implement claim-token creation and anonymous-to-account linking
     - covers_prd: `FR-005`, `FR-006`
     - covers_tdd: `TDR-002`, `TDR-003`, `TDR-006`
     - output: `marketing-site/app/api/trial/create-claim/route.ts`, `marketing-site/app/api/auth/convert-anonymous/route.ts`

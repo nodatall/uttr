@@ -2,6 +2,8 @@ import { readSupabaseConfig } from "@/lib/env";
 import type {
   AnonymousTrialRow,
   EntitlementRow,
+  SupabaseUser,
+  TrialClaimRow,
   UsageEventRow,
   TrialState,
 } from "./types";
@@ -55,6 +57,10 @@ function firstOrNull<T>(rows: T[]) {
   return rows[0] ?? null;
 }
 
+async function parseJsonObject<T>(response: Response): Promise<T> {
+  return (await response.json()) as T;
+}
+
 export async function fetchAnonymousTrialByInstallId(
   installId: string,
 ) {
@@ -87,6 +93,40 @@ export async function fetchAnonymousTrialById(id: string) {
   return firstOrNull(
     (await parseJsonArray(response)) as AnonymousTrialRow[],
   );
+}
+
+export async function fetchTrialClaimByHash(claimTokenHash: string) {
+  const response = await supabaseRequest(
+    "trial_claims",
+    { method: "GET" },
+    {
+      select: "*",
+      claim_token_hash: `eq.${claimTokenHash}`,
+      limit: "1",
+    },
+  );
+
+  return firstOrNull((await parseJsonArray(response)) as TrialClaimRow[]);
+}
+
+export async function insertTrialClaim(
+  row: Omit<TrialClaimRow, "created_at" | "redeemed_at">,
+) {
+  const response = await supabaseRequest(
+    "trial_claims",
+    {
+      method: "POST",
+      body: JSON.stringify(row),
+      headers: {
+        prefer: "return=representation",
+      },
+    },
+    {
+      select: "*",
+    },
+  );
+
+  return firstOrNull((await parseJsonArray(response)) as TrialClaimRow[]);
 }
 
 export async function upsertAnonymousTrialHeartbeat(params: {
@@ -172,6 +212,34 @@ export async function insertUsageEvent(
   return firstOrNull((await parseJsonArray(response)) as UsageEventRow[]);
 }
 
+export async function fetchSupabaseUser(accessToken: string) {
+  const { url, anonKey } = readSupabaseConfig();
+  const response = await fetch(new URL("/auth/v1/user", url), {
+    headers: {
+      apikey: anonKey,
+      authorization: `Bearer ${accessToken}`,
+      accept: "application/json",
+    },
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(
+      `Supabase auth request failed (${response.status}): ${body || response.statusText}`,
+    );
+  }
+
+  const payload = await parseJsonObject<Partial<SupabaseUser>>(response);
+  if (typeof payload.id !== "string") {
+    throw new Error("Supabase auth response missing user id.");
+  }
+
+  return {
+    id: payload.id,
+    email: typeof payload.email === "string" ? payload.email : null,
+  } satisfies SupabaseUser;
+}
+
 export async function fetchEntitlementByUserId(userId: string) {
   const response = await supabaseRequest(
     "entitlements",
@@ -205,6 +273,24 @@ export async function upsertEntitlementState(
   );
 
   return firstOrNull((await parseJsonArray(response)) as EntitlementRow[]);
+}
+
+export async function redeemTrialClaim(params: {
+  claimTokenHash: string;
+  userId: string;
+}) {
+  const response = await supabaseRequest(
+    "rpc/redeem_trial_claim",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        p_claim_token_hash: params.claimTokenHash,
+        p_user_id: params.userId,
+      }),
+    },
+  );
+
+  return parseJsonObject<AnonymousTrialRow>(response);
 }
 
 export function isAnonymousTrialExpired(trial: {

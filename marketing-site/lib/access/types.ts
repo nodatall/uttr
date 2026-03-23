@@ -20,6 +20,15 @@ export const usageEventSources = [
 ] as const;
 export type UsageEventSource = (typeof usageEventSources)[number];
 
+export interface ClaimTokenPayload {
+  version: 1;
+  claim_id: string;
+  anonymous_trial_id: string;
+  install_id: string;
+  issued_at: string;
+  expires_at: string;
+}
+
 export interface AnonymousTrialRow {
   id: string;
   install_id: string;
@@ -31,6 +40,15 @@ export interface AnonymousTrialRow {
   last_seen_at: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface TrialClaimRow {
+  id: string;
+  anonymous_trial_id: string;
+  claim_token_hash: string;
+  expires_at: string;
+  redeemed_at: string | null;
+  created_at: string;
 }
 
 export interface EntitlementRow {
@@ -48,6 +66,11 @@ export interface InstallTokenPayload {
   install_id: string;
   device_fingerprint_hash: string;
   issued_at: string;
+}
+
+export interface SupabaseUser {
+  id: string;
+  email: string | null;
 }
 
 export interface AccessDecision {
