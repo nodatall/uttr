@@ -41,7 +41,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 - [ ] 1.0 Move `marketing-site` to a Fly-ready standalone backend deployment
   - covers_prd: `FR-003`, `FR-004`
   - covers_tdd: `TDR-008`
-  - [ ] 1.1 Enable standalone Next.js output and add Fly deployment assets
+  - [x] 1.1 Enable standalone Next.js output and add Fly deployment assets
     - covers_prd: `FR-003`, `FR-004`
     - covers_tdd: `TDR-008`
     - output: `marketing-site/next.config.ts`, `marketing-site/Dockerfile`, `marketing-site/fly.toml`
