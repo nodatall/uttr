@@ -128,10 +128,19 @@ export async function POST(request: Request) {
     const { stripeSecretKey, monthlyPriceId, siteUrl } = readCheckoutConfig();
     const stripe = getStripe(stripeSecretKey);
     const source = normalizeSource(parsedBody.data.source);
-
     const claimContext = parsedBody.data.claim_token
       ? await resolveClaimContext(parsedBody.data.claim_token, currentUser.id)
       : null;
+    const entitlement = await fetchEntitlementByUserId(currentUser.id);
+
+    if (entitlement?.subscription_status === "active") {
+      return NextResponse.json({
+        already_entitled: true,
+        has_active_entitlement: true,
+        return_url: `${siteUrl}/success?status=active`,
+        user_id: currentUser.id,
+      });
+    }
 
     const checkoutSession = await stripe.checkout.sessions.create({
       mode: "subscription",
@@ -156,8 +165,6 @@ export async function POST(request: Request) {
         { status: 500 },
       );
     }
-
-    const entitlement = await fetchEntitlementByUserId(currentUser.id);
 
     return NextResponse.json({
       url: checkoutSession.url,

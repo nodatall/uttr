@@ -101,7 +101,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - output: `marketing-site/app/api/checkout/route.ts`, `marketing-site/app/(site)/**`, `marketing-site/lib/stripe.ts`
     - verify: `npm -C marketing-site run lint`
     - done_when: The site can sign users in, link the blocked install, and create a Stripe Checkout Session with enough metadata to update entitlements correctly.
-  - [ ] 4.2 Add success, claim, and billing-portal flows for returning users
+  - [x] 4.2 Add success, claim, and billing-portal flows for returning users
     - covers_prd: `FR-005`, `FR-009`
     - covers_tdd: `TDR-004`, `TDR-006`
     - output: `marketing-site/app/**/page.tsx`, `marketing-site/app/api/billing/portal/route.ts`

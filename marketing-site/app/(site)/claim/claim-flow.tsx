@@ -60,11 +60,22 @@ async function continueCheckoutFlow({
   });
 
   const payload = (await checkoutResponse.json().catch(() => ({}))) as {
-    url?: string;
+    already_entitled?: boolean;
     error?: string;
+    return_url?: string;
+    url?: string;
   };
 
-  if (!checkoutResponse.ok || !payload.url) {
+  if (!checkoutResponse.ok) {
+    throw new Error(payload.error || "Unable to start checkout right now.");
+  }
+
+  if (payload.already_entitled && payload.return_url) {
+    window.location.assign(payload.return_url);
+    return;
+  }
+
+  if (!payload.url) {
     throw new Error(payload.error || "Unable to start checkout right now.");
   }
 
