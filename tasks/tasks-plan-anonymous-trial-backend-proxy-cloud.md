@@ -146,7 +146,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - verify: `npm run lint`
     - done_when: BYOK stays hidden in normal UX, can be unlocked intentionally, validates correctly, and bypasses subscription gating only when valid.
 
-- [ ] 7.0 Tighten proxy-path latency and regression coverage
+- [x] 7.0 Tighten proxy-path latency and regression coverage
   - covers_prd: `FR-010`
   - covers_tdd: `TDR-007`
   - [x] 7.1 Remove short-clip padding on the proxy path and improve trailing-silence trimming
@@ -155,7 +155,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - output: `src-tauri/src/managers/transcription.rs`, `src-tauri/src/audio_toolkit/**`, `marketing-site/app/api/transcribe/cloud/route.ts`
     - verify: `cargo test --manifest-path src-tauri/Cargo.toml`
     - done_when: Uttr-managed cloud uploads no longer add unnecessary minimum padding and trailing silence is trimmed more aggressively before proxy upload.
-  - [ ] 7.2 Add focused verification for trial, billing, and proxy latency paths
+  - [x] 7.2 Add focused verification for trial, billing, and proxy latency paths
     - covers_prd: `FR-005`, `FR-006`, `FR-009`, `FR-010`
     - covers_tdd: `TDR-004`, `TDR-007`
     - output: `marketing-site/**`, `src-tauri/**`
