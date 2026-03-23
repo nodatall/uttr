@@ -1,5 +1,7 @@
 use crate::access::{bootstrap_install_state, refresh_entitlement_state, request_claim_token};
-use crate::audio_toolkit::{apply_custom_words, filter_transcription_output};
+use crate::audio_toolkit::{
+    apply_custom_words, filter_transcription_output, trim_proxy_upload_audio,
+};
 use crate::groq_client;
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::model::{
@@ -878,11 +880,29 @@ impl TranscriptionManager {
 
         let groq_model = groq_api_model_name(model_id)
             .ok_or_else(|| anyhow::anyhow!("Unknown Groq model id: {}", model_id))?;
+        let trimmed_audio = trim_proxy_upload_audio(&audio);
+
+        if trimmed_audio.is_empty() {
+            info!(
+                "Skipping proxy transcription after trimming produced no uploadable audio ({} samples)",
+                audio.len()
+            );
+            self.maybe_unload_immediately("trimmed proxy audio");
+            return Ok(String::new());
+        }
+
+        if trimmed_audio.len() != audio.len() {
+            debug!(
+                "Trimmed proxy upload audio from {} to {} samples",
+                audio.len(),
+                trimmed_audio.len()
+            );
+        }
 
         match groq_client::transcribe_samples(
             access.install_token.trim(),
             groq_model,
-            &audio,
+            &trimmed_audio,
             &settings.selected_language,
             settings.translate_to_english,
         )

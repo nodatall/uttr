@@ -149,7 +149,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 - [ ] 7.0 Tighten proxy-path latency and regression coverage
   - covers_prd: `FR-010`
   - covers_tdd: `TDR-007`
-  - [ ] 7.1 Remove short-clip padding on the proxy path and improve trailing-silence trimming
+  - [x] 7.1 Remove short-clip padding on the proxy path and improve trailing-silence trimming
     - covers_prd: `FR-010`
     - covers_tdd: `TDR-007`
     - output: `src-tauri/src/managers/transcription.rs`, `src-tauri/src/audio_toolkit/**`, `marketing-site/app/api/transcribe/cloud/route.ts`

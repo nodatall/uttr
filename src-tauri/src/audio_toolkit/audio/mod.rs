@@ -8,5 +8,5 @@ mod visualizer;
 pub use device::{list_input_devices, list_output_devices, CpalDeviceInfo};
 pub use recorder::{AudioRecorder, DrainResult};
 pub use resampler::FrameResampler;
-pub use utils::save_wav_file;
+pub use utils::{save_wav_file, trim_proxy_upload_audio};
 pub use visualizer::AudioVisualiser;
