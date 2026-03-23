@@ -11,3 +11,32 @@ export function getStripe(secretKey: string) {
 
   return stripeClient;
 }
+
+type BuildCheckoutMetadataInput = {
+  source: string;
+  userId: string;
+  anonymousTrialId?: string | null;
+  installId?: string | null;
+};
+
+export function buildCheckoutMetadata({
+  source,
+  userId,
+  anonymousTrialId = null,
+  installId = null,
+}: BuildCheckoutMetadataInput) {
+  const metadata: Record<string, string> = {
+    source,
+    user_id: userId,
+  };
+
+  if (anonymousTrialId) {
+    metadata.anonymous_trial_id = anonymousTrialId;
+  }
+
+  if (installId) {
+    metadata.install_id = installId;
+  }
+
+  return metadata;
+}

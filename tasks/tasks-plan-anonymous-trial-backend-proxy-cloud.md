@@ -95,7 +95,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 - [ ] 4.0 Finish website checkout and billing management for desktop-linked installs
   - covers_prd: `FR-005`, `FR-006`, `FR-009`
   - covers_tdd: `TDR-003`, `TDR-004`, `TDR-006`
-  - [ ] 4.1 Upgrade checkout creation to authenticated, install-aware subscription purchase
+- [x] 4.1 Upgrade checkout creation to authenticated, install-aware subscription purchase
     - covers_prd: `FR-005`, `FR-006`
     - covers_tdd: `TDR-003`, `TDR-006`
     - output: `marketing-site/app/api/checkout/route.ts`, `marketing-site/app/(site)/**`, `marketing-site/lib/stripe.ts`
