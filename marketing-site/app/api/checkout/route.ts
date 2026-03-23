@@ -25,6 +25,15 @@ function normalizeSource(source: string | undefined) {
   return source?.trim() || "direct";
 }
 
+class CheckoutRouteError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
 async function resolveClaimContext(
   claimToken: string,
   userId: string,
@@ -33,7 +42,8 @@ async function resolveClaimContext(
   try {
     tokenPayload = verifyClaimToken(claimToken);
   } catch (error) {
-    throw new Error(
+    throw new CheckoutRouteError(
+      401,
       error instanceof Error ? error.message : "Invalid claim token.",
     );
   }
@@ -41,7 +51,7 @@ async function resolveClaimContext(
   const claimTokenHash = hashClaimToken(claimToken);
   const claim = await fetchTrialClaimByHash(claimTokenHash);
   if (!claim) {
-    throw new Error("Claim token not found.");
+    throw new CheckoutRouteError(404, "Claim token not found.");
   }
 
   if (
@@ -49,24 +59,30 @@ async function resolveClaimContext(
     claim.anonymous_trial_id !== tokenPayload.anonymous_trial_id ||
     claimTokenHash !== claim.claim_token_hash
   ) {
-    throw new Error("Claim token payload mismatch.");
+    throw new CheckoutRouteError(409, "Claim token payload mismatch.");
   }
 
   if (new Date(claim.expires_at).getTime() <= Date.now()) {
-    throw new Error("Claim token expired.");
+    throw new CheckoutRouteError(409, "Claim token expired.");
   }
 
   if (!claim.redeemed_at) {
-    throw new Error("Claim token must be redeemed before checkout.");
+    throw new CheckoutRouteError(
+      409,
+      "Claim token must be redeemed before checkout.",
+    );
   }
 
   const trial = await fetchAnonymousTrialById(claim.anonymous_trial_id);
   if (!trial || trial.install_id !== tokenPayload.install_id) {
-    throw new Error("Claim token is no longer valid.");
+    throw new CheckoutRouteError(409, "Claim token is no longer valid.");
   }
 
   if (trial.user_id !== userId) {
-    throw new Error("Claim token is linked to a different user.");
+    throw new CheckoutRouteError(
+      409,
+      "Claim token is linked to a different user.",
+    );
   }
 
   return {
@@ -93,7 +109,15 @@ export async function POST(request: Request) {
       );
     }
 
-    const currentUser = await fetchSupabaseUser(accessToken);
+    let currentUser;
+    try {
+      currentUser = await fetchSupabaseUser(accessToken);
+    } catch {
+      return NextResponse.json(
+        { error: "Invalid or expired Supabase session." },
+        { status: 401 },
+      );
+    }
     if (!currentUser.email) {
       return NextResponse.json(
         { error: "Authenticated user is missing an email address." },
@@ -141,6 +165,13 @@ export async function POST(request: Request) {
       has_active_entitlement: entitlement?.subscription_status === "active",
     });
   } catch (error) {
+    if (error instanceof CheckoutRouteError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: error.status },
+      );
+    }
+
     console.error(
       JSON.stringify({
         level: "error",
