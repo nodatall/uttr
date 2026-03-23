@@ -117,7 +117,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - output: `src-tauri/src/settings.rs`, `src-tauri/src/commands/**`, `src-tauri/src/lib.rs`, `src/bindings.ts`
     - verify: `cargo test --manifest-path src-tauri/Cargo.toml`
     - done_when: The desktop app can bootstrap install-linked access, cache trial/access state, request claim tokens, and refresh entitlement from the backend.
-  - [ ] 5.2 Replace default direct Groq transcription with the proxy path and preserve active-user fallback
+  - [x] 5.2 Replace default direct Groq transcription with the proxy path and preserve active-user fallback
     - covers_prd: `FR-002`, `FR-006`, `FR-010`
     - covers_tdd: `TDR-001`, `TDR-006`, `TDR-007`
     - output: `src-tauri/src/groq_client.rs`, `src-tauri/src/managers/transcription.rs`
