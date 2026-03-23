@@ -1,22 +1,42 @@
-const eventRegistry = new Map<string, number>();
-const TTL_MS = 1000 * 60 * 60 * 24;
+import { readSupabaseConfig } from "@/lib/env";
 
-function cleanup(now: number) {
-  for (const [eventId, timestamp] of eventRegistry.entries()) {
-    if (now - timestamp > TTL_MS) {
-      eventRegistry.delete(eventId);
-    }
-  }
-}
+type WebhookEventRecord = {
+  id: string;
+  event_type: string;
+};
 
-export function registerWebhookEvent(eventId: string) {
-  const now = Date.now();
-  cleanup(now);
+export async function registerWebhookEvent(
+  eventId: string,
+  eventType: string,
+) {
+  const { url, serviceRoleKey } = readSupabaseConfig();
+  const response = await fetch(
+    `${url}/rest/v1/stripe_webhook_events`,
+    {
+      method: "POST",
+      headers: {
+        apikey: serviceRoleKey,
+        authorization: `Bearer ${serviceRoleKey}`,
+        "content-type": "application/json",
+        prefer: "return=minimal",
+      },
+      body: JSON.stringify({
+        id: eventId,
+        event_type: eventType,
+      } satisfies WebhookEventRecord),
+    },
+  );
 
-  if (eventRegistry.has(eventId)) {
+  if (response.status === 409) {
     return false;
   }
 
-  eventRegistry.set(eventId, now);
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(
+      `Failed to register webhook event ${eventId} (${response.status}): ${body || response.statusText}`,
+    );
+  }
+
   return true;
 }

@@ -54,7 +54,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - verify: `npm -C marketing-site run lint`
     - done_when: The README and env helpers describe Fly deployment plus every required backend secret and public URL.
 
-- [ ] 2.0 Add durable Supabase billing and access state
+- [x] 2.0 Add durable Supabase billing and access state
   - covers_prd: `FR-001`, `FR-006`, `FR-009`
   - covers_tdd: `TDR-002`, `TDR-003`, `TDR-004`
   - [x] 2.1 Create database schema for trials, claims, entitlements, usage, and webhook events
@@ -63,7 +63,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - output: `marketing-site/supabase/migrations/*`
     - verify: `supabase db lint`
     - done_when: Supabase schema supports anonymous trial rows, claim tokens, entitlements, usage events, and durable webhook idempotency.
-  - [ ] 2.2 Replace process-local webhook idempotency with durable persistence
+  - [x] 2.2 Replace process-local webhook idempotency with durable persistence
     - covers_prd: `FR-006`, `FR-009`
     - covers_tdd: `TDR-004`
     - output: `marketing-site/lib/idempotency.ts`, `marketing-site/app/api/stripe/webhook/route.ts`
