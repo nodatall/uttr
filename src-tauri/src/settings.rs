@@ -1,10 +1,12 @@
 use log::{debug, warn};
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
+use sha2::{Digest, Sha256};
 use specta::Type;
 use std::collections::HashMap;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_store::StoreExt;
+use uuid::Uuid;
 
 pub const APPLE_INTELLIGENCE_PROVIDER_ID: &str = "apple_intelligence";
 pub const APPLE_INTELLIGENCE_DEFAULT_MODEL_ID: &str = "Apple Intelligence";
@@ -122,6 +124,65 @@ pub struct ShortcutBinding {
     pub description: String,
     pub default_binding: String,
     pub current_binding: String,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum TrialState {
+    New,
+    Trialing,
+    Expired,
+    Linked,
+}
+
+impl Default for TrialState {
+    fn default() -> Self {
+        TrialState::New
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum AccessState {
+    Blocked,
+    Trialing,
+    Subscribed,
+}
+
+impl Default for AccessState {
+    fn default() -> Self {
+        AccessState::Blocked
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum EntitlementState {
+    Inactive,
+    Active,
+    PastDue,
+    Canceled,
+    Expired,
+}
+
+impl Default for EntitlementState {
+    fn default() -> Self {
+        EntitlementState::Inactive
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ByokValidationState {
+    Unknown,
+    Valid,
+    Invalid,
+}
+
+impl Default for ByokValidationState {
+    fn default() -> Self {
+        ByokValidationState::Unknown
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
@@ -322,6 +383,22 @@ pub struct AppSettings {
     pub update_checks_enabled: bool,
     #[serde(default = "default_model")]
     pub selected_model: String,
+    #[serde(default = "default_install_id")]
+    pub install_id: String,
+    #[serde(default = "default_device_fingerprint_hash")]
+    pub device_fingerprint_hash: String,
+    #[serde(default = "default_install_token")]
+    pub install_token: String,
+    #[serde(default = "default_trial_state")]
+    pub anonymous_trial_state: TrialState,
+    #[serde(default = "default_access_state")]
+    pub access_state: AccessState,
+    #[serde(default = "default_entitlement_state")]
+    pub entitlement_state: EntitlementState,
+    #[serde(default)]
+    pub byok_enabled: bool,
+    #[serde(default = "default_byok_validation_state")]
+    pub byok_validation_state: ByokValidationState,
     #[serde(default = "default_always_on_microphone")]
     pub always_on_microphone: bool,
     #[serde(default)]
@@ -399,6 +476,34 @@ pub struct AppSettings {
 
 fn default_model() -> String {
     "".to_string()
+}
+
+fn default_install_id() -> String {
+    String::new()
+}
+
+fn default_device_fingerprint_hash() -> String {
+    String::new()
+}
+
+fn default_install_token() -> String {
+    String::new()
+}
+
+fn default_trial_state() -> TrialState {
+    TrialState::New
+}
+
+fn default_access_state() -> AccessState {
+    AccessState::Blocked
+}
+
+fn default_entitlement_state() -> EntitlementState {
+    EntitlementState::Inactive
+}
+
+fn default_byok_validation_state() -> ByokValidationState {
+    ByokValidationState::Unknown
 }
 
 fn default_always_on_microphone() -> bool {
@@ -641,6 +746,46 @@ fn ensure_post_process_defaults(settings: &mut AppSettings) -> bool {
     changed
 }
 
+fn device_fingerprint_hash(app: &AppHandle) -> String {
+    let mut hasher = Sha256::new();
+
+    if let Ok(app_data_dir) = app.path().app_data_dir() {
+        hasher.update(app_data_dir.to_string_lossy().as_bytes());
+    }
+
+    hasher.update(std::env::consts::OS.as_bytes());
+    hasher.update(std::env::consts::ARCH.as_bytes());
+
+    if let Ok(hostname) = std::env::var("HOSTNAME").or_else(|_| std::env::var("COMPUTERNAME")) {
+        hasher.update(hostname.as_bytes());
+    }
+
+    if let Ok(username) = std::env::var("USER").or_else(|_| std::env::var("USERNAME")) {
+        hasher.update(username.as_bytes());
+    }
+
+    format!("{:x}", hasher.finalize())
+}
+
+pub(crate) fn ensure_install_identity_defaults(
+    app: &AppHandle,
+    settings: &mut AppSettings,
+) -> bool {
+    let mut changed = false;
+
+    if settings.install_id.trim().is_empty() {
+        settings.install_id = Uuid::new_v4().to_string();
+        changed = true;
+    }
+
+    if settings.device_fingerprint_hash.trim().is_empty() {
+        settings.device_fingerprint_hash = device_fingerprint_hash(app);
+        changed = true;
+    }
+
+    changed
+}
+
 pub const SETTINGS_STORE_PATH: &str = "settings_store.json";
 
 pub fn get_default_settings() -> AppSettings {
@@ -705,6 +850,14 @@ pub fn get_default_settings() -> AppSettings {
         autostart_enabled: default_autostart_enabled(),
         update_checks_enabled: default_update_checks_enabled(),
         selected_model: "".to_string(),
+        install_id: default_install_id(),
+        device_fingerprint_hash: default_device_fingerprint_hash(),
+        install_token: default_install_token(),
+        anonymous_trial_state: default_trial_state(),
+        access_state: default_access_state(),
+        entitlement_state: default_entitlement_state(),
+        byok_enabled: false,
+        byok_validation_state: default_byok_validation_state(),
         always_on_microphone: false,
         selected_microphone: None,
         clamshell_microphone: None,
@@ -792,6 +945,9 @@ pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
                 if updated {
                     debug!("Settings updated with new bindings");
                     store.set("settings", serde_json::to_value(&settings).unwrap());
+                    if let Err(e) = store.save() {
+                        warn!("Failed to flush settings to disk: {}", e);
+                    }
                 }
 
                 settings
@@ -801,17 +957,36 @@ pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
                 // Fall back to default settings if parsing fails
                 let default_settings = get_default_settings();
                 store.set("settings", serde_json::to_value(&default_settings).unwrap());
+                if let Err(e) = store.save() {
+                    warn!("Failed to flush settings to disk: {}", e);
+                }
                 default_settings
             }
         }
     } else {
         let default_settings = get_default_settings();
         store.set("settings", serde_json::to_value(&default_settings).unwrap());
+        if let Err(e) = store.save() {
+            warn!("Failed to flush settings to disk: {}", e);
+        }
         default_settings
     };
 
+    let mut changed = false;
+
     if ensure_post_process_defaults(&mut settings) {
+        changed = true;
+    }
+
+    if ensure_install_identity_defaults(app, &mut settings) {
+        changed = true;
+    }
+
+    if changed {
         store.set("settings", serde_json::to_value(&settings).unwrap());
+        if let Err(e) = store.save() {
+            warn!("Failed to flush settings to disk: {}", e);
+        }
     }
 
     settings
@@ -826,16 +1001,35 @@ pub fn get_settings(app: &AppHandle) -> AppSettings {
         serde_json::from_value::<AppSettings>(settings_value).unwrap_or_else(|_| {
             let default_settings = get_default_settings();
             store.set("settings", serde_json::to_value(&default_settings).unwrap());
+            if let Err(e) = store.save() {
+                warn!("Failed to flush settings to disk: {}", e);
+            }
             default_settings
         })
     } else {
         let default_settings = get_default_settings();
         store.set("settings", serde_json::to_value(&default_settings).unwrap());
+        if let Err(e) = store.save() {
+            warn!("Failed to flush settings to disk: {}", e);
+        }
         default_settings
     };
 
+    let mut changed = false;
+
     if ensure_post_process_defaults(&mut settings) {
+        changed = true;
+    }
+
+    if ensure_install_identity_defaults(app, &mut settings) {
+        changed = true;
+    }
+
+    if changed {
         store.set("settings", serde_json::to_value(&settings).unwrap());
+        if let Err(e) = store.save() {
+            warn!("Failed to flush settings to disk: {}", e);
+        }
     }
 
     settings
@@ -942,5 +1136,15 @@ mod tests {
             CleaningPromptPreset::Strict
         );
         let _ = changed; // other defaults may or may not fire
+    }
+
+    #[test]
+    fn default_access_state_is_blocked() {
+        let settings = get_default_settings();
+        assert_eq!(settings.anonymous_trial_state, TrialState::New);
+        assert_eq!(settings.access_state, AccessState::Blocked);
+        assert_eq!(settings.entitlement_state, EntitlementState::Inactive);
+        assert!(!settings.byok_enabled);
+        assert_eq!(settings.byok_validation_state, ByokValidationState::Unknown);
     }
 }

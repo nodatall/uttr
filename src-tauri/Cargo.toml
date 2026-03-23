@@ -60,6 +60,8 @@ enigo = "0.6.1"
 rodio = { git = "https://github.com/cjpais/rodio.git" }
 reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
 futures-util = "0.3"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4"] }
 rustfft = "6.4.0"
 strsim = "0.11.0"
 natural = "0.5.0"

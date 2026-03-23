@@ -2468,6 +2468,7 @@ dependencies = [
  "rustfft",
  "serde",
  "serde_json",
+ "sha2",
  "signal-hook",
  "specta",
  "specta-typescript",
@@ -2493,6 +2494,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "transcribe-rs",
+ "uuid",
  "vad-rs",
  "windows 0.61.3",
 ]

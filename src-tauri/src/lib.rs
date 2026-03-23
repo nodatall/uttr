@@ -1,3 +1,4 @@
+mod access;
 mod actions;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod apple_intelligence;
@@ -304,6 +305,10 @@ pub fn run() {
         commands::open_recordings_folder,
         commands::open_log_dir,
         commands::open_app_data_dir,
+        commands::access::bootstrap_install_access,
+        commands::access::refresh_install_entitlement,
+        commands::access::create_trial_claim,
+        commands::access::get_install_access_snapshot,
         commands::check_apple_intelligence_available,
         commands::initialize_enigo,
         commands::initialize_shortcuts,

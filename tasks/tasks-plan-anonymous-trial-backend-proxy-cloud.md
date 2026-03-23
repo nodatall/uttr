@@ -92,7 +92,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - verify: `npm -C marketing-site run lint`
     - done_when: A blocked install can mint a short-lived claim token and the website can redeem it exactly once to link the install to the signed-in user.
 
-- [ ] 4.0 Finish website checkout and billing management for desktop-linked installs
+- [x] 4.0 Finish website checkout and billing management for desktop-linked installs
   - covers_prd: `FR-005`, `FR-006`, `FR-009`
   - covers_tdd: `TDR-003`, `TDR-004`, `TDR-006`
   - [x] 4.1 Upgrade checkout creation to authenticated, install-aware subscription purchase
@@ -111,7 +111,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 - [ ] 5.0 Replace desktop default cloud behavior with install-linked backend access
   - covers_prd: `FR-001`, `FR-002`, `FR-005`, `FR-006`, `FR-007`, `FR-010`
   - covers_tdd: `TDR-001`, `TDR-002`, `TDR-006`, `TDR-007`
-  - [ ] 5.1 Add install identity, trial state, access state, and entitlement refresh commands
+  - [x] 5.1 Add install identity, trial state, access state, and entitlement refresh commands
     - covers_prd: `FR-001`, `FR-005`, `FR-006`
     - covers_tdd: `TDR-002`, `TDR-006`
     - output: `src-tauri/src/settings.rs`, `src-tauri/src/commands/**`, `src-tauri/src/lib.rs`, `src/bindings.ts`
