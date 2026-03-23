@@ -93,7 +93,9 @@ export async function transcribeWithGroq({
     body.set("language", normalizedLanguage);
   }
 
-  const blob = new Blob([audioBytes], { type: mimeType });
+  const blobBytes =
+    audioBytes instanceof Uint8Array ? Uint8Array.from(audioBytes) : new Uint8Array(audioBytes);
+  const blob = new Blob([blobBytes], { type: mimeType });
   body.set("file", blob, fileName);
 
   const response = await fetch(`${GROQ_BASE_URL}/${endpoint}`, {

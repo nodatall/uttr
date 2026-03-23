@@ -132,8 +132,9 @@ export async function POST(request: Request) {
       ? await resolveClaimContext(parsedBody.data.claim_token, currentUser.id)
       : null;
     const entitlement = await fetchEntitlementByUserId(currentUser.id);
+    const hasActiveEntitlement = entitlement?.subscription_status === "active";
 
-    if (entitlement?.subscription_status === "active") {
+    if (hasActiveEntitlement) {
       return NextResponse.json({
         already_entitled: true,
         has_active_entitlement: true,
@@ -169,7 +170,7 @@ export async function POST(request: Request) {
     return NextResponse.json({
       url: checkoutSession.url,
       user_id: currentUser.id,
-      has_active_entitlement: entitlement?.subscription_status === "active",
+      has_active_entitlement: hasActiveEntitlement,
     });
   } catch (error) {
     if (error instanceof CheckoutRouteError) {
