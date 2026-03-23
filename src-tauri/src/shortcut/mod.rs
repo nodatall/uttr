@@ -20,9 +20,9 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::settings::{
-    self, get_settings, AutoSubmitKey, ClipboardHandling, KeyboardImplementation,
-    OverlayPosition, PasteMethod, ShortcutBinding, SoundTheme, TypingTool,
-    APPLE_INTELLIGENCE_DEFAULT_MODEL_ID, APPLE_INTELLIGENCE_PROVIDER_ID,
+    self, get_settings, AutoSubmitKey, ClipboardHandling, KeyboardImplementation, OverlayPosition,
+    PasteMethod, ShortcutBinding, SoundTheme, TypingTool, APPLE_INTELLIGENCE_DEFAULT_MODEL_ID,
+    APPLE_INTELLIGENCE_PROVIDER_ID,
 };
 use crate::tray;
 
@@ -835,7 +835,18 @@ pub fn change_post_process_api_key_setting(
 ) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     validate_provider_exists(&settings, &provider_id)?;
-    settings.post_process_api_keys.insert(provider_id, api_key);
+    if provider_id == "groq" {
+        if api_key.trim().is_empty() {
+            crate::byok_secrets::store_groq_api_key(&app, &settings, "")?;
+        } else {
+            crate::byok_secrets::store_groq_api_key(&app, &settings, &api_key)?;
+        }
+        settings
+            .post_process_api_keys
+            .insert(provider_id, String::new());
+    } else {
+        settings.post_process_api_keys.insert(provider_id, api_key);
+    }
     settings::write_settings(&app, settings);
     Ok(())
 }
@@ -923,7 +934,10 @@ pub async fn fetch_post_process_models(
 
 #[tauri::command]
 #[specta::specta]
-pub fn change_post_process_timeout_setting(app: AppHandle, timeout_secs: u64) -> Result<(), String> {
+pub fn change_post_process_timeout_setting(
+    app: AppHandle,
+    timeout_secs: u64,
+) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     settings.post_process_timeout_secs = timeout_secs;
     settings::write_settings(&app, settings);
@@ -932,7 +946,10 @@ pub fn change_post_process_timeout_setting(app: AppHandle, timeout_secs: u64) ->
 
 #[tauri::command]
 #[specta::specta]
-pub fn change_post_process_system_prompt_setting(app: AppHandle, system_prompt: String) -> Result<(), String> {
+pub fn change_post_process_system_prompt_setting(
+    app: AppHandle,
+    system_prompt: String,
+) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     settings.post_process_system_prompt = system_prompt;
     settings::write_settings(&app, settings);

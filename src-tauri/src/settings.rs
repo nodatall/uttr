@@ -786,6 +786,19 @@ pub(crate) fn ensure_install_identity_defaults(
     changed
 }
 
+fn ensure_groq_secret_is_migrated(app: &AppHandle, settings: &mut AppSettings) -> bool {
+    match crate::byok_secrets::migrate_groq_api_key(app, settings) {
+        Ok(changed) => changed,
+        Err(error) => {
+            warn!(
+                "Failed to migrate Groq BYOK secret to Stronghold: {}",
+                error
+            );
+            false
+        }
+    }
+}
+
 pub const SETTINGS_STORE_PATH: &str = "settings_store.json";
 
 pub fn get_default_settings() -> AppSettings {
@@ -929,7 +942,7 @@ pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
         // Parse the entire settings object
         match serde_json::from_value::<AppSettings>(settings_value) {
             Ok(mut settings) => {
-                debug!("Found existing settings: {:?}", settings);
+                debug!("Found existing settings store");
                 let default_settings = get_default_settings();
                 let mut updated = false;
 
@@ -982,6 +995,10 @@ pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
         changed = true;
     }
 
+    if ensure_groq_secret_is_migrated(app, &mut settings) {
+        changed = true;
+    }
+
     if changed {
         store.set("settings", serde_json::to_value(&settings).unwrap());
         if let Err(e) = store.save() {
@@ -1022,6 +1039,10 @@ pub fn get_settings(app: &AppHandle) -> AppSettings {
     }
 
     if ensure_install_identity_defaults(app, &mut settings) {
+        changed = true;
+    }
+
+    if ensure_groq_secret_is_migrated(app, &mut settings) {
         changed = true;
     }
 

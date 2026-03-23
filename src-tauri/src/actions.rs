@@ -172,7 +172,11 @@ async fn resolve_post_process_model(
     Some(selected)
 }
 
-async fn post_process_transcription(settings: &AppSettings, transcription: &str) -> Option<String> {
+async fn post_process_transcription(
+    app_handle: &AppHandle,
+    settings: &AppSettings,
+    transcription: &str,
+) -> Option<String> {
     let provider = match settings.active_post_process_provider().cloned() {
         Some(provider) => provider,
         None => {
@@ -181,11 +185,25 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
         }
     };
 
-    let api_key = settings
-        .post_process_api_keys
-        .get(&provider.id)
-        .cloned()
-        .unwrap_or_default();
+    let api_key = if provider.id == "groq" {
+        match crate::byok_secrets::load_groq_api_key(app_handle, settings) {
+            Ok(Some(key)) => key,
+            Ok(None) => String::new(),
+            Err(error) => {
+                warn!(
+                    "Failed to load Groq BYOK secret from Stronghold for post-processing: {}",
+                    error
+                );
+                String::new()
+            }
+        }
+    } else {
+        settings
+            .post_process_api_keys
+            .get(&provider.id)
+            .cloned()
+            .unwrap_or_default()
+    };
 
     let model = match resolve_post_process_model(&provider, settings, &api_key).await {
         Some(model) => model,
@@ -251,8 +269,14 @@ async fn post_process_transcription(settings: &AppSettings, transcription: &str)
     };
 
     // Send the chat completion request
-    match crate::llm_client::send_chat_completion(&provider, api_key, &model, processed_prompt, resolved_system_prompt)
-        .await
+    match crate::llm_client::send_chat_completion(
+        &provider,
+        api_key,
+        &model,
+        processed_prompt,
+        resolved_system_prompt,
+    )
+    .await
     {
         Ok(Some(content)) => {
             // Strip invisible Unicode characters that some LLMs (e.g., Qwen) may insert
@@ -549,7 +573,7 @@ impl ShortcutAction for TranscribeAction {
                             let processed = if post_process {
                                 match timeout(
                                     post_process_timeout,
-                                    post_process_transcription(&settings, &final_text),
+                                    post_process_transcription(&ah, &settings, &final_text),
                                 )
                                 .await
                                 {
@@ -570,11 +594,18 @@ impl ShortcutAction for TranscribeAction {
                                 final_text = processed_text;
 
                                 // Record the system prompt that was used
-                                post_process_prompt = Some(match settings.post_process_cleaning_prompt_preset {
-                                    CleaningPromptPreset::Strict => STRICT_CLEANING_PROMPT.to_string(),
-                                    CleaningPromptPreset::Nuanced => NUANCED_CLEANING_PROMPT.to_string(),
-                                    CleaningPromptPreset::Custom => settings.post_process_system_prompt.clone(),
-                                });
+                                post_process_prompt =
+                                    Some(match settings.post_process_cleaning_prompt_preset {
+                                        CleaningPromptPreset::Strict => {
+                                            STRICT_CLEANING_PROMPT.to_string()
+                                        }
+                                        CleaningPromptPreset::Nuanced => {
+                                            NUANCED_CLEANING_PROMPT.to_string()
+                                        }
+                                        CleaningPromptPreset::Custom => {
+                                            settings.post_process_system_prompt.clone()
+                                        }
+                                    });
                             } else if final_text != transcription {
                                 // Chinese conversion was applied but no LLM post-processing
                                 post_processed_text = Some(final_text.clone());

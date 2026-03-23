@@ -1,5 +1,5 @@
-use crate::audio_toolkit::{apply_custom_words, filter_transcription_output};
 use crate::access::{bootstrap_install_state, refresh_entitlement_state, request_claim_token};
+use crate::audio_toolkit::{apply_custom_words, filter_transcription_output};
 use crate::groq_client;
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::model::{
@@ -146,10 +146,7 @@ fn is_effectively_silent(levels: (f32, f32)) -> bool {
     levels.0 <= MAX_SILENT_RMS && levels.1 <= MAX_SILENT_PEAK
 }
 
-fn should_suppress_silence_hallucination(
-    levels: Option<(f32, f32)>,
-    transcription: &str,
-) -> bool {
+fn should_suppress_silence_hallucination(levels: Option<(f32, f32)>, transcription: &str) -> bool {
     const SILENCE_HALLUCINATIONS: &[&str] =
         &["thank you", "thanks for watching", "thank you for watching"];
 
@@ -442,10 +439,16 @@ impl TranscriptionManager {
 
     fn resolve_byok_groq_api_key(&self) -> Option<String> {
         let settings = get_settings(&self.app_handle);
-        if let Some(key) = settings.post_process_api_keys.get("groq") {
-            let key = key.trim();
-            if !key.is_empty() {
-                return Some(key.to_string());
+        match crate::byok_secrets::load_groq_api_key(&self.app_handle, &settings) {
+            Ok(Some(key)) => {
+                let key = key.trim();
+                if !key.is_empty() {
+                    return Some(key.to_string());
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                warn!("Failed to load Groq BYOK secret from Stronghold: {}", error);
             }
         }
 
@@ -453,7 +456,8 @@ impl TranscriptionManager {
     }
 
     fn byok_is_active(settings: &AppSettings) -> bool {
-        settings.byok_enabled && matches!(settings.byok_validation_state, ByokValidationState::Valid)
+        settings.byok_enabled
+            && matches!(settings.byok_validation_state, ByokValidationState::Valid)
     }
 
     fn sync_cloud_access_state(
@@ -787,9 +791,9 @@ impl TranscriptionManager {
     ) -> Result<String> {
         let groq_model = groq_api_model_name(model_id)
             .ok_or_else(|| anyhow::anyhow!("Unknown Groq model id: {}", model_id))?;
-        let api_key = self.resolve_byok_groq_api_key().ok_or_else(|| {
-            anyhow::anyhow!("Groq API key is required for hidden BYOK mode.")
-        })?;
+        let api_key = self
+            .resolve_byok_groq_api_key()
+            .ok_or_else(|| anyhow::anyhow!("Groq API key is required for hidden BYOK mode."))?;
 
         match groq_client::transcribe_samples_direct(
             &api_key,
@@ -1256,8 +1260,7 @@ impl TranscriptionManager {
 
             let settings = get_settings(&self_clone.app_handle);
             let model_id = settings.selected_model.clone();
-            let load_result =
-                catch_unwind(AssertUnwindSafe(|| self_clone.load_model(&model_id)));
+            let load_result = catch_unwind(AssertUnwindSafe(|| self_clone.load_model(&model_id)));
 
             match load_result {
                 Ok(Ok(())) => {}
@@ -1270,10 +1273,7 @@ impl TranscriptionManager {
                     } else {
                         "unknown panic".to_string()
                     };
-                    error!(
-                        "Model loading panicked for '{}': {}",
-                        model_id, panic_msg
-                    );
+                    error!("Model loading panicked for '{}': {}", model_id, panic_msg);
                 }
             }
         });

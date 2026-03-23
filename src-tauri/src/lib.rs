@@ -4,6 +4,7 @@ mod actions;
 mod apple_intelligence;
 mod audio_feedback;
 pub mod audio_toolkit;
+mod byok_secrets;
 mod clipboard;
 mod commands;
 mod groq_client;
@@ -411,6 +412,18 @@ pub fn run() {
             // Store the file log level in the atomic for the filter to use
             FILE_LOG_LEVEL.store(file_log_level.to_level_filter() as u8, Ordering::Relaxed);
             let app_handle = app.handle().clone();
+            let stronghold_salt_path = app_handle
+                .path()
+                .app_data_dir()
+                .expect("Failed to resolve app data directory")
+                .join("stronghold_salt.txt");
+            app.handle()
+                .plugin(
+                    tauri_plugin_stronghold::Builder::with_argon2(&stronghold_salt_path).build(),
+                )
+                .expect("Failed to initialize Stronghold plugin");
+            byok_secrets::initialize(&app_handle, &settings)
+                .expect("Failed to initialize Stronghold secret storage");
             app.manage(TranscriptionCoordinator::new(app_handle.clone()));
 
             initialize_core_logic(&app_handle);

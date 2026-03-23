@@ -133,7 +133,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 - [ ] 6.0 Add hidden BYOK with secure storage
   - covers_prd: `FR-008`
   - covers_tdd: `TDR-005`, `TDR-006`
-  - [ ] 6.1 Add Tauri Stronghold and migrate BYOK secret storage off plain settings
+  - [x] 6.1 Add Tauri Stronghold and migrate BYOK secret storage off plain settings
     - covers_prd: `FR-008`
     - covers_tdd: `TDR-005`
     - output: `src-tauri/Cargo.toml`, `src-tauri/src/lib.rs`, `package.json`, `src-tauri/capabilities/**`
