@@ -77,6 +77,7 @@ pub async fn validate_byok_groq_key(
     match crate::llm_client::fetch_models(&provider, key).await {
         Ok(_) => {
             settings.byok_validation_state = ByokValidationState::Valid;
+            settings.byok_enabled = true;
             write_settings(&app, settings);
             access::get_install_access_snapshot(app)
         }

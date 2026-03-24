@@ -29,7 +29,6 @@ export const GeneralSettings: React.FC = () => {
     <div className="max-w-3xl w-full mx-auto space-y-6">
       <SettingsGroup title={t("settings.general.title")}>
         <ShortcutInput shortcutId="transcribe" grouped={true} />
-        <ShortcutInput shortcutId="transcribe_with_post_process" grouped={true} />
         <PushToTalk descriptionMode="tooltip" grouped={true} />
         <AutostartToggle descriptionMode="tooltip" grouped={true} />
         <ShowTrayIcon descriptionMode="tooltip" grouped={true} />
@@ -59,6 +58,7 @@ export const GeneralSettings: React.FC = () => {
       </SettingsGroup>
       <SettingsGroup title={t("settings.advanced.groups.transcription")}>
         <TypingToolSetting descriptionMode="tooltip" grouped={true} />
+        <ShortcutInput shortcutId="transcribe_with_post_process" grouped={true} />
         <PostProcessingToggle descriptionMode="tooltip" grouped={true} />
         {postProcessEnabled && <PostProcessingSettingsApi />}
         {postProcessEnabled && <PostProcessingSettingsAdvanced />}

@@ -30,6 +30,12 @@ Resolve files exactly as:
 - One-shot final review log: `tasks/tmp/review-task-final-<plan-key>.md`
 - Ad-hoc review log: `tasks/tmp/review-task-ad-hoc-<yyyy-mm-dd>.md`
 
+## Archive workflow files
+
+- Final archive directory: `tasks/archive/<yyyy-mm-dd>-<plan-key>/`
+
+Use the local current date in ISO format (`YYYY-MM-DD`) when creating the archive directory so archived PRD/TDD/task artifacts preserve completion timing in-repo.
+
 By default, planning and review temporary files are deleted after successful completion. If the trigger includes `--preserve-planning-artifacts` or `--preserve-review-artifacts`, keep the matching temporary files in place and surface their paths in the final summary.
 
 ## Execution artifact gate

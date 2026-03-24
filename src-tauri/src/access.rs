@@ -90,6 +90,70 @@ fn backend_url(path: &str) -> String {
     format!("{}/{}", backend_base_url(), path.trim_start_matches('/'))
 }
 
+fn backend_transport_error_hint(target_url: &str, error_message: &str) -> String {
+    let lower = error_message.to_ascii_lowercase();
+
+    if lower.contains("dns")
+        || lower.contains("resolve")
+        || lower.contains("lookup address")
+        || lower.contains("no such host")
+    {
+        return format!(
+            "Could not resolve the Uttr backend host at {}. Check DNS/network access or set UTTR_BACKEND_BASE_URL to a reachable deployment.",
+            target_url
+        );
+    }
+
+    if lower.contains("timed out") || lower.contains("timeout") {
+        return format!(
+            "The request to {} timed out. The backend may be down or the network path is too slow.",
+            target_url
+        );
+    }
+
+    if lower.contains("certificate") || lower.contains("tls") {
+        return format!(
+            "TLS validation failed while connecting to {}. Check the backend certificate chain or point UTTR_BACKEND_BASE_URL at a valid HTTPS origin.",
+            target_url
+        );
+    }
+
+    if lower.contains("connection")
+        || lower.contains("connect error")
+        || lower.contains("unreachable")
+    {
+        return format!(
+            "Could not connect to {}. The backend may be unavailable or blocked by the current network.",
+            target_url
+        );
+    }
+
+    format!(
+        "The request to {} failed before the backend returned a response.",
+        target_url
+    )
+}
+
+fn format_backend_transport_error(
+    operation: &str,
+    target_url: &str,
+    error: &reqwest::Error,
+) -> String {
+    let hint = if error.is_timeout() {
+        format!(
+            "The request to {} timed out. The backend may be down or the network path is too slow.",
+            target_url
+        )
+    } else {
+        backend_transport_error_hint(target_url, &error.to_string())
+    };
+
+    format!(
+        "Failed to {}. {} Original error: {}",
+        operation, hint, error
+    )
+}
+
 fn access_snapshot(settings: &AppSettings, has_byok_secret: bool) -> InstallAccessSnapshot {
     InstallAccessSnapshot {
         install_id: settings.install_id.clone(),
@@ -122,8 +186,9 @@ async fn bootstrap_install_state_internal(
     app: &AppHandle,
 ) -> Result<InstallAccessSnapshot, String> {
     let mut settings = ensure_identity(app);
+    let target_url = backend_url("/api/trial/bootstrap");
     let response = BACKEND_HTTP_CLIENT
-        .post(backend_url("/api/trial/bootstrap"))
+        .post(&target_url)
         .json(&BootstrapRequest {
             install_id: &settings.install_id,
             device_fingerprint_hash: &settings.device_fingerprint_hash,
@@ -131,7 +196,9 @@ async fn bootstrap_install_state_internal(
         })
         .send()
         .await
-        .map_err(|error| format!("Failed to bootstrap install access: {}", error))?;
+        .map_err(|error| {
+            format_backend_transport_error("bootstrap install access", &target_url, &error)
+        })?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -168,12 +235,15 @@ async fn refresh_entitlement_state_internal(
         settings = get_settings(app);
     }
 
+    let target_url = backend_url("/api/entitlement");
     let response = BACKEND_HTTP_CLIENT
-        .get(backend_url("/api/entitlement"))
+        .get(&target_url)
         .bearer_auth(settings.install_token.trim())
         .send()
         .await
-        .map_err(|error| format!("Failed to refresh entitlement: {}", error))?;
+        .map_err(|error| {
+            format_backend_transport_error("refresh entitlement", &target_url, &error)
+        })?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -211,14 +281,17 @@ async fn request_claim_token_internal(app: &AppHandle) -> Result<ClaimTokenResul
         settings = get_settings(app);
     }
 
+    let target_url = backend_url("/api/trial/create-claim");
     let response = BACKEND_HTTP_CLIENT
-        .post(backend_url("/api/trial/create-claim"))
+        .post(&target_url)
         .json(&InstallTokenRequest {
             install_token: settings.install_token.trim(),
         })
         .send()
         .await
-        .map_err(|error| format!("Failed to request claim token: {}", error))?;
+        .map_err(|error| {
+            format_backend_transport_error("request a claim token", &target_url, &error)
+        })?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -272,5 +345,26 @@ mod tests {
             "https://uttr.app"
         );
         assert_eq!(normalize_backend_base_url(""), "https://uttr.app");
+    }
+
+    #[test]
+    fn backend_transport_hint_detects_dns_failures() {
+        let hint = backend_transport_error_hint(
+            "https://uttr.app/api/trial/bootstrap",
+            "error sending request for url: dns error: failed to lookup address information",
+        );
+
+        assert!(hint.contains("Could not resolve the Uttr backend host"));
+        assert!(hint.contains("UTTR_BACKEND_BASE_URL"));
+    }
+
+    #[test]
+    fn backend_transport_hint_detects_connectivity_failures() {
+        let hint = backend_transport_error_hint(
+            "https://uttr.app/api/trial/bootstrap",
+            "error sending request for url: connection refused",
+        );
+
+        assert!(hint.contains("Could not connect to"));
     }
 }

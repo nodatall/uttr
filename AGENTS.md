@@ -11,6 +11,7 @@ Use these skills for workflow triggers:
 - `skills/plan-task/SKILL.md`
 - `skills/execute-task/SKILL.md`
 - `skills/review-chain/SKILL.md`
+- `skills/repo-sweep/SKILL.md`
 
 Trigger mapping:
 
@@ -19,11 +20,14 @@ Trigger mapping:
 - `begin one-shot in <plan-key> [--preserve-review-artifacts]` -> `execute-task`
 - `begin review [--preserve-review-artifacts]` -> `review-chain`
 - `begin review <task-id> [--preserve-review-artifacts]` -> `review-chain`
+- `begin repo review [--preserve-review-artifacts]` -> `repo-sweep`
 
 Planning defaults:
 
 - Planning treats user input as source-plan material to improve and normalize.
 - `--deep-research` runs a substantial staged research pass focused on technical design, rollout/migration, security/ops, and verification strategy after initial PRD/TDD drafting and before task generation; it is not satisfied by a token search burst.
+- `--deep-research` must be anchored to the exact current date, scoped to the plan's actual stack and constraints, and backed by current external primary sources with freshness notes.
+- `--deep-research` must produce plan-specific implementation guidance in addition to improving the current PRD/TDD.
 - `--preserve-planning-artifacts` keeps temporary planning research artifacts under `tasks/tmp/`.
 - Planning always outputs:
   - `tasks/prd-<plan-key>.md`
@@ -41,6 +45,7 @@ Execution behavior:
 - `begin one-shot ...` uses one sequential worker subagent per sub-task across the entire remaining unchecked task file, with the main agent owning review, integration, task updates, and commits.
 - One-shot execution must continue until the remaining unchecked task file is fully complete and finalized; a clean intermediate commit boundary is not a valid stopping point.
 - `review-chain` exists for explicit review triggers (`begin review` and `begin review <task-id>`).
+- `repo-sweep` exists for explicit fix-first full-repository sweeps (`begin repo review`).
 
 Shared references:
 

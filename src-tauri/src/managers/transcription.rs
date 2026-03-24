@@ -9,8 +9,7 @@ use crate::managers::model::{
     DEFAULT_LOCAL_MODEL_ID,
 };
 use crate::settings::{
-    get_settings, write_settings, AccessState, AppSettings, ByokValidationState,
-    ModelUnloadTimeout, TrialState,
+    get_settings, write_settings, AccessState, AppSettings, ModelUnloadTimeout, TrialState,
 };
 use anyhow::Result;
 use log::{debug, error, info, warn};
@@ -455,11 +454,6 @@ impl TranscriptionManager {
         }
 
         None
-    }
-
-    fn byok_is_active(settings: &AppSettings) -> bool {
-        settings.byok_enabled
-            && matches!(settings.byok_validation_state, ByokValidationState::Valid)
     }
 
     fn sync_cloud_access_state(
@@ -1029,17 +1023,18 @@ impl TranscriptionManager {
                 .as_deref()
                 .ok_or_else(|| anyhow::anyhow!("No cloud model selected for transcription."))?;
 
-            if Self::byok_is_active(settings) {
-                if let Some(_) = self.resolve_byok_groq_api_key() {
-                    return self
-                        .transcribe_with_direct_groq(
-                            model_id,
-                            audio,
-                            settings,
-                            allow_local_fallback_on_cloud_error,
-                        )
-                        .await;
-                }
+            if let Some(_) = self.resolve_byok_groq_api_key() {
+                debug!(
+                    "Using direct Groq routing for cloud transcription because a local Groq key is present"
+                );
+                return self
+                    .transcribe_with_direct_groq(
+                        model_id,
+                        audio,
+                        settings,
+                        allow_local_fallback_on_cloud_error,
+                    )
+                    .await;
             }
 
             self.transcribe_with_proxy_groq(

@@ -72,7 +72,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSectionChange,
 }) => {
   const { t } = useTranslation();
-  const { settings } = useSettings();
+  const { settings, installAccess } = useSettings();
   const [version, setVersion] = useState("");
   const [byokUnlocked, setByokUnlocked] = useState(false);
   const versionTapCountRef = useRef(0);
@@ -101,6 +101,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
   const hasVisibleByokAccess =
     byokUnlocked ||
+    installAccess?.has_byok_secret === true ||
     settings?.byok_enabled === true ||
     settings?.byok_validation_state === "valid";
 
@@ -112,6 +113,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         versionTapTimerRef.current = null;
       }, 1200);
     }
+
     if (versionTapCountRef.current >= 5) {
       if (versionTapTimerRef.current !== null) {
         window.clearTimeout(versionTapTimerRef.current);
@@ -119,6 +121,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       }
       versionTapCountRef.current = 0;
       setByokUnlocked(true);
+      onSectionChange("apiKeys");
     }
   };
 
@@ -194,11 +197,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             {t("sidebar.versionPrefix", { defaultValue: "v" })}
             {version}
           </button>
-          {byokUnlocked && (
-            <span className="text-[10px] font-medium uppercase tracking-[0.18em] text-logo-primary/80">
-              {t("settings.byok.unlocked", { defaultValue: "BYOK unlocked" })}
-            </span>
-          )}
         </div>
       </div>
     </div>
