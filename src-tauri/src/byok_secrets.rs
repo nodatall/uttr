@@ -1,14 +1,16 @@
 use crate::settings::AppSettings;
-use once_cell::sync::OnceCell;
+use once_cell::sync::{Lazy, OnceCell};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_stronghold::stronghold::Stronghold;
 
 const GROQ_SECRET_KEY: &str = "groq";
 const STRONGHOLD_VAULT_FILE_NAME: &str = "byok.vault";
-static GROQ_VAULT: OnceCell<Arc<GroqVault>> = OnceCell::new();
+static GROQ_VAULT: OnceCell<Result<Arc<GroqVault>, String>> = OnceCell::new();
+static STRONGHOLD_PANIC_HOOK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
 struct GroqVault {
     stronghold: Stronghold,
@@ -35,7 +37,18 @@ fn derive_password(settings: &AppSettings) -> Vec<u8> {
 }
 
 fn init_vault(app: &AppHandle, settings: &AppSettings) -> Result<GroqVault, String> {
-    let stronghold = Stronghold::new(vault_path(app)?, derive_password(settings))
+    let path = vault_path(app)?;
+    let password = derive_password(settings);
+    let _panic_hook_guard = STRONGHOLD_PANIC_HOOK
+        .lock()
+        .map_err(|_| "Failed to lock Stronghold panic hook guard.".to_string())?;
+    let original_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let stronghold_result = catch_unwind(AssertUnwindSafe(|| Stronghold::new(path, password)));
+    std::panic::set_hook(original_hook);
+
+    let stronghold = stronghold_result
+        .map_err(|_| "Stronghold panicked while initializing the Groq BYOK vault.".to_string())?
         .map_err(|error| format!("Failed to initialize Stronghold vault: {error}"))?;
 
     Ok(GroqVault { stronghold })
@@ -43,8 +56,10 @@ fn init_vault(app: &AppHandle, settings: &AppSettings) -> Result<GroqVault, Stri
 
 fn vault(app: &AppHandle, settings: &AppSettings) -> Result<Arc<GroqVault>, String> {
     GROQ_VAULT
-        .get_or_try_init(|| init_vault(app, settings).map(Arc::new))
+        .get_or_init(|| init_vault(app, settings).map(Arc::new))
+        .as_ref()
         .map(Arc::clone)
+        .map_err(Clone::clone)
 }
 
 fn read_store_bytes(vault: &GroqVault) -> Result<Option<Vec<u8>>, String> {
@@ -75,11 +90,6 @@ fn remove_store_bytes(vault: &GroqVault) -> Result<(), String> {
         .stronghold
         .save()
         .map_err(|error| format!("Failed to save Stronghold vault: {error}"))?;
-    Ok(())
-}
-
-pub fn initialize(app: &AppHandle, settings: &AppSettings) -> Result<(), String> {
-    let _ = vault(app, settings)?;
     Ok(())
 }
 

@@ -1,4 +1,5 @@
 use log::{debug, warn};
+use once_cell::sync::OnceCell;
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
@@ -10,6 +11,7 @@ use uuid::Uuid;
 
 pub const APPLE_INTELLIGENCE_PROVIDER_ID: &str = "apple_intelligence";
 pub const APPLE_INTELLIGENCE_DEFAULT_MODEL_ID: &str = "Apple Intelligence";
+static GROQ_SECRET_MIGRATION_ATTEMPTED: OnceCell<()> = OnceCell::new();
 
 pub const STRICT_CLEANING_PROMPT: &str = "You are a transcript cleaning assistant. Clean the transcript in the user message following these rules:
 1. Fix spelling, capitalisation, and punctuation errors.
@@ -787,6 +789,18 @@ pub(crate) fn ensure_install_identity_defaults(
 }
 
 fn ensure_groq_secret_is_migrated(app: &AppHandle, settings: &mut AppSettings) -> bool {
+    let Some(current_key) = settings.post_process_api_keys.get("groq") else {
+        return false;
+    };
+
+    if current_key.trim().is_empty() {
+        return false;
+    }
+
+    if GROQ_SECRET_MIGRATION_ATTEMPTED.set(()).is_err() {
+        return false;
+    }
+
     match crate::byok_secrets::migrate_groq_api_key(app, settings) {
         Ok(changed) => changed,
         Err(error) => {

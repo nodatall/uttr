@@ -408,11 +408,6 @@ pub fn run() {
             Some(vec![]),
         ))
         .setup(move |app| {
-            let settings = get_settings(&app.handle());
-            let tauri_log_level: tauri_plugin_log::LogLevel = settings.log_level.into();
-            let file_log_level: log::Level = tauri_log_level.into();
-            // Store the file log level in the atomic for the filter to use
-            FILE_LOG_LEVEL.store(file_log_level.to_level_filter() as u8, Ordering::Relaxed);
             let app_handle = app.handle().clone();
             let stronghold_salt_path = app_handle
                 .path()
@@ -424,8 +419,11 @@ pub fn run() {
                     tauri_plugin_stronghold::Builder::with_argon2(&stronghold_salt_path).build(),
                 )
                 .expect("Failed to initialize Stronghold plugin");
-            byok_secrets::initialize(&app_handle, &settings)
-                .expect("Failed to initialize Stronghold secret storage");
+            let settings = get_settings(&app_handle);
+            let tauri_log_level: tauri_plugin_log::LogLevel = settings.log_level.into();
+            let file_log_level: log::Level = tauri_log_level.into();
+            // Store the file log level in the atomic for the filter to use
+            FILE_LOG_LEVEL.store(file_log_level.to_level_filter() as u8, Ordering::Relaxed);
             app.manage(TranscriptionCoordinator::new(app_handle.clone()));
 
             initialize_core_logic(&app_handle);
