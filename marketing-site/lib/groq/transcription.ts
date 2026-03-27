@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { readCloudProxyConfig } from "@/lib/env";
 
 export const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
-export const GROQ_UPLOAD_LIMIT_BYTES = 25 * 1024 * 1024;
+export const GROQ_UPLOAD_LIMIT_BYTES = 100 * 1024 * 1024;
 export const GROQ_DEFAULT_TRANSLATION_MODEL = "whisper-large-v3";
 
 export type GroqTranscriptionEndpoint = "audio/transcriptions" | "audio/translations";

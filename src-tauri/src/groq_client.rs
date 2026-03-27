@@ -7,7 +7,10 @@ use std::time::Duration;
 
 const GROQ_BASE_URL: &str = "https://api.groq.com/openai/v1";
 const GROQ_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const WAV_HEADER_BYTES: usize = 44;
+pub const WAV_HEADER_BYTES: usize = 44;
+pub const WAV_BYTES_PER_SAMPLE: usize = 2;
+pub const DIRECT_GROQ_UPLOAD_LIMIT_BYTES: usize = 25 * 1024 * 1024;
+pub const PROXY_GROQ_UPLOAD_LIMIT_BYTES: usize = 100 * 1024 * 1024;
 const PROXY_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 static GROQ_HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
@@ -83,6 +86,14 @@ pub struct ProxyTranscriptionResult {
     pub entitlement_state: EntitlementState,
 }
 
+#[derive(Debug, Clone, Default)]
+pub struct ProxyTranscriptionMetadata<'a> {
+    pub source: Option<&'a str>,
+    pub chunk_index: Option<u32>,
+    pub chunk_count: Option<u32>,
+    pub audio_seconds: Option<u32>,
+}
+
 fn normalize_language(language: &str) -> Option<&str> {
     match language {
         "" | "auto" => None,
@@ -91,16 +102,25 @@ fn normalize_language(language: &str) -> Option<&str> {
     }
 }
 
+pub fn estimate_wav_size_bytes(sample_count: usize) -> Result<usize, String> {
+    let data_size = sample_count
+        .checked_mul(WAV_BYTES_PER_SAMPLE)
+        .ok_or_else(|| "Audio too large to encode as WAV".to_string())?;
+    WAV_HEADER_BYTES
+        .checked_add(data_size)
+        .ok_or_else(|| "Audio too large to encode as WAV".to_string())
+}
+
 fn build_wav_bytes(samples: &[f32]) -> Result<Vec<u8>, String> {
-    let data_size = samples
-        .len()
-        .checked_mul(2)
+    let wav_size = estimate_wav_size_bytes(samples.len())?;
+    let data_size = wav_size
+        .checked_sub(WAV_HEADER_BYTES)
         .ok_or_else(|| "Audio too large to encode as WAV".to_string())?;
     let riff_size = 36usize
         .checked_add(data_size)
         .ok_or_else(|| "Audio too large to encode as WAV".to_string())?;
 
-    let mut wav = Vec::with_capacity(WAV_HEADER_BYTES + data_size);
+    let mut wav = Vec::with_capacity(wav_size);
     wav.extend_from_slice(b"RIFF");
     wav.extend_from_slice(&(riff_size as u32).to_le_bytes());
     wav.extend_from_slice(b"WAVE");
@@ -192,6 +212,25 @@ pub async fn transcribe_samples(
     selected_language: &str,
     translate_to_english: bool,
 ) -> Result<ProxyTranscriptionResult, ProxyTranscriptionError> {
+    transcribe_samples_with_metadata(
+        install_token,
+        model,
+        samples,
+        selected_language,
+        translate_to_english,
+        ProxyTranscriptionMetadata::default(),
+    )
+    .await
+}
+
+pub async fn transcribe_samples_with_metadata(
+    install_token: &str,
+    model: &str,
+    samples: &[f32],
+    selected_language: &str,
+    translate_to_english: bool,
+    metadata: ProxyTranscriptionMetadata<'_>,
+) -> Result<ProxyTranscriptionResult, ProxyTranscriptionError> {
     if install_token.trim().is_empty() {
         return Err(ProxyTranscriptionError::Request(
             "Install token is required for cloud transcription.".to_string(),
@@ -206,16 +245,32 @@ pub async fn transcribe_samples(
             multipart::Part::bytes(wav)
                 .file_name("uttr.wav")
                 .mime_str("audio/wav")
-                .map_err(|e| ProxyTranscriptionError::Parse(format!(
-                    "Failed to build audio payload: {}",
-                    e
-                )))?,
+                .map_err(|e| {
+                    ProxyTranscriptionError::Parse(format!("Failed to build audio payload: {}", e))
+                })?,
         )
         .text("response_format", "json".to_string())
         .text(
             "translate_to_english",
-            if translate_to_english { "true" } else { "false" },
+            if translate_to_english {
+                "true"
+            } else {
+                "false"
+            },
         );
+
+    if let Some(source) = metadata.source {
+        form = form.text("source", source.to_string());
+    }
+    if let Some(chunk_index) = metadata.chunk_index {
+        form = form.text("chunk_index", chunk_index.to_string());
+    }
+    if let Some(chunk_count) = metadata.chunk_count {
+        form = form.text("chunk_count", chunk_count.to_string());
+    }
+    if let Some(audio_seconds) = metadata.audio_seconds {
+        form = form.text("audio_seconds", audio_seconds.to_string());
+    }
 
     if let Some(language) = normalize_language(selected_language) {
         form = form.text("language", language.to_string());
@@ -227,10 +282,12 @@ pub async fn transcribe_samples(
         .multipart(form)
         .send()
         .await
-        .map_err(|error| ProxyTranscriptionError::Request(format!(
-            "Backend transcription request failed: {}",
-            error
-        )))?;
+        .map_err(|error| {
+            ProxyTranscriptionError::Request(format!(
+                "Backend transcription request failed: {}",
+                error
+            ))
+        })?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -254,4 +311,17 @@ pub async fn transcribe_samples(
         access_state: parsed.access_state,
         entitlement_state: parsed.entitlement_state,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn estimate_wav_size_matches_header_plus_payload() {
+        assert_eq!(
+            estimate_wav_size_bytes(16_000).unwrap(),
+            WAV_HEADER_BYTES + (16_000 * WAV_BYTES_PER_SAMPLE)
+        );
+    }
 }

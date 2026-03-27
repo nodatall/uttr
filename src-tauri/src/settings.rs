@@ -198,6 +198,16 @@ pub struct PostProcessProvider {
     pub models_endpoint: Option<String>,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Type)]
+pub struct SavedFileTranscription {
+    pub file_name: String,
+    pub transcription_text: String,
+    #[serde(default)]
+    pub post_processed_text: Option<String>,
+    #[serde(default)]
+    pub source_path: Option<String>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
 #[serde(rename_all = "lowercase")]
 pub enum OverlayPosition {
@@ -474,6 +484,10 @@ pub struct AppSettings {
     pub paste_delay_ms: u64,
     #[serde(default = "default_typing_tool")]
     pub typing_tool: TypingTool,
+    #[serde(default)]
+    pub file_transcription_history: Vec<SavedFileTranscription>,
+    #[serde(default, rename = "latest_file_transcription", skip_serializing)]
+    pub legacy_latest_file_transcription: Option<SavedFileTranscription>,
 }
 
 fn default_model() -> String {
@@ -748,6 +762,24 @@ fn ensure_post_process_defaults(settings: &mut AppSettings) -> bool {
     changed
 }
 
+fn ensure_file_transcription_history_defaults(settings: &mut AppSettings) -> bool {
+    let mut changed = false;
+
+    if let Some(legacy_entry) = settings.legacy_latest_file_transcription.take() {
+        if settings.file_transcription_history.is_empty() {
+            settings.file_transcription_history.push(legacy_entry);
+        }
+        changed = true;
+    }
+
+    if settings.file_transcription_history.len() > 5 {
+        settings.file_transcription_history.truncate(5);
+        changed = true;
+    }
+
+    changed
+}
+
 fn device_fingerprint_hash(app: &AppHandle) -> String {
     let mut hasher = Sha256::new();
 
@@ -920,6 +952,8 @@ pub fn get_default_settings() -> AppSettings {
         show_tray_icon: default_show_tray_icon(),
         paste_delay_ms: default_paste_delay_ms(),
         typing_tool: default_typing_tool(),
+        file_transcription_history: Vec::new(),
+        legacy_latest_file_transcription: None,
     }
 }
 
@@ -1013,6 +1047,10 @@ pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
         changed = true;
     }
 
+    if ensure_file_transcription_history_defaults(&mut settings) {
+        changed = true;
+    }
+
     if changed {
         store.set("settings", serde_json::to_value(&settings).unwrap());
         if let Err(e) = store.save() {
@@ -1057,6 +1095,10 @@ pub fn get_settings(app: &AppHandle) -> AppSettings {
     }
 
     if ensure_groq_secret_is_migrated(app, &mut settings) {
+        changed = true;
+    }
+
+    if ensure_file_transcription_history_defaults(&mut settings) {
         changed = true;
     }
 
@@ -1181,5 +1223,48 @@ mod tests {
         assert_eq!(settings.entitlement_state, EntitlementState::Inactive);
         assert!(!settings.byok_enabled);
         assert_eq!(settings.byok_validation_state, ByokValidationState::Unknown);
+    }
+
+    #[test]
+    fn migrates_legacy_latest_file_transcription_into_history() {
+        let mut settings = get_default_settings();
+        settings.legacy_latest_file_transcription = Some(SavedFileTranscription {
+            file_name: "sample.wav".to_string(),
+            transcription_text: "hello".to_string(),
+            post_processed_text: Some("hello".to_string()),
+            source_path: Some("/tmp/sample.wav".to_string()),
+        });
+
+        let changed = ensure_file_transcription_history_defaults(&mut settings);
+
+        assert!(changed);
+        assert_eq!(settings.file_transcription_history.len(), 1);
+        assert_eq!(
+            settings.file_transcription_history[0].file_name,
+            "sample.wav"
+        );
+        assert!(settings.legacy_latest_file_transcription.is_none());
+    }
+
+    #[test]
+    fn truncates_file_transcription_history_to_five_items() {
+        let mut settings = get_default_settings();
+        settings.file_transcription_history = (0..7)
+            .map(|index| SavedFileTranscription {
+                file_name: format!("file-{}.wav", index),
+                transcription_text: format!("text {}", index),
+                post_processed_text: None,
+                source_path: None,
+            })
+            .collect();
+
+        let changed = ensure_file_transcription_history_defaults(&mut settings);
+
+        assert!(changed);
+        assert_eq!(settings.file_transcription_history.len(), 5);
+        assert_eq!(
+            settings.file_transcription_history[4].file_name,
+            "file-4.wav"
+        );
     }
 }

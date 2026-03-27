@@ -688,6 +688,14 @@ async unloadModelManually() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async clearFileTranscriptionHistory() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("clear_file_transcription_history") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async transcribeAudioFile(path: string) : Promise<Result<FileTranscriptionResult, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("transcribe_audio_file", { path }) };
@@ -771,7 +779,7 @@ async isLaptop() : Promise<Result<boolean, string>> {
 /** user-defined types **/
 
 export type AccessState = "blocked" | "trialing" | "subscribed"
-export type AppSettings = { bindings: Partial<{ [key in string]: ShortcutBinding }>; push_to_talk: boolean; audio_feedback: boolean; audio_feedback_volume?: number; sound_theme?: SoundTheme; start_hidden?: boolean; autostart_enabled?: boolean; update_checks_enabled?: boolean; selected_model?: string; install_id?: string; device_fingerprint_hash?: string; install_token?: string; anonymous_trial_state?: TrialState; access_state?: AccessState; entitlement_state?: EntitlementState; byok_enabled?: boolean; byok_validation_state?: ByokValidationState; always_on_microphone?: boolean; selected_microphone?: string | null; clamshell_microphone?: string | null; selected_output_device?: string | null; translate_to_english?: boolean; selected_language?: string; overlay_position?: OverlayPosition; debug_mode?: boolean; log_level?: LogLevel; custom_words?: string[]; model_unload_timeout?: ModelUnloadTimeout; word_correction_threshold?: number; history_limit?: number; recording_retention_period?: RecordingRetentionPeriod; paste_method?: PasteMethod; clipboard_handling?: ClipboardHandling; auto_submit?: boolean; auto_submit_key?: AutoSubmitKey; post_process_enabled?: boolean; post_process_provider_id?: string; post_process_providers?: PostProcessProvider[]; post_process_api_keys?: Partial<{ [key in string]: string }>; post_process_models?: Partial<{ [key in string]: string }>; post_process_timeout_secs?: number; post_process_cleaning_prompt_preset?: CleaningPromptPreset; post_process_preset_migrated?: boolean; post_process_system_prompt?: string; mute_while_recording?: boolean; append_trailing_space?: boolean; app_language?: string; incremental_transcription_enabled?: boolean; keyboard_implementation?: KeyboardImplementation; show_tray_icon?: boolean; paste_delay_ms?: number; typing_tool?: TypingTool }
+export type AppSettings = { bindings: Partial<{ [key in string]: ShortcutBinding }>; push_to_talk: boolean; audio_feedback: boolean; audio_feedback_volume?: number; sound_theme?: SoundTheme; start_hidden?: boolean; autostart_enabled?: boolean; update_checks_enabled?: boolean; selected_model?: string; install_id?: string; device_fingerprint_hash?: string; install_token?: string; anonymous_trial_state?: TrialState; access_state?: AccessState; entitlement_state?: EntitlementState; byok_enabled?: boolean; byok_validation_state?: ByokValidationState; always_on_microphone?: boolean; selected_microphone?: string | null; clamshell_microphone?: string | null; selected_output_device?: string | null; translate_to_english?: boolean; selected_language?: string; overlay_position?: OverlayPosition; debug_mode?: boolean; log_level?: LogLevel; custom_words?: string[]; model_unload_timeout?: ModelUnloadTimeout; word_correction_threshold?: number; history_limit?: number; recording_retention_period?: RecordingRetentionPeriod; paste_method?: PasteMethod; clipboard_handling?: ClipboardHandling; auto_submit?: boolean; auto_submit_key?: AutoSubmitKey; post_process_enabled?: boolean; post_process_provider_id?: string; post_process_providers?: PostProcessProvider[]; post_process_api_keys?: Partial<{ [key in string]: string }>; post_process_models?: Partial<{ [key in string]: string }>; post_process_timeout_secs?: number; post_process_cleaning_prompt_preset?: CleaningPromptPreset; post_process_preset_migrated?: boolean; post_process_system_prompt?: string; mute_while_recording?: boolean; append_trailing_space?: boolean; app_language?: string; incremental_transcription_enabled?: boolean; keyboard_implementation?: KeyboardImplementation; show_tray_icon?: boolean; paste_delay_ms?: number; typing_tool?: TypingTool; file_transcription_history?: SavedFileTranscription[] }
 export type AudioDevice = { index: string; name: string; is_default: boolean }
 export type AutoSubmitKey = "enter" | "ctrl_enter" | "cmd_enter"
 export type BindingResponse = { success: boolean; binding: ShortcutBinding | null; error: string | null }
@@ -802,6 +810,7 @@ export type OverlayPosition = "none" | "top" | "bottom"
 export type PasteMethod = "ctrl_v" | "direct" | "none" | "shift_insert" | "ctrl_shift_v"
 export type PostProcessProvider = { id: string; label: string; base_url: string; allow_base_url_edit?: boolean; models_endpoint?: string | null }
 export type RecordingRetentionPeriod = "never" | "preserve_limit" | "days_3" | "weeks_2" | "months_3"
+export type SavedFileTranscription = { file_name: string; transcription_text: string; post_processed_text?: string | null; source_path?: string | null }
 export type ShortcutBinding = { id: string; name: string; description: string; default_binding: string; current_binding: string }
 export type SoundTheme = "marimba" | "pop" | "custom"
 export type TrialState = "new" | "trialing" | "expired" | "linked"

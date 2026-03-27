@@ -342,6 +342,7 @@ pub fn run() {
         commands::transcription::set_model_unload_timeout,
         commands::transcription::get_model_load_status,
         commands::transcription::unload_model_manually,
+        commands::transcription::clear_file_transcription_history,
         commands::transcription::transcribe_audio_file,
         commands::history::get_history_entries,
         commands::history::toggle_history_entry_saved,

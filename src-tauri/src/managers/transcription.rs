@@ -272,6 +272,10 @@ fn append_stitched_text(existing: &mut String, incoming: &str) {
     existing.push_str(&remainder);
 }
 
+pub(crate) fn stitch_transcription_text(existing: &mut String, incoming: &str) {
+    append_stitched_text(existing, incoming);
+}
+
 #[derive(Clone)]
 pub struct TranscriptionManager {
     engine: Arc<Mutex<Option<LoadedEngine>>>,

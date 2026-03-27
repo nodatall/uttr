@@ -42,6 +42,15 @@ function parseTextField(value: FormDataEntryValue | null) {
   return trimmed.length > 0 ? trimmed : null;
 }
 
+function parseChunkNumberField(value: FormDataEntryValue | null) {
+  if (typeof value !== "string") {
+    return null;
+  }
+
+  const parsed = Number.parseInt(value.trim(), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
 function isFileEntry(value: FormDataEntryValue | null): value is File {
   return typeof File !== "undefined" && value instanceof File;
 }
@@ -115,7 +124,7 @@ export async function POST(request: Request) {
 
     if (!isGroqUploadWithinLimit(fileEntry.size)) {
       return NextResponse.json(
-        { error: "Audio upload exceeds the 25 MB limit." },
+        { error: "Audio upload exceeds the 100 MB limit." },
         { status: 413 },
       );
     }
@@ -123,6 +132,12 @@ export async function POST(request: Request) {
     const translateToEnglish = parseBooleanField(
       formData.get("translate_to_english"),
     );
+    const source = parseTextField(formData.get("source"));
+    const chunkIndex = parseChunkNumberField(formData.get("chunk_index"));
+    const chunkCount = parseChunkNumberField(formData.get("chunk_count"));
+    const audioSeconds =
+      parseChunkNumberField(formData.get("audio_seconds")) ??
+      estimateAudioSecondsFromWavBytes(fileEntry.size);
 
     const requestedModel = parseTextField(formData.get("model"));
     const groqTraceId = summarizeGroqPayload(
@@ -174,7 +189,7 @@ export async function POST(request: Request) {
       anonymous_trial_id: persistedTrial.id,
       user_id: persistedTrial.user_id,
       source: "cloud_default",
-      audio_seconds: estimateAudioSecondsFromWavBytes(fileEntry.size),
+      audio_seconds: audioSeconds,
     });
 
     if (!usageEvent) {
@@ -194,6 +209,9 @@ export async function POST(request: Request) {
         level: "info",
         event: "cloud_transcription_completed",
         trace_id: groqTraceId,
+        source,
+        chunk_index: chunkIndex,
+        chunk_count: chunkCount,
         trial_id: persistedTrial.id,
         trial_state: persistedTrial.status,
         access_state: accessState,

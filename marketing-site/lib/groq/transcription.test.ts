@@ -40,8 +40,8 @@ describe("Groq transcription helpers", () => {
   });
 
   test("exposes upload limits and timing-related payload helpers", () => {
-    expect(isGroqUploadWithinLimit(25 * 1024 * 1024)).toBe(true);
-    expect(isGroqUploadWithinLimit(25 * 1024 * 1024 + 1)).toBe(false);
+    expect(isGroqUploadWithinLimit(100 * 1024 * 1024)).toBe(true);
+    expect(isGroqUploadWithinLimit(100 * 1024 * 1024 + 1)).toBe(false);
     expect(estimateAudioSecondsFromWavBytes(44)).toBe(0);
     expect(estimateAudioSecondsFromWavBytes(44 + 64_000)).toBe(2);
     expect(resolveGroqEndpoint(true)).toBe("audio/translations");
