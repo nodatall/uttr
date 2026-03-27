@@ -85,6 +85,12 @@ const SHORT_UTTERANCE_SAMPLES: usize = 16_000 * 10;
 static AUTO_SELECTED_MODEL_CACHE: Lazy<Mutex<HashMap<String, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 
+pub struct FinalizedTranscriptionOutput {
+    pub final_text: String,
+    pub post_processed_text: Option<String>,
+    pub post_process_prompt: Option<String>,
+}
+
 fn select_preferred_groq_model(available_models: &[String]) -> Option<String> {
     for preferred in GROQ_MODEL_PREFERENCES {
         if let Some(found) = available_models
@@ -351,6 +357,73 @@ async fn maybe_convert_chinese_variant(
     }
 }
 
+pub async fn finalize_transcription_output(
+    app_handle: &AppHandle,
+    settings: &AppSettings,
+    transcription: &str,
+    post_process: bool,
+) -> FinalizedTranscriptionOutput {
+    let mut final_text = transcription.to_string();
+    let mut post_processed_text: Option<String> = None;
+    let mut post_process_prompt: Option<String> = None;
+
+    if let Some(converted_text) = maybe_convert_chinese_variant(settings, transcription).await {
+        final_text = converted_text;
+    }
+
+    let post_process_timeout = if settings.post_process_timeout_secs > 0 {
+        Duration::from_secs(settings.post_process_timeout_secs)
+    } else {
+        POST_PROCESS_TIMEOUT_DEFAULT
+    };
+    let processed = if post_process {
+        match timeout(
+            post_process_timeout,
+            post_process_transcription(app_handle, settings, &final_text),
+        )
+        .await
+        {
+            Ok(result) => result,
+            Err(_) => {
+                warn!(
+                    "Post-processing timed out after {}s; continuing with base transcription",
+                    post_process_timeout.as_secs()
+                );
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    if let Some(processed_text) = processed {
+        post_processed_text = Some(processed_text.clone());
+        final_text = processed_text;
+        post_process_prompt = Some(match settings.post_process_cleaning_prompt_preset {
+            CleaningPromptPreset::Strict => STRICT_CLEANING_PROMPT.to_string(),
+            CleaningPromptPreset::Nuanced => NUANCED_CLEANING_PROMPT.to_string(),
+            CleaningPromptPreset::Custom => settings.post_process_system_prompt.clone(),
+        });
+    } else if final_text != transcription {
+        post_processed_text = Some(final_text.clone());
+    }
+
+    if post_process {
+        let normalized_punctuation = normalize_spoken_punctuation(&final_text);
+        let normalized_lists = normalize_spoken_lists(&normalized_punctuation);
+        if normalized_lists != final_text {
+            final_text = normalized_lists;
+            post_processed_text = Some(final_text.clone());
+        }
+    }
+
+    FinalizedTranscriptionOutput {
+        final_text,
+        post_processed_text,
+        post_process_prompt,
+    }
+}
+
 async fn transcribe_full_pass_with_timeout(
     tm: &Arc<TranscriptionManager>,
     samples: Vec<f32>,
@@ -549,80 +622,19 @@ impl ShortcutAction for TranscribeAction {
                         );
                         if !transcription.is_empty() {
                             let settings = get_settings(&ah);
-                            let mut final_text = transcription.clone();
-                            let mut post_processed_text: Option<String> = None;
-                            let mut post_process_prompt: Option<String> = None;
-
-                            // First, check if Chinese variant conversion is needed
-                            if let Some(converted_text) =
-                                maybe_convert_chinese_variant(&settings, &transcription).await
-                            {
-                                final_text = converted_text;
-                            }
-
-                            // Then apply LLM post-processing if this is the post-process hotkey
-                            // Uses final_text which may already have Chinese conversion applied
                             if post_process {
                                 show_processing_overlay(&ah);
                             }
-                            let post_process_timeout = if settings.post_process_timeout_secs > 0 {
-                                Duration::from_secs(settings.post_process_timeout_secs)
-                            } else {
-                                POST_PROCESS_TIMEOUT_DEFAULT
-                            };
-                            let processed = if post_process {
-                                match timeout(
-                                    post_process_timeout,
-                                    post_process_transcription(&ah, &settings, &final_text),
-                                )
-                                .await
-                                {
-                                    Ok(result) => result,
-                                    Err(_) => {
-                                        warn!(
-                                            "Post-processing timed out after {}s; continuing with base transcription",
-                                            post_process_timeout.as_secs()
-                                        );
-                                        None
-                                    }
-                                }
-                            } else {
-                                None
-                            };
-                            if let Some(processed_text) = processed {
-                                post_processed_text = Some(processed_text.clone());
-                                final_text = processed_text;
-
-                                // Record the system prompt that was used
-                                post_process_prompt =
-                                    Some(match settings.post_process_cleaning_prompt_preset {
-                                        CleaningPromptPreset::Strict => {
-                                            STRICT_CLEANING_PROMPT.to_string()
-                                        }
-                                        CleaningPromptPreset::Nuanced => {
-                                            NUANCED_CLEANING_PROMPT.to_string()
-                                        }
-                                        CleaningPromptPreset::Custom => {
-                                            settings.post_process_system_prompt.clone()
-                                        }
-                                    });
-                            } else if final_text != transcription {
-                                // Chinese conversion was applied but no LLM post-processing
-                                post_processed_text = Some(final_text.clone());
-                            }
-
-                            // Apply deterministic spoken punctuation normalization as a fallback
-                            // for post-processing runs where the LLM leaves words like "period".
-                            if post_process {
-                                let normalized_punctuation =
-                                    normalize_spoken_punctuation(&final_text);
-                                let normalized_lists =
-                                    normalize_spoken_lists(&normalized_punctuation);
-                                if normalized_lists != final_text {
-                                    final_text = normalized_lists;
-                                    post_processed_text = Some(final_text.clone());
-                                }
-                            }
+                            let finalized = finalize_transcription_output(
+                                &ah,
+                                &settings,
+                                &transcription,
+                                post_process,
+                            )
+                            .await;
+                            let final_text = finalized.final_text;
+                            let post_processed_text = finalized.post_processed_text;
+                            let post_process_prompt = finalized.post_process_prompt;
 
                             // Save to history with post-processed text and prompt
                             let hm_clone = Arc::clone(&hm);

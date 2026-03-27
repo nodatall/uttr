@@ -5,6 +5,7 @@ export { HistorySettings } from "./history/HistorySettings";
 export { PostProcessingSettings } from "./post-processing/PostProcessingSettings";
 export { ModelsSettings } from "./models/ModelsSettings";
 export { ApiKeysSettings } from "./api-keys/ApiKeysSettings";
+export { FileTranscriptionSettings } from "./file-transcription/FileTranscriptionSettings";
 
 // Individual setting components
 export { MicrophoneSelector } from "./MicrophoneSelector";

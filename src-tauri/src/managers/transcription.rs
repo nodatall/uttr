@@ -533,6 +533,13 @@ impl TranscriptionManager {
         )
     }
 
+    pub fn select_preferred_local_model_id(
+        &self,
+        preferred_local_model_id: Option<&str>,
+    ) -> Option<String> {
+        self.select_local_fallback_model_id(preferred_local_model_id)
+    }
+
     fn transcribe_with_local_engine(
         &self,
         audio: Vec<f32>,
@@ -776,6 +783,15 @@ impl TranscriptionManager {
                 join_err
             )),
         }
+    }
+
+    pub async fn transcribe_local_file_with_settings(
+        &self,
+        audio: Vec<f32>,
+        settings: &AppSettings,
+    ) -> Result<String> {
+        self.transcribe_raw_local_with_settings_async(audio, settings)
+            .await
     }
 
     async fn transcribe_with_direct_groq(

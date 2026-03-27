@@ -1,7 +1,14 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getVersion } from "@tauri-apps/api/app";
-import { FlaskConical, History, Cpu, AudioLines, KeyRound } from "lucide-react";
+import {
+  FlaskConical,
+  History,
+  Cpu,
+  AudioLines,
+  FileAudio,
+  KeyRound,
+} from "lucide-react";
 import { useSettings } from "../hooks/useSettings";
 import {
   GeneralSettings,
@@ -9,6 +16,7 @@ import {
   DebugSettings,
   ModelsSettings,
   ApiKeysSettings,
+  FileTranscriptionSettings,
 } from "./settings";
 import UpdateChecker from "./update-checker";
 
@@ -24,6 +32,7 @@ interface IconProps {
 
 interface SectionConfig {
   labelKey: string;
+  defaultLabel?: string;
   icon: React.ComponentType<IconProps>;
   component: React.ComponentType;
   enabled: (settings: any) => boolean;
@@ -52,6 +61,13 @@ export const SECTIONS_CONFIG = {
     labelKey: "sidebar.history",
     icon: History,
     component: HistorySettings,
+    enabled: () => true,
+  },
+  fileTranscription: {
+    labelKey: "sidebar.fileTranscription",
+    defaultLabel: "File Transcription",
+    icon: FileAudio,
+    component: FileTranscriptionSettings,
     enabled: () => true,
   },
   debug: {
@@ -151,6 +167,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {availableSections.map((section) => {
           const Icon = section.icon;
           const isActive = activeSection === section.id;
+          const defaultLabel = section.defaultLabel;
 
           return (
             <button
@@ -177,9 +194,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
               />
               <p
                 className="text-sm font-medium truncate"
-                title={t(section.labelKey)}
+                title={t(section.labelKey, {
+                  defaultValue: defaultLabel,
+                })}
               >
-                {t(section.labelKey)}
+                {t(section.labelKey, {
+                  defaultValue: defaultLabel,
+                })}
               </p>
             </button>
           );
