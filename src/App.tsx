@@ -19,6 +19,7 @@ import { SHOW_MODEL_ONBOARDING_EVENT } from "@/lib/events/onboarding";
 import { getLanguageDirection, initializeRTL } from "@/lib/utils/rtl";
 
 type OnboardingStep = "accessibility" | "model" | "done";
+const SHORTCUT_REFRESH_INTERVAL_MS = 3 * 60 * 1000;
 
 const renderSettingsContent = (section: SidebarSection) => {
   const ActiveComponent =
@@ -87,6 +88,38 @@ function App() {
       refreshOutputDevices();
     }
   }, [onboardingStep, refreshAudioDevices, refreshOutputDevices]);
+
+  useEffect(() => {
+    if (onboardingStep !== "done") {
+      return;
+    }
+
+    const refreshShortcuts = () => {
+      commands.initializeShortcuts().catch((e) => {
+        console.warn("Failed to refresh shortcuts:", e);
+      });
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        refreshShortcuts();
+      }
+    };
+
+    const intervalId = window.setInterval(
+      refreshShortcuts,
+      SHORTCUT_REFRESH_INTERVAL_MS,
+    );
+
+    window.addEventListener("focus", refreshShortcuts);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", refreshShortcuts);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [onboardingStep]);
 
   // Handle keyboard shortcuts for debug mode toggle
   useEffect(() => {

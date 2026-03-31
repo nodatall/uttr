@@ -229,7 +229,8 @@ pub struct ShortcutsInitialized;
 pub fn initialize_shortcuts(app: AppHandle) -> Result<(), String> {
     // Check if already initialized
     if app.try_state::<ShortcutsInitialized>().is_some() {
-        log::debug!("Shortcuts already initialized");
+        log::debug!("Shortcuts already initialized; refreshing registrations");
+        crate::shortcut::refresh_shortcuts(&app)?;
         return Ok(());
     }
 

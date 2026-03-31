@@ -20,9 +20,9 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::settings::{
-    self, get_settings, AutoSubmitKey, ClipboardHandling, KeyboardImplementation, OverlayPosition,
-    PasteMethod, ShortcutBinding, SoundTheme, TypingTool, APPLE_INTELLIGENCE_DEFAULT_MODEL_ID,
-    APPLE_INTELLIGENCE_PROVIDER_ID, ByokValidationState,
+    self, get_settings, AutoSubmitKey, ByokValidationState, ClipboardHandling,
+    KeyboardImplementation, OverlayPosition, PasteMethod, ShortcutBinding, SoundTheme, TypingTool,
+    APPLE_INTELLIGENCE_DEFAULT_MODEL_ID, APPLE_INTELLIGENCE_PROVIDER_ID,
 };
 use crate::tray;
 
@@ -50,6 +50,28 @@ pub fn init_shortcuts(app: &AppHandle) {
 
                 tauri_impl::init_shortcuts(app);
             }
+        }
+    }
+}
+
+/// Refresh shortcut registrations for the active implementation.
+/// This is used as a repair path when the OS or a backend drops registrations.
+pub fn refresh_shortcuts(app: &AppHandle) -> Result<(), String> {
+    let implementation = get_settings(app).keyboard_implementation;
+
+    match implementation {
+        KeyboardImplementation::Tauri => {
+            unregister_all_shortcuts(app, implementation);
+            let _ = register_all_shortcuts_for_implementation(app, implementation);
+            Ok(())
+        }
+        KeyboardImplementation::HandyKeys => {
+            let initialized_during_refresh = initialize_handy_keys_with_rollback(app)?;
+            if !initialized_during_refresh {
+                unregister_all_shortcuts(app, implementation);
+                let _ = register_all_shortcuts_for_implementation(app, implementation);
+            }
+            Ok(())
         }
     }
 }

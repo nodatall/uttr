@@ -1,8 +1,8 @@
 use crate::settings::AppSettings;
 use once_cell::sync::{Lazy, OnceCell};
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
 use std::panic::{catch_unwind, AssertUnwindSafe};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_stronghold::stronghold::Stronghold;
