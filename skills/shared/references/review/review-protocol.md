@@ -8,13 +8,15 @@ Mandatory review behavior for task execution and explicit review commands.
 
 ```text
 Please fetch the latest `origin/main` from github.
-We are going to work on task <task-id> in [tasks/tasks-plan-<plan-key>.md], using [tasks/prd-<plan-key>.md] and [tasks/tdd-<plan-key>.md] as planning context. Please create and switch to a new branch from `origin/main`.
+We are going to work on task <task-id> in [tasks/tasks-plan-<plan-key>.md], using [tasks/prd-<plan-key>.md] and [tasks/tdd-<plan-key>.md] as planning context. Please create and switch to a new branch from `origin/main`. If the only uncommitted changes are those required planning artifacts for this plan, carry them onto the new branch and commit them there before implementation starts.
 ```
 
 Operational translation:
 
 - `git fetch origin main`
-- If working tree is dirty, stop and ask before creating branch.
+- If the working tree is clean, create/switch the feature branch from `origin/main`.
+- If the only dirty files are `tasks/prd-<plan-key>.md`, `tasks/tdd-<plan-key>.md`, and `tasks/tasks-plan-<plan-key>.md` for the current plan, create/switch the feature branch from `origin/main`, carry those files onto the branch, and commit them before implementation starts.
+- If the working tree contains unrelated changes, stop and ask before creating branch.
 - Create/switch `nodatall/<short-task-name>` from `origin/main`.
 - If `main` is checked out elsewhere in another worktree, create branch directly from `origin/main`.
 
@@ -25,6 +27,7 @@ For task-based execution or task-scoped review, evaluate changes against:
 - `tasks/prd-<plan-key>.md`
 - `tasks/tdd-<plan-key>.md`
 - `tasks/tasks-plan-<plan-key>.md`
+- `tasks/tmp/plan-task-<task-id>.md` when it exists for the reviewed sub-task
 
 Use those artifacts to judge scope alignment, missing work, and regression risk.
 
@@ -54,7 +57,24 @@ Behavior when present on `begin task ...`, `begin one-shot ...`, `begin review`,
 - For task execution modes, also keep per-sub-task temp plan docs created under `tasks/tmp/`.
 - Include the preserved artifact paths in the final user-visible summary.
 
-## Prompts A-I (full review round)
+## Prompt profile selection
+
+Detect the active review prompt profile before each review round:
+
+- `codex-short` when the current agent identifies as Codex or is running on an OpenAI GPT/Codex-family model.
+- `full-chain` otherwise.
+
+Use these prompt sets:
+
+- `codex-short`: Prompt A, then Prompt G when required, then Prompt H when required, then Prompt I.
+- `full-chain`: Prompts A-I in order, treating Prompts G and H as conditional when not applicable.
+
+Rationale:
+
+- Codex review runs tend to produce most useful findings in the first broad review plus the closing audit, with Prompt G still valuable for frontend evidence and Prompt H still valuable for deploy-bound changes.
+- Non-Codex agents should continue to use the full redundant multi-pass chain.
+
+## Prompts A-I
 
 ### Prompt A
 
@@ -134,10 +154,17 @@ Frontend Evidence Review
 Goal: Verify all user-facing changes through actual visual inspection, not code inspection alone.
 Required When:
 Any change affects UI, layout, styling, interaction flows, responsive behavior, animations, or rendered content.
+Default Scope Rule:
+Require this prompt for frontend-facing `full-branch` review rounds and for explicit review runs that cover frontend work.
+For one-shot automatic `sub-task` review rounds, defer this prompt to the final `full-branch` review and record it as `not applicable` with a note that visual verification is pending the branch-wide pass.
 Action:
 Use Playwright MCP by default to open the changed UI, exercise the affected flows, resize for relevant breakpoints, and capture screenshots of all changed screens and states.
 When motion, timing, or multi-step interaction matters, also capture video or trace evidence using the Playwright CLI workflow.
 Review the captured evidence for visual regressions, broken layout, missing states, incorrect copy, and obvious accessibility issues visible in the UI.
+Grade the result explicitly on four criteria: design quality, originality, craft, and functionality.
+Use the sub-task contract when present to judge whether the intended screens, states, and design direction actually shipped.
+Be skeptical of merely functional but generic output. If the task is meaningfully user-facing, do not approve work that meets functional checks while still reading as template-level or incoherent.
+Fail Prompt G when functionality is below 4/5, craft is below 3/5, or design quality/originality is below 3/5 for work whose value includes the user experience.
 Record exactly what was captured, what was reviewed, and what remains unverified.
 Do not mark frontend-facing work complete without visual evidence.
 ```
@@ -173,7 +200,7 @@ Action: Give an honest assessment, list any remaining issues or accepted risks e
 
 ## Prompt execution protocol (required)
 
-For each required prompt, execute one-by-one in sequence:
+For each prompt required by the active prompt profile, execute one-by-one in sequence:
 
 1. Run prompt.
 2. Record findings.
@@ -187,7 +214,11 @@ Rules:
 - Complete one full round per review cycle.
 - If a prompt introduces code changes, continue to remaining prompts in same round.
 - Do not mark prompts complete retroactively from one combined pass.
-- Prompt G is required only for frontend-facing work or changes that affect rendered content, interaction flows, layout, styling, or responsive behavior. Otherwise mark it `not applicable` with a reason.
+- If a prompt is outside the active prompt profile, mark it `not applicable` with a short reason rather than leaving it incomplete.
+- Compare the implementation against the task contract when `tasks/tmp/plan-task-<task-id>.md` exists; treat unexplained contract drift as a finding.
+- Prompt G is required only for frontend-facing work or changes that affect rendered content, interaction flows, layout, styling, or responsive behavior.
+- Exception: during one-shot automatic `sub-task` review rounds, mark Prompt G `not applicable` with a note that visual verification is deferred to the final `full-branch` review.
+- Otherwise mark Prompt G `not applicable` with a reason.
 - Prompt H is required only for deploy-bound work or changes that materially affect operations, infrastructure, migrations, security posture, or runtime observability. Otherwise mark it `not applicable` with a reason.
 
 ## Review log protocol (required)
@@ -213,6 +244,7 @@ Initialize each new log with:
 
 - `review_mode: task | ad-hoc`
 - `branch_base_ref: origin/main | HEAD`
+- `review_prompt_profile: codex-short | full-chain`
 - `review_round: 1`
 - `review_scope: sub-task | full-branch`
 
@@ -243,7 +275,7 @@ Scope metadata rules:
 
 Completion gates:
 
-- All required and applicable prompt checkboxes completed.
+- All prompts required by the active prompt profile and all otherwise applicable conditional prompts completed.
 - Minimum 1 full round complete.
 - No unresolved LARP remediation TODO items.
 - No unresolved final-audit issues without explicit accepted-risk or blocked status.
@@ -260,7 +292,7 @@ For `begin review` and `begin review <task-id>`:
 
 - Do not create, rename, or switch branches.
 - Start at Prompt A.
-- Run full sequence A-I, treating Prompts G and H as conditional when not applicable.
+- Run the active prompt profile, treating Prompts G and H as conditional when not applicable.
 - Review scope is full branch diff vs `origin/main`, including uncommitted edits.
 - Keep the review log when `--preserve-review-artifacts` is present.
 
@@ -270,6 +302,7 @@ For standard task execution and one-shot execution:
 
 - After each completed sub-task and before its commit, run one review round in `sub-task` scope.
 - Review only the current sub-task delta against `HEAD`, not the entire branch history.
+- In one-shot execution, do not run Prompt G browser/visual verification during these per-sub-task rounds; record Prompt G as deferred to the final `full-branch` review.
 - Apply fixes and rerun relevant tests before creating the sub-task commit.
 - Delete sub-task review logs and temp plan docs after successful completion unless `--preserve-review-artifacts` is active.
 
@@ -277,13 +310,14 @@ For one-shot execution only:
 
 - After all sub-tasks are complete and before finalization, run one additional review round in `full-branch` scope.
 - This final round must review the entire branch diff vs `origin/main`, including all committed sub-task work.
+- If the branch includes frontend-facing work, Prompt G must be executed in this final round before completion.
 - Keep the final full-branch review log when `--preserve-review-artifacts` is active.
 - Do not issue a terminal user handoff before this final full-branch review and Step 9 finalization are complete, unless a real blocker prevents continuation.
 
 ## Step 9: Finalization
 
 ```text
-Please pull the latest main from github and rebase. If this is task-based work, mark the task complete. When all tasks are complete, archive the PRD, TDD, and task plan into `tasks/archive/<plan-key>/`, then open a pull request. If this is ad-hoc work, skip task completion and open a pull request with ad-hoc scope notes.
+Please pull the latest main from github and rebase. If this is task-based work, mark the task complete. When all tasks are complete, archive the PRD, TDD, and task plan into `tasks/archive/<yyyy-mm-dd>-<plan-key>/`, then open a pull request. If this is ad-hoc work, skip task completion and open a pull request with ad-hoc scope notes.
 ```
 
 Operational translation:
@@ -292,7 +326,9 @@ Operational translation:
 - `git rebase origin/main`
 - Resolve conflicts and rerun relevant tests.
 - For task-based work, update checklist and relevant files.
+- For one-shot task-based work, re-open `tasks/tasks-plan-<plan-key>.md` immediately before terminal handoff and confirm no unchecked sub-tasks remain anywhere in the file.
 - If all checkboxes in task list are complete, archive:
+  - Create `tasks/archive/<yyyy-mm-dd>-<plan-key>/` using the local current date in ISO format (`YYYY-MM-DD`)
   - `tasks/prd-<plan-key>.md`
   - `tasks/tdd-<plan-key>.md`
   - `tasks/tasks-plan-<plan-key>.md`

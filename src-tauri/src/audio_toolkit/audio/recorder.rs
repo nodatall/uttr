@@ -228,19 +228,21 @@ impl AudioRecorder {
             .as_ref()
             .ok_or_else(|| Error::new(std::io::ErrorKind::BrokenPipe, "Recorder is not open"))?;
         tx.send(Cmd::Stop(resp_tx))?;
-        resp_rx.recv_timeout(Duration::from_millis(750)).map_err(|e| {
-            let io_err = match e {
-                mpsc::RecvTimeoutError::Timeout => Error::new(
-                    std::io::ErrorKind::TimedOut,
-                    "Timed out waiting for stop response",
-                ),
-                mpsc::RecvTimeoutError::Disconnected => Error::new(
-                    std::io::ErrorKind::BrokenPipe,
-                    "Recorder worker disconnected before stop response",
-                ),
-            };
-            Box::new(io_err) as Box<dyn std::error::Error>
-        })
+        resp_rx
+            .recv_timeout(Duration::from_millis(750))
+            .map_err(|e| {
+                let io_err = match e {
+                    mpsc::RecvTimeoutError::Timeout => Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "Timed out waiting for stop response",
+                    ),
+                    mpsc::RecvTimeoutError::Disconnected => Error::new(
+                        std::io::ErrorKind::BrokenPipe,
+                        "Recorder worker disconnected before stop response",
+                    ),
+                };
+                Box::new(io_err) as Box<dyn std::error::Error>
+            })
     }
 
     pub fn drain(&self) -> Result<DrainResult, Box<dyn std::error::Error>> {
@@ -577,13 +579,8 @@ fn run_consumer(
                 frame_resampler.finish(&mut |frame: &[f32]| {
                     pre_roll_samples.push_frame(frame);
                     // we still want to process the last few frames
-                    let _ = handle_frame(
-                        frame,
-                        true,
-                        vad,
-                        processed_samples,
-                        &mut flush_passthrough,
-                    );
+                    let _ =
+                        handle_frame(frame, true, vad, processed_samples, &mut flush_passthrough);
                 });
 
                 *drain_cursor = 0;
@@ -674,9 +671,7 @@ fn run_consumer(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        drain_recording, handle_start, DrainResult, PreRollBuffer,
-    };
+    use super::{drain_recording, handle_start, DrainResult, PreRollBuffer};
 
     #[test]
     fn recorder_pre_roll_buffer_caps_to_latest_samples() {

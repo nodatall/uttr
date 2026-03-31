@@ -10,7 +10,7 @@ TDD is always required for planned work.
 
 ## When to run
 
-Run this for every completed planning flow after PRD structure is locked and before tasks-plan finalization.
+Run this for every completed planning flow after PRD structure is locked. When `--deep-research` is active, generate the initial TDD before the research pass, then revise it with the adopted research-backed technical recommendations before tasks-plan finalization.
 
 ## Input
 
@@ -18,8 +18,8 @@ Run this for every completed planning flow after PRD structure is locked and bef
 - `tasks/prd-<plan-key>.md`
 - source plan or source prompt
 - locked decisions from Socratic refinement
-- deep-research findings when `--deep-research` is active
-- finalized plain-language summary
+- deep-research findings when `--deep-research` is active and available during finalization
+- finalized three-paragraph plain-language summary from the summary checkpoint
 
 ## Output
 
@@ -51,6 +51,7 @@ Run this for every completed planning flow after PRD structure is locked and bef
 - Explain the technical approach in concrete, plain language.
 - Preserve the same core meaning as the Socratic plain-language summary.
 - Use it to sanity-check that the design still matches the product intent.
+- Keep the same three-paragraph structure unless a paragraph is genuinely empty after normalization.
 
 ## Mapping rules
 
@@ -81,6 +82,7 @@ Do not collapse concrete interface, schema, migration, or verification detail in
 8. Keep the section order stable so the plain-language summary is the first substantive section a human or agent reads.
 9. Do not omit sections. If a section is truly not relevant, fill it with one explicit, concise note rather than leaving it out.
 10. If `--deep-research` is active, TDD is the primary home for research-backed technical recommendations and rationale.
+11. When `--deep-research` is active, treat the first TDD draft as a staging artifact for research review, then update it with the adopted findings before tasks-plan generation.
 
 ## Build gate reminder
 

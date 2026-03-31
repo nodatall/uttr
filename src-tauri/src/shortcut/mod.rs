@@ -20,8 +20,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_autostart::ManagerExt;
 
 use crate::settings::{
-    self, get_settings, AutoSubmitKey, ClipboardHandling, KeyboardImplementation,
-    OverlayPosition, PasteMethod, ShortcutBinding, SoundTheme, TypingTool,
+    self, get_settings, AutoSubmitKey, ByokValidationState, ClipboardHandling,
+    KeyboardImplementation, OverlayPosition, PasteMethod, ShortcutBinding, SoundTheme, TypingTool,
     APPLE_INTELLIGENCE_DEFAULT_MODEL_ID, APPLE_INTELLIGENCE_PROVIDER_ID,
 };
 use crate::tray;
@@ -50,6 +50,28 @@ pub fn init_shortcuts(app: &AppHandle) {
 
                 tauri_impl::init_shortcuts(app);
             }
+        }
+    }
+}
+
+/// Refresh shortcut registrations for the active implementation.
+/// This is used as a repair path when the OS or a backend drops registrations.
+pub fn refresh_shortcuts(app: &AppHandle) -> Result<(), String> {
+    let implementation = get_settings(app).keyboard_implementation;
+
+    match implementation {
+        KeyboardImplementation::Tauri => {
+            unregister_all_shortcuts(app, implementation);
+            let _ = register_all_shortcuts_for_implementation(app, implementation);
+            Ok(())
+        }
+        KeyboardImplementation::HandyKeys => {
+            let initialized_during_refresh = initialize_handy_keys_with_rollback(app)?;
+            if !initialized_during_refresh {
+                unregister_all_shortcuts(app, implementation);
+                let _ = register_all_shortcuts_for_implementation(app, implementation);
+            }
+            Ok(())
         }
     }
 }
@@ -389,11 +411,6 @@ fn register_all_shortcuts_for_implementation(
     for (id, default_binding) in &default_bindings {
         // Skip cancel shortcut as it's dynamically registered
         if id == "cancel" {
-            continue;
-        }
-
-        // Skip post-processing shortcut when the feature is disabled
-        if id == "transcribe_with_post_process" && !current_settings.post_process_enabled {
             continue;
         }
 
@@ -764,20 +781,7 @@ pub fn change_auto_submit_key_setting(app: AppHandle, key: String) -> Result<(),
 pub fn change_post_process_enabled_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     settings.post_process_enabled = enabled;
-    settings::write_settings(&app, settings.clone());
-
-    // Register or unregister the post-processing shortcut
-    if let Some(binding) = settings
-        .bindings
-        .get("transcribe_with_post_process")
-        .cloned()
-    {
-        if enabled {
-            let _ = register_shortcut(&app, binding);
-        } else {
-            let _ = unregister_shortcut(&app, binding);
-        }
-    }
+    settings::write_settings(&app, settings);
 
     Ok(())
 }
@@ -835,7 +839,16 @@ pub fn change_post_process_api_key_setting(
 ) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     validate_provider_exists(&settings, &provider_id)?;
-    settings.post_process_api_keys.insert(provider_id, api_key);
+    if provider_id == "groq" {
+        crate::byok_secrets::store_groq_api_key(&app, &settings, &api_key)?;
+        settings.byok_validation_state = ByokValidationState::Unknown;
+        settings.byok_enabled = false;
+        settings
+            .post_process_api_keys
+            .insert(provider_id, String::new());
+    } else {
+        settings.post_process_api_keys.insert(provider_id, api_key);
+    }
     settings::write_settings(&app, settings);
     Ok(())
 }
@@ -923,7 +936,10 @@ pub async fn fetch_post_process_models(
 
 #[tauri::command]
 #[specta::specta]
-pub fn change_post_process_timeout_setting(app: AppHandle, timeout_secs: u64) -> Result<(), String> {
+pub fn change_post_process_timeout_setting(
+    app: AppHandle,
+    timeout_secs: u64,
+) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     settings.post_process_timeout_secs = timeout_secs;
     settings::write_settings(&app, settings);
@@ -932,7 +948,10 @@ pub fn change_post_process_timeout_setting(app: AppHandle, timeout_secs: u64) ->
 
 #[tauri::command]
 #[specta::specta]
-pub fn change_post_process_system_prompt_setting(app: AppHandle, system_prompt: String) -> Result<(), String> {
+pub fn change_post_process_system_prompt_setting(
+    app: AppHandle,
+    system_prompt: String,
+) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     settings.post_process_system_prompt = system_prompt;
     settings::write_settings(&app, settings);

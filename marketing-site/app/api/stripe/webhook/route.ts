@@ -5,6 +5,8 @@ import { readEmailConfig, readWebhookConfig } from "@/lib/env";
 import { registerWebhookEvent } from "@/lib/idempotency";
 import { getStripe } from "@/lib/stripe";
 
+export const runtime = "nodejs";
+
 async function resolveCustomerEmail(
   stripe: Stripe,
   customer: string | Stripe.Customer | Stripe.DeletedCustomer | null,
@@ -156,7 +158,7 @@ export async function POST(request: Request) {
 
     const event = stripe.webhooks.constructEvent(payload, signature, webhookSecret);
 
-    if (!registerWebhookEvent(event.id)) {
+    if (!(await registerWebhookEvent(event.id, event.type))) {
       return NextResponse.json({ received: true, duplicate: true });
     }
 

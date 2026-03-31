@@ -1,9 +1,10 @@
+pub mod access;
 pub mod audio;
 pub mod history;
 pub mod models;
 pub mod transcription;
 
-use crate::settings::{get_settings, write_settings, AppSettings, LogLevel};
+use crate::settings::{get_settings, write_settings, AppSettings, ByokValidationState, LogLevel};
 use crate::utils::cancel_current_operation;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
@@ -35,6 +36,58 @@ pub fn get_app_settings(app: AppHandle) -> Result<AppSettings, String> {
 #[specta::specta]
 pub fn get_default_settings() -> Result<AppSettings, String> {
     Ok(crate::settings::get_default_settings())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_byok_enabled_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut settings = get_settings(&app);
+    if enabled {
+        let has_secret = crate::byok_secrets::load_groq_api_key(&app, &settings)
+            .map_err(|error| format!("Failed to load Groq BYOK secret: {}", error))?
+            .map(|key| !key.trim().is_empty())
+            .unwrap_or(false);
+        if !has_secret {
+            return Err("Save a Groq BYOK key before enabling BYOK.".to_string());
+        }
+        if !matches!(settings.byok_validation_state, ByokValidationState::Valid) {
+            return Err("Validate the Groq BYOK key before enabling BYOK.".to_string());
+        }
+    }
+    settings.byok_enabled = enabled;
+    write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn validate_byok_groq_key(
+    app: AppHandle,
+) -> Result<crate::access::InstallAccessSnapshot, String> {
+    let mut settings = get_settings(&app);
+    let key = crate::byok_secrets::load_groq_api_key(&app, &settings)
+        .map_err(|error| format!("Failed to load Groq BYOK secret: {}", error))?
+        .ok_or_else(|| "Groq BYOK secret is missing.".to_string())?;
+
+    let provider = settings
+        .post_process_provider("groq")
+        .cloned()
+        .ok_or_else(|| "Groq provider is not configured.".to_string())?;
+
+    match crate::llm_client::fetch_models(&provider, key).await {
+        Ok(_) => {
+            settings.byok_validation_state = ByokValidationState::Valid;
+            settings.byok_enabled = true;
+            write_settings(&app, settings);
+            access::get_install_access_snapshot(app)
+        }
+        Err(error) => {
+            settings.byok_validation_state = ByokValidationState::Invalid;
+            settings.byok_enabled = false;
+            write_settings(&app, settings);
+            Err(format!("Groq BYOK validation failed: {}", error))
+        }
+    }
 }
 
 #[tauri::command]
@@ -176,7 +229,8 @@ pub struct ShortcutsInitialized;
 pub fn initialize_shortcuts(app: AppHandle) -> Result<(), String> {
     // Check if already initialized
     if app.try_state::<ShortcutsInitialized>().is_some() {
-        log::debug!("Shortcuts already initialized");
+        log::debug!("Shortcuts already initialized; refreshing registrations");
+        crate::shortcut::refresh_shortcuts(&app)?;
         return Ok(());
     }
 

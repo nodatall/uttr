@@ -5,8 +5,8 @@ pub mod utils;
 pub mod vad;
 
 pub use audio::{
-    list_input_devices, list_output_devices, save_wav_file, AudioRecorder, CpalDeviceInfo,
-    DrainResult,
+    import_audio_file, list_input_devices, list_output_devices, save_wav_file,
+    trim_proxy_upload_audio, AudioRecorder, CpalDeviceInfo, DrainResult, ImportedAudioFile,
 };
 pub use text::{
     apply_custom_words, filter_transcription_output, normalize_spoken_lists,

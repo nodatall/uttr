@@ -19,6 +19,7 @@ import { SHOW_MODEL_ONBOARDING_EVENT } from "@/lib/events/onboarding";
 import { getLanguageDirection, initializeRTL } from "@/lib/utils/rtl";
 
 type OnboardingStep = "accessibility" | "model" | "done";
+const SHORTCUT_REFRESH_INTERVAL_MS = 3 * 60 * 1000;
 
 const renderSettingsContent = (section: SidebarSection) => {
   const ActiveComponent =
@@ -88,6 +89,38 @@ function App() {
     }
   }, [onboardingStep, refreshAudioDevices, refreshOutputDevices]);
 
+  useEffect(() => {
+    if (onboardingStep !== "done") {
+      return;
+    }
+
+    const refreshShortcuts = () => {
+      commands.initializeShortcuts().catch((e) => {
+        console.warn("Failed to refresh shortcuts:", e);
+      });
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        refreshShortcuts();
+      }
+    };
+
+    const intervalId = window.setInterval(
+      refreshShortcuts,
+      SHORTCUT_REFRESH_INTERVAL_MS,
+    );
+
+    window.addEventListener("focus", refreshShortcuts);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      window.clearInterval(intervalId);
+      window.removeEventListener("focus", refreshShortcuts);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [onboardingStep]);
+
   // Handle keyboard shortcuts for debug mode toggle
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -130,11 +163,17 @@ function App() {
 
   const checkOnboardingStatus = async () => {
     try {
-      // Check if they have any models available
-      const result = await commands.hasAnyModelsAvailable();
-      const hasModels = result.status === "ok" && result.data;
+      const [currentModelResult, modelsResult] = await Promise.all([
+        commands.getCurrentModel(),
+        commands.hasAnyModelsAvailable(),
+      ]);
 
-      if (hasModels) {
+      const hasCurrentModel =
+        currentModelResult.status === "ok" &&
+        currentModelResult.data.trim().length > 0;
+      const hasModels = modelsResult.status === "ok" && modelsResult.data;
+
+      if (hasCurrentModel || hasModels) {
         // Returning user - but check if they need to grant permissions on macOS
         setIsReturningUser(true);
         if (platform() === "macos") {
@@ -206,22 +245,22 @@ function App() {
           },
         }}
       />
-        <div className="flex h-full flex-col overflow-hidden bg-[linear-gradient(180deg,rgba(10,15,25,0.985),rgba(6,10,18,0.96))] backdrop-blur-xl">
-          <div className="flex min-h-0 flex-1 gap-4 p-5 pt-1">
-            <Sidebar
-              activeSection={currentSection}
-              onSectionChange={setCurrentSection}
-            />
-            <div className="min-w-0 flex-1 overflow-hidden rounded-[20px] border border-white/6 bg-[rgba(5,10,18,0.56)] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
-              <div className="flex h-full flex-col overflow-x-hidden overflow-y-auto uttr-scrollbar">
-                <div className="flex flex-col items-center gap-6 px-6 py-7">
-                  <AccessibilityPermissions />
-                  {renderSettingsContent(currentSection)}
-                </div>
+      <div className="flex h-full flex-col overflow-hidden bg-[linear-gradient(180deg,rgba(10,15,25,0.985),rgba(6,10,18,0.96))] backdrop-blur-xl">
+        <div className="flex min-h-0 flex-1 gap-4 p-5 pt-1">
+          <Sidebar
+            activeSection={currentSection}
+            onSectionChange={setCurrentSection}
+          />
+          <div className="min-w-0 flex-1 overflow-hidden rounded-[20px] border border-white/6 bg-[rgba(5,10,18,0.56)] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+            <div className="flex h-full flex-col overflow-x-hidden overflow-y-auto uttr-scrollbar">
+              <div className="flex flex-col items-center gap-6 px-6 py-7">
+                <AccessibilityPermissions />
+                {renderSettingsContent(currentSection)}
               </div>
             </div>
           </div>
         </div>
+      </div>
     </div>
   );
 }

@@ -1,13 +1,17 @@
 use log::{debug, warn};
+use once_cell::sync::OnceCell;
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
+use sha2::{Digest, Sha256};
 use specta::Type;
 use std::collections::HashMap;
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tauri_plugin_store::StoreExt;
+use uuid::Uuid;
 
 pub const APPLE_INTELLIGENCE_PROVIDER_ID: &str = "apple_intelligence";
 pub const APPLE_INTELLIGENCE_DEFAULT_MODEL_ID: &str = "Apple Intelligence";
+static GROQ_SECRET_MIGRATION_ATTEMPTED: OnceCell<()> = OnceCell::new();
 
 pub const STRICT_CLEANING_PROMPT: &str = "You are a transcript cleaning assistant. Clean the transcript in the user message following these rules:
 1. Fix spelling, capitalisation, and punctuation errors.
@@ -124,6 +128,65 @@ pub struct ShortcutBinding {
     pub current_binding: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum TrialState {
+    New,
+    Trialing,
+    Expired,
+    Linked,
+}
+
+impl Default for TrialState {
+    fn default() -> Self {
+        TrialState::New
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum AccessState {
+    Blocked,
+    Trialing,
+    Subscribed,
+}
+
+impl Default for AccessState {
+    fn default() -> Self {
+        AccessState::Blocked
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum EntitlementState {
+    Inactive,
+    Active,
+    PastDue,
+    Canceled,
+    Expired,
+}
+
+impl Default for EntitlementState {
+    fn default() -> Self {
+        EntitlementState::Inactive
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
+#[serde(rename_all = "snake_case")]
+pub enum ByokValidationState {
+    Unknown,
+    Valid,
+    Invalid,
+}
+
+impl Default for ByokValidationState {
+    fn default() -> Self {
+        ByokValidationState::Unknown
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
 pub struct PostProcessProvider {
     pub id: String,
@@ -133,6 +196,16 @@ pub struct PostProcessProvider {
     pub allow_base_url_edit: bool,
     #[serde(default)]
     pub models_endpoint: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Type)]
+pub struct SavedFileTranscription {
+    pub file_name: String,
+    pub transcription_text: String,
+    #[serde(default)]
+    pub post_processed_text: Option<String>,
+    #[serde(default)]
+    pub source_path: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq, Type)]
@@ -322,6 +395,22 @@ pub struct AppSettings {
     pub update_checks_enabled: bool,
     #[serde(default = "default_model")]
     pub selected_model: String,
+    #[serde(default = "default_install_id")]
+    pub install_id: String,
+    #[serde(default = "default_device_fingerprint_hash")]
+    pub device_fingerprint_hash: String,
+    #[serde(default = "default_install_token")]
+    pub install_token: String,
+    #[serde(default = "default_trial_state")]
+    pub anonymous_trial_state: TrialState,
+    #[serde(default = "default_access_state")]
+    pub access_state: AccessState,
+    #[serde(default = "default_entitlement_state")]
+    pub entitlement_state: EntitlementState,
+    #[serde(default)]
+    pub byok_enabled: bool,
+    #[serde(default = "default_byok_validation_state")]
+    pub byok_validation_state: ByokValidationState,
     #[serde(default = "default_always_on_microphone")]
     pub always_on_microphone: bool,
     #[serde(default)]
@@ -395,10 +484,42 @@ pub struct AppSettings {
     pub paste_delay_ms: u64,
     #[serde(default = "default_typing_tool")]
     pub typing_tool: TypingTool,
+    #[serde(default)]
+    pub file_transcription_history: Vec<SavedFileTranscription>,
+    #[serde(default, rename = "latest_file_transcription", skip_serializing)]
+    pub legacy_latest_file_transcription: Option<SavedFileTranscription>,
 }
 
 fn default_model() -> String {
     "".to_string()
+}
+
+fn default_install_id() -> String {
+    String::new()
+}
+
+fn default_device_fingerprint_hash() -> String {
+    String::new()
+}
+
+fn default_install_token() -> String {
+    String::new()
+}
+
+fn default_trial_state() -> TrialState {
+    TrialState::New
+}
+
+fn default_access_state() -> AccessState {
+    AccessState::Blocked
+}
+
+fn default_entitlement_state() -> EntitlementState {
+    EntitlementState::Inactive
+}
+
+fn default_byok_validation_state() -> ByokValidationState {
+    ByokValidationState::Unknown
 }
 
 fn default_always_on_microphone() -> bool {
@@ -641,6 +762,89 @@ fn ensure_post_process_defaults(settings: &mut AppSettings) -> bool {
     changed
 }
 
+fn ensure_file_transcription_history_defaults(settings: &mut AppSettings) -> bool {
+    let mut changed = false;
+
+    if let Some(legacy_entry) = settings.legacy_latest_file_transcription.take() {
+        if settings.file_transcription_history.is_empty() {
+            settings.file_transcription_history.push(legacy_entry);
+        }
+        changed = true;
+    }
+
+    if settings.file_transcription_history.len() > 5 {
+        settings.file_transcription_history.truncate(5);
+        changed = true;
+    }
+
+    changed
+}
+
+fn device_fingerprint_hash(app: &AppHandle) -> String {
+    let mut hasher = Sha256::new();
+
+    if let Ok(app_data_dir) = app.path().app_data_dir() {
+        hasher.update(app_data_dir.to_string_lossy().as_bytes());
+    }
+
+    hasher.update(std::env::consts::OS.as_bytes());
+    hasher.update(std::env::consts::ARCH.as_bytes());
+
+    if let Ok(hostname) = std::env::var("HOSTNAME").or_else(|_| std::env::var("COMPUTERNAME")) {
+        hasher.update(hostname.as_bytes());
+    }
+
+    if let Ok(username) = std::env::var("USER").or_else(|_| std::env::var("USERNAME")) {
+        hasher.update(username.as_bytes());
+    }
+
+    format!("{:x}", hasher.finalize())
+}
+
+pub(crate) fn ensure_install_identity_defaults(
+    app: &AppHandle,
+    settings: &mut AppSettings,
+) -> bool {
+    let mut changed = false;
+
+    if settings.install_id.trim().is_empty() {
+        settings.install_id = Uuid::new_v4().to_string();
+        changed = true;
+    }
+
+    if settings.device_fingerprint_hash.trim().is_empty() {
+        settings.device_fingerprint_hash = device_fingerprint_hash(app);
+        changed = true;
+    }
+
+    changed
+}
+
+fn ensure_groq_secret_is_migrated(app: &AppHandle, settings: &mut AppSettings) -> bool {
+    let Some(current_key) = settings.post_process_api_keys.get("groq") else {
+        return false;
+    };
+
+    if current_key.trim().is_empty() {
+        return false;
+    }
+
+    if GROQ_SECRET_MIGRATION_ATTEMPTED.set(()).is_err() {
+        return false;
+    }
+
+    match crate::byok_secrets::migrate_groq_api_key(app, settings) {
+        Ok(changed) => changed,
+        Err(error) => {
+            warn!(
+                "Failed to migrate Groq BYOK secret to Stronghold: {}",
+                error
+            );
+            false
+        }
+    }
+}
+
 pub const SETTINGS_STORE_PATH: &str = "settings_store.json";
 
 pub fn get_default_settings() -> AppSettings {
@@ -705,6 +909,14 @@ pub fn get_default_settings() -> AppSettings {
         autostart_enabled: default_autostart_enabled(),
         update_checks_enabled: default_update_checks_enabled(),
         selected_model: "".to_string(),
+        install_id: default_install_id(),
+        device_fingerprint_hash: default_device_fingerprint_hash(),
+        install_token: default_install_token(),
+        anonymous_trial_state: default_trial_state(),
+        access_state: default_access_state(),
+        entitlement_state: default_entitlement_state(),
+        byok_enabled: false,
+        byok_validation_state: default_byok_validation_state(),
         always_on_microphone: false,
         selected_microphone: None,
         clamshell_microphone: None,
@@ -740,6 +952,8 @@ pub fn get_default_settings() -> AppSettings {
         show_tray_icon: default_show_tray_icon(),
         paste_delay_ms: default_paste_delay_ms(),
         typing_tool: default_typing_tool(),
+        file_transcription_history: Vec::new(),
+        legacy_latest_file_transcription: None,
     }
 }
 
@@ -776,7 +990,7 @@ pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
         // Parse the entire settings object
         match serde_json::from_value::<AppSettings>(settings_value) {
             Ok(mut settings) => {
-                debug!("Found existing settings: {:?}", settings);
+                debug!("Found existing settings store");
                 let default_settings = get_default_settings();
                 let mut updated = false;
 
@@ -792,6 +1006,9 @@ pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
                 if updated {
                     debug!("Settings updated with new bindings");
                     store.set("settings", serde_json::to_value(&settings).unwrap());
+                    if let Err(e) = store.save() {
+                        warn!("Failed to flush settings to disk: {}", e);
+                    }
                 }
 
                 settings
@@ -801,17 +1018,44 @@ pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
                 // Fall back to default settings if parsing fails
                 let default_settings = get_default_settings();
                 store.set("settings", serde_json::to_value(&default_settings).unwrap());
+                if let Err(e) = store.save() {
+                    warn!("Failed to flush settings to disk: {}", e);
+                }
                 default_settings
             }
         }
     } else {
         let default_settings = get_default_settings();
         store.set("settings", serde_json::to_value(&default_settings).unwrap());
+        if let Err(e) = store.save() {
+            warn!("Failed to flush settings to disk: {}", e);
+        }
         default_settings
     };
 
+    let mut changed = false;
+
     if ensure_post_process_defaults(&mut settings) {
+        changed = true;
+    }
+
+    if ensure_install_identity_defaults(app, &mut settings) {
+        changed = true;
+    }
+
+    if ensure_groq_secret_is_migrated(app, &mut settings) {
+        changed = true;
+    }
+
+    if ensure_file_transcription_history_defaults(&mut settings) {
+        changed = true;
+    }
+
+    if changed {
         store.set("settings", serde_json::to_value(&settings).unwrap());
+        if let Err(e) = store.save() {
+            warn!("Failed to flush settings to disk: {}", e);
+        }
     }
 
     settings
@@ -826,16 +1070,43 @@ pub fn get_settings(app: &AppHandle) -> AppSettings {
         serde_json::from_value::<AppSettings>(settings_value).unwrap_or_else(|_| {
             let default_settings = get_default_settings();
             store.set("settings", serde_json::to_value(&default_settings).unwrap());
+            if let Err(e) = store.save() {
+                warn!("Failed to flush settings to disk: {}", e);
+            }
             default_settings
         })
     } else {
         let default_settings = get_default_settings();
         store.set("settings", serde_json::to_value(&default_settings).unwrap());
+        if let Err(e) = store.save() {
+            warn!("Failed to flush settings to disk: {}", e);
+        }
         default_settings
     };
 
+    let mut changed = false;
+
     if ensure_post_process_defaults(&mut settings) {
+        changed = true;
+    }
+
+    if ensure_install_identity_defaults(app, &mut settings) {
+        changed = true;
+    }
+
+    if ensure_groq_secret_is_migrated(app, &mut settings) {
+        changed = true;
+    }
+
+    if ensure_file_transcription_history_defaults(&mut settings) {
+        changed = true;
+    }
+
+    if changed {
         store.set("settings", serde_json::to_value(&settings).unwrap());
+        if let Err(e) = store.save() {
+            warn!("Failed to flush settings to disk: {}", e);
+        }
     }
 
     settings
@@ -942,5 +1213,58 @@ mod tests {
             CleaningPromptPreset::Strict
         );
         let _ = changed; // other defaults may or may not fire
+    }
+
+    #[test]
+    fn default_access_state_is_blocked() {
+        let settings = get_default_settings();
+        assert_eq!(settings.anonymous_trial_state, TrialState::New);
+        assert_eq!(settings.access_state, AccessState::Blocked);
+        assert_eq!(settings.entitlement_state, EntitlementState::Inactive);
+        assert!(!settings.byok_enabled);
+        assert_eq!(settings.byok_validation_state, ByokValidationState::Unknown);
+    }
+
+    #[test]
+    fn migrates_legacy_latest_file_transcription_into_history() {
+        let mut settings = get_default_settings();
+        settings.legacy_latest_file_transcription = Some(SavedFileTranscription {
+            file_name: "sample.wav".to_string(),
+            transcription_text: "hello".to_string(),
+            post_processed_text: Some("hello".to_string()),
+            source_path: Some("/tmp/sample.wav".to_string()),
+        });
+
+        let changed = ensure_file_transcription_history_defaults(&mut settings);
+
+        assert!(changed);
+        assert_eq!(settings.file_transcription_history.len(), 1);
+        assert_eq!(
+            settings.file_transcription_history[0].file_name,
+            "sample.wav"
+        );
+        assert!(settings.legacy_latest_file_transcription.is_none());
+    }
+
+    #[test]
+    fn truncates_file_transcription_history_to_five_items() {
+        let mut settings = get_default_settings();
+        settings.file_transcription_history = (0..7)
+            .map(|index| SavedFileTranscription {
+                file_name: format!("file-{}.wav", index),
+                transcription_text: format!("text {}", index),
+                post_processed_text: None,
+                source_path: None,
+            })
+            .collect();
+
+        let changed = ensure_file_transcription_history_defaults(&mut settings);
+
+        assert!(changed);
+        assert_eq!(settings.file_transcription_history.len(), 5);
+        assert_eq!(
+            settings.file_transcription_history[4].file_name,
+            "file-4.wav"
+        );
     }
 }

@@ -18,6 +18,28 @@ interface DownloadStats {
   speed: number; // MB/s
 }
 
+const BACKGROUND_PARAKEET_MODEL_ID = "parakeet-tdt-0.6b-v3";
+
+const clearDownloadState = (
+  state: Pick<
+    ModelsStore,
+    | "downloadingModels"
+    | "downloadProgress"
+    | "downloadStats"
+    | "extractingModels"
+    | "autoSelectDownloadedModelId"
+  >,
+  modelId: string,
+) => {
+  delete state.downloadingModels[modelId];
+  delete state.downloadProgress[modelId];
+  delete state.downloadStats[modelId];
+  delete state.extractingModels[modelId];
+  if (state.autoSelectDownloadedModelId === modelId) {
+    state.autoSelectDownloadedModelId = null;
+  }
+};
+
 // Using Record instead of Set/Map for Immer compatibility
 interface ModelsStore {
   models: ModelInfo[];
@@ -26,6 +48,7 @@ interface ModelsStore {
   extractingModels: Record<string, true>;
   downloadProgress: Record<string, DownloadProgress>;
   downloadStats: Record<string, DownloadStats>;
+  autoSelectDownloadedModelId: string | null;
   loading: boolean;
   error: string | null;
   hasAnyModels: boolean;
@@ -39,6 +62,7 @@ interface ModelsStore {
   checkFirstRun: () => Promise<boolean>;
   selectModel: (modelId: string) => Promise<boolean>;
   downloadModel: (modelId: string) => Promise<boolean>;
+  prefetchModel: (modelId: string) => Promise<boolean>;
   cancelDownload: (modelId: string) => Promise<boolean>;
   deleteModel: (modelId: string) => Promise<boolean>;
   getModelInfo: (modelId: string) => ModelInfo | undefined;
@@ -61,6 +85,7 @@ export const useModelStore = create<ModelsStore>()(
     extractingModels: {},
     downloadProgress: {},
     downloadStats: {},
+    autoSelectDownloadedModelId: null,
     loading: true,
     error: null,
     hasAnyModels: false,
@@ -126,9 +151,21 @@ export const useModelStore = create<ModelsStore>()(
 
     checkFirstRun: async () => {
       try {
-        const result = await commands.hasAnyModelsAvailable();
-        if (result.status === "ok") {
-          const hasModels = result.data;
+        const [currentModelResult, modelsResult] = await Promise.all([
+          commands.getCurrentModel(),
+          commands.hasAnyModelsAvailable(),
+        ]);
+
+        if (
+          currentModelResult.status === "ok" &&
+          currentModelResult.data.trim().length > 0
+        ) {
+          set({ hasAnyModels: true, isFirstRun: false });
+          return false;
+        }
+
+        if (modelsResult.status === "ok") {
+          const hasModels = modelsResult.data;
           set({ hasAnyModels: hasModels, isFirstRun: !hasModels });
           return !hasModels;
         }
@@ -148,6 +185,7 @@ export const useModelStore = create<ModelsStore>()(
             currentModel: modelId,
             isFirstRun: false,
             hasAnyModels: true,
+            autoSelectDownloadedModelId: null,
           });
           return true;
         } else {
@@ -163,6 +201,7 @@ export const useModelStore = create<ModelsStore>()(
     downloadModel: async (modelId: string) => {
       try {
         set({ error: null });
+        set({ autoSelectDownloadedModelId: modelId });
         set(
           produce((state) => {
             state.downloadingModels[modelId] = true;
@@ -181,7 +220,7 @@ export const useModelStore = create<ModelsStore>()(
           set({ error: `Failed to download model: ${result.error}` });
           set(
             produce((state) => {
-              delete state.downloadingModels[modelId];
+              clearDownloadState(state, modelId);
             }),
           );
           return false;
@@ -190,7 +229,58 @@ export const useModelStore = create<ModelsStore>()(
         set({ error: `Failed to download model: ${err}` });
         set(
           produce((state) => {
-            delete state.downloadingModels[modelId];
+            clearDownloadState(state, modelId);
+          }),
+        );
+        return false;
+      }
+    },
+
+    prefetchModel: async (modelId: string) => {
+      try {
+        set({ error: null, autoSelectDownloadedModelId: null });
+        const currentState = get();
+        const existingModel = currentState.models.find(
+          (model) => model.id === modelId,
+        );
+
+        if (
+          existingModel?.is_downloaded ||
+          currentState.downloadingModels[modelId] ||
+          currentState.extractingModels[modelId] ||
+          currentState.downloadProgress[modelId]
+        ) {
+          return true;
+        }
+
+        set(
+          produce((state) => {
+            state.downloadingModels[modelId] = true;
+            state.downloadProgress[modelId] = {
+              model_id: modelId,
+              downloaded: 0,
+              total: 0,
+              percentage: 0,
+            };
+          }),
+        );
+        const result = await commands.downloadModel(modelId);
+        if (result.status === "ok") {
+          return true;
+        } else {
+          set({ error: `Failed to download model: ${result.error}` });
+          set(
+            produce((state) => {
+              clearDownloadState(state, modelId);
+            }),
+          );
+          return false;
+        }
+      } catch (err) {
+        set({ error: `Failed to download model: ${err}` });
+        set(
+          produce((state) => {
+            clearDownloadState(state, modelId);
           }),
         );
         return false;
@@ -204,9 +294,7 @@ export const useModelStore = create<ModelsStore>()(
         if (result.status === "ok") {
           set(
             produce((state) => {
-              delete state.downloadingModels[modelId];
-              delete state.downloadProgress[modelId];
-              delete state.downloadStats[modelId];
+              clearDownloadState(state, modelId);
             }),
           );
 
@@ -265,6 +353,11 @@ export const useModelStore = create<ModelsStore>()(
       // Load initial data
       await Promise.all([loadModels(), loadCurrentModel(), checkFirstRun()]);
 
+      const state = get();
+      if (state.currentModel.trim().length > 0) {
+        void state.prefetchModel(BACKGROUND_PARAKEET_MODEL_ID);
+      }
+
       // Set up event listeners
       listen<DownloadProgress>("model-download-progress", (event) => {
         const progress = event.payload;
@@ -315,9 +408,7 @@ export const useModelStore = create<ModelsStore>()(
         const modelId = event.payload;
         set(
           produce((state) => {
-            delete state.downloadingModels[modelId];
-            delete state.downloadProgress[modelId];
-            delete state.downloadStats[modelId];
+            clearDownloadState(state, modelId);
           }),
         );
         get().loadModels();
@@ -359,9 +450,7 @@ export const useModelStore = create<ModelsStore>()(
         const modelId = event.payload;
         set(
           produce((state) => {
-            delete state.downloadingModels[modelId];
-            delete state.downloadProgress[modelId];
-            delete state.downloadStats[modelId];
+            clearDownloadState(state, modelId);
           }),
         );
       });

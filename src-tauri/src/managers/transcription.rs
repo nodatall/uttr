@@ -1,11 +1,16 @@
-use crate::audio_toolkit::{apply_custom_words, filter_transcription_output};
+use crate::access::{bootstrap_install_state, refresh_entitlement_state, request_claim_token};
+use crate::audio_toolkit::{
+    apply_custom_words, filter_transcription_output, trim_proxy_upload_audio,
+};
 use crate::groq_client;
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::model::{
     groq_api_model_name, is_cloud_model_id, EngineType, ModelInfo, ModelManager,
     DEFAULT_LOCAL_MODEL_ID,
 };
-use crate::settings::{get_settings, AppSettings, ModelUnloadTimeout};
+use crate::settings::{
+    get_settings, write_settings, AccessState, AppSettings, ModelUnloadTimeout, TrialState,
+};
 use anyhow::Result;
 use log::{debug, error, info, warn};
 use serde::Serialize;
@@ -15,6 +20,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 use tauri::{AppHandle, Emitter};
+use tauri_plugin_opener::OpenerExt;
 use tokio::time::{sleep, timeout};
 use transcribe_rs::{
     engines::{
@@ -88,6 +94,17 @@ struct IncrementalSession {
     worker_handle: tauri::async_runtime::JoinHandle<()>,
 }
 
+fn normalized_silence_hallucination_text(text: &str) -> String {
+    text.chars()
+        .flat_map(|ch| ch.to_lowercase())
+        .map(|ch| if ch.is_alphanumeric() { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(test)]
 fn looks_like_network_error(error_message: &str) -> bool {
     let lower = error_message.to_ascii_lowercase();
     [
@@ -103,16 +120,6 @@ fn looks_like_network_error(error_message: &str) -> bool {
     ]
     .iter()
     .any(|needle| lower.contains(needle))
-}
-
-fn normalized_silence_hallucination_text(text: &str) -> String {
-    text.chars()
-        .flat_map(|ch| ch.to_lowercase())
-        .map(|ch| if ch.is_alphanumeric() { ch } else { ' ' })
-        .collect::<String>()
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
 }
 
 fn audio_levels(audio: &[f32]) -> Option<(f32, f32)> {
@@ -140,10 +147,7 @@ fn is_effectively_silent(levels: (f32, f32)) -> bool {
     levels.0 <= MAX_SILENT_RMS && levels.1 <= MAX_SILENT_PEAK
 }
 
-fn should_suppress_silence_hallucination(
-    levels: Option<(f32, f32)>,
-    transcription: &str,
-) -> bool {
+fn should_suppress_silence_hallucination(levels: Option<(f32, f32)>, transcription: &str) -> bool {
     const SILENCE_HALLUCINATIONS: &[&str] =
         &["thank you", "thanks for watching", "thank you for watching"];
 
@@ -266,6 +270,10 @@ fn append_stitched_text(existing: &mut String, incoming: &str) {
         existing.push(' ');
     }
     existing.push_str(&remainder);
+}
+
+pub(crate) fn stitch_transcription_text(existing: &mut String, incoming: &str) {
+    append_stitched_text(existing, incoming);
 }
 
 #[derive(Clone)]
@@ -434,19 +442,89 @@ impl TranscriptionManager {
         }
     }
 
-    fn resolve_groq_api_key(&self) -> Option<String> {
+    fn resolve_byok_groq_api_key(&self) -> Option<String> {
         let settings = get_settings(&self.app_handle);
-        if let Some(key) = settings.post_process_api_keys.get("groq") {
-            let key = key.trim();
-            if !key.is_empty() {
-                return Some(key.to_string());
+        match crate::byok_secrets::load_groq_api_key(&self.app_handle, &settings) {
+            Ok(Some(key)) => {
+                let key = key.trim();
+                if !key.is_empty() {
+                    return Some(key.to_string());
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                warn!("Failed to load Groq BYOK secret from Stronghold: {}", error);
             }
         }
 
-        std::env::var("GROQ_API_KEY")
-            .ok()
-            .map(|key| key.trim().to_string())
-            .filter(|key| !key.is_empty())
+        None
+    }
+
+    fn sync_cloud_access_state(
+        &self,
+        trial_state: TrialState,
+        access_state: AccessState,
+        entitlement_state: crate::settings::EntitlementState,
+    ) {
+        let mut settings = get_settings(&self.app_handle);
+        settings.anonymous_trial_state = trial_state;
+        settings.access_state = access_state;
+        settings.entitlement_state = entitlement_state;
+        write_settings(&self.app_handle, settings);
+    }
+
+    async fn ensure_backend_access_state(&self) -> Result<AppSettings> {
+        let settings = get_settings(&self.app_handle);
+        if settings.install_token.trim().is_empty() {
+            if let Err(error) = bootstrap_install_state(&self.app_handle).await {
+                if matches!(
+                    settings.access_state,
+                    AccessState::Trialing | AccessState::Subscribed
+                ) {
+                    warn!(
+                        "Backend bootstrap failed; continuing with cached access state for fallback eligibility: {}",
+                        error
+                    );
+                    return Ok(settings);
+                }
+
+                return Err(anyhow::anyhow!(error));
+            }
+        } else {
+            if let Err(error) = refresh_entitlement_state(&self.app_handle).await {
+                if matches!(
+                    settings.access_state,
+                    AccessState::Trialing | AccessState::Subscribed
+                ) {
+                    warn!(
+                        "Backend entitlement refresh failed; continuing with cached access state for fallback eligibility: {}",
+                        error
+                    );
+                    return Ok(settings);
+                }
+
+                return Err(anyhow::anyhow!(error));
+            }
+        }
+
+        Ok(get_settings(&self.app_handle))
+    }
+
+    async fn open_claim_flow(&self) -> Result<String> {
+        let claim = request_claim_token(&self.app_handle)
+            .await
+            .map_err(|error| anyhow::anyhow!(error))?;
+        if let Err(error) = self
+            .app_handle
+            .opener()
+            .open_url(claim.claim_url, None::<String>)
+        {
+            warn!("Failed to open claim URL: {}", error);
+        }
+
+        Err(anyhow::anyhow!(
+            "Your trial has ended. Finish sign-in and checkout in the browser to continue transcription."
+        ))
     }
 
     fn select_local_fallback_model_id(
@@ -457,6 +535,13 @@ impl TranscriptionManager {
             self.model_manager.get_available_models(),
             preferred_local_model_id,
         )
+    }
+
+    pub fn select_preferred_local_model_id(
+        &self,
+        preferred_local_model_id: Option<&str>,
+    ) -> Option<String> {
+        self.select_local_fallback_model_id(preferred_local_model_id)
     }
 
     fn transcribe_with_local_engine(
@@ -704,6 +789,211 @@ impl TranscriptionManager {
         }
     }
 
+    pub async fn transcribe_local_file_with_settings(
+        &self,
+        audio: Vec<f32>,
+        settings: &AppSettings,
+    ) -> Result<String> {
+        self.transcribe_raw_local_with_settings_async(audio, settings)
+            .await
+    }
+
+    async fn transcribe_with_direct_groq(
+        &self,
+        model_id: &str,
+        audio: Vec<f32>,
+        settings: &AppSettings,
+        allow_local_fallback_on_cloud_error: bool,
+    ) -> Result<String> {
+        let groq_model = groq_api_model_name(model_id)
+            .ok_or_else(|| anyhow::anyhow!("Unknown Groq model id: {}", model_id))?;
+        let api_key = self
+            .resolve_byok_groq_api_key()
+            .ok_or_else(|| anyhow::anyhow!("Groq API key is required for hidden BYOK mode."))?;
+
+        match groq_client::transcribe_samples_direct(
+            &api_key,
+            groq_model,
+            &audio,
+            &settings.selected_language,
+            settings.translate_to_english,
+        )
+        .await
+        {
+            Ok(text) => Ok(text),
+            Err(groq_error) => {
+                if !allow_local_fallback_on_cloud_error {
+                    return Err(anyhow::anyhow!(
+                        "Groq transcription failed during incremental chunking: {}",
+                        groq_error
+                    ));
+                }
+
+                let fallback_local_model_id = self
+                    .select_local_fallback_model_id(
+                        self.get_current_model()
+                            .filter(|id| !is_cloud_model_id(id))
+                            .or_else(|| {
+                                if settings.selected_model.is_empty() {
+                                    None
+                                } else {
+                                    Some(settings.selected_model.clone())
+                                }
+                            })
+                            .as_deref(),
+                    )
+                    .ok_or_else(|| {
+                        anyhow::anyhow!(
+                            "Groq transcription failed: {}. No downloaded local model available for fallback.",
+                            groq_error
+                        )
+                    })?;
+
+                let local_engine_loaded = {
+                    let engine_guard = self.lock_engine();
+                    engine_guard.is_some()
+                };
+                let current_model = self.get_current_model();
+                if current_model.as_deref() != Some(fallback_local_model_id.as_str())
+                    || !local_engine_loaded
+                {
+                    warn!(
+                        "Switching transcription to local fallback model '{}' after Groq failure",
+                        fallback_local_model_id
+                    );
+                    self.load_model(&fallback_local_model_id).map_err(|load_error| {
+                        anyhow::anyhow!(
+                            "Groq transcription failed: {}. Local fallback model '{}' failed to load: {}",
+                            groq_error,
+                            fallback_local_model_id,
+                            load_error
+                        )
+                    })?;
+                }
+
+                self.transcribe_raw_local_with_settings_async(audio, settings)
+                    .await
+            }
+        }
+    }
+
+    async fn transcribe_with_proxy_groq(
+        &self,
+        model_id: &str,
+        audio: Vec<f32>,
+        settings: &AppSettings,
+        allow_local_fallback_on_cloud_error: bool,
+    ) -> Result<String> {
+        let access = self.ensure_backend_access_state().await?;
+
+        if access.access_state == AccessState::Blocked
+            && access.anonymous_trial_state != TrialState::New
+        {
+            return self.open_claim_flow().await;
+        }
+
+        let groq_model = groq_api_model_name(model_id)
+            .ok_or_else(|| anyhow::anyhow!("Unknown Groq model id: {}", model_id))?;
+        let trimmed_audio = trim_proxy_upload_audio(&audio);
+
+        if trimmed_audio.is_empty() {
+            info!(
+                "Skipping proxy transcription after trimming produced no uploadable audio ({} samples)",
+                audio.len()
+            );
+            self.maybe_unload_immediately("trimmed proxy audio");
+            return Ok(String::new());
+        }
+
+        if trimmed_audio.len() != audio.len() {
+            debug!(
+                "Trimmed proxy upload audio from {} to {} samples",
+                audio.len(),
+                trimmed_audio.len()
+            );
+        }
+
+        match groq_client::transcribe_samples(
+            access.install_token.trim(),
+            groq_model,
+            &trimmed_audio,
+            &settings.selected_language,
+            settings.translate_to_english,
+        )
+        .await
+        {
+            Ok(result) => {
+                self.sync_cloud_access_state(
+                    result.trial_state,
+                    result.access_state,
+                    result.entitlement_state,
+                );
+                Ok(result.text)
+            }
+            Err(error) => {
+                if error.is_blocked() && access.anonymous_trial_state != TrialState::New {
+                    return self.open_claim_flow().await;
+                }
+
+                if error.is_retryable()
+                    && allow_local_fallback_on_cloud_error
+                    && matches!(
+                        access.access_state,
+                        AccessState::Trialing | AccessState::Subscribed
+                    )
+                {
+                    let fallback_local_model_id = self
+                        .select_local_fallback_model_id(
+                            self.get_current_model()
+                                .filter(|id| !is_cloud_model_id(id))
+                                .or_else(|| {
+                                    if settings.selected_model.is_empty() {
+                                        None
+                                    } else {
+                                        Some(settings.selected_model.clone())
+                                    }
+                                })
+                                .as_deref(),
+                        )
+                        .ok_or_else(|| {
+                            anyhow::anyhow!(
+                                "Backend transcription failed: {}. No downloaded local model available for fallback.",
+                                error.to_message()
+                            )
+                        })?;
+
+                    let local_engine_loaded = {
+                        let engine_guard = self.lock_engine();
+                        engine_guard.is_some()
+                    };
+                    let current_model = self.get_current_model();
+                    if current_model.as_deref() != Some(fallback_local_model_id.as_str())
+                        || !local_engine_loaded
+                    {
+                        warn!(
+                            "Switching transcription to local fallback model '{}' after backend proxy failure",
+                            fallback_local_model_id
+                        );
+                        self.load_model(&fallback_local_model_id).map_err(|load_error| {
+                            anyhow::anyhow!(
+                                "Backend transcription failed: {}. Local fallback model '{}' failed to load: {}",
+                                error.to_message(),
+                                fallback_local_model_id,
+                                load_error
+                            )
+                        })?;
+                    }
+
+                    return self
+                        .transcribe_raw_local_with_settings_async(audio, settings)
+                        .await;
+                }
+
+                Err(anyhow::anyhow!(error.to_message()))
+            }
+        }
+    }
+
     async fn transcribe_raw_with_settings(
         &self,
         audio: Vec<f32>,
@@ -746,95 +1036,34 @@ impl TranscriptionManager {
             .unwrap_or(false);
 
         if !is_cloud_model {
-            return self
-                .transcribe_raw_local_with_settings_async(audio, settings)
-                .await;
-        }
-
-        if is_cloud_model {
+            self.transcribe_raw_local_with_settings_async(audio, settings)
+                .await
+        } else {
             let model_id = active_model_id
                 .as_deref()
                 .ok_or_else(|| anyhow::anyhow!("No cloud model selected for transcription."))?;
-            let groq_model = groq_api_model_name(model_id)
-                .ok_or_else(|| anyhow::anyhow!("Unknown Groq model id: {}", model_id))?;
-            let api_key = self.resolve_groq_api_key().ok_or_else(|| {
-                anyhow::anyhow!("Groq API key is required. Add it in Models > Groq Cloud API key.")
-            })?;
 
-            match groq_client::transcribe_samples(
-                &api_key,
-                groq_model,
-                &audio,
-                &settings.selected_language,
-                settings.translate_to_english,
+            if let Some(_) = self.resolve_byok_groq_api_key() {
+                debug!(
+                    "Using direct Groq routing for cloud transcription because a local Groq key is present"
+                );
+                return self
+                    .transcribe_with_direct_groq(
+                        model_id,
+                        audio,
+                        settings,
+                        allow_local_fallback_on_cloud_error,
+                    )
+                    .await;
+            }
+
+            self.transcribe_with_proxy_groq(
+                model_id,
+                audio,
+                settings,
+                allow_local_fallback_on_cloud_error,
             )
             .await
-            {
-                Ok(text) => Ok(text),
-                Err(groq_error) => {
-                    if !allow_local_fallback_on_cloud_error {
-                        return Err(anyhow::anyhow!(
-                            "Groq transcription failed during incremental chunking: {}",
-                            groq_error
-                        ));
-                    }
-
-                    let likely_network_issue = looks_like_network_error(groq_error.as_str());
-                    if likely_network_issue {
-                        warn!(
-                            "Groq transcription failed with what looks like a network/offline issue: {}",
-                            groq_error
-                        );
-                    } else {
-                        warn!("Groq transcription failed: {}", groq_error);
-                    }
-
-                    let preferred_local_id = self
-                        .get_current_model()
-                        .filter(|id| !is_cloud_model_id(id))
-                        .or_else(|| {
-                            selected_model_id
-                                .clone()
-                                .filter(|id| !is_cloud_model_id(id))
-                        });
-                    let fallback_local_model_id = self
-                        .select_local_fallback_model_id(preferred_local_id.as_deref())
-                        .ok_or_else(|| {
-                            anyhow::anyhow!(
-                                "Groq transcription failed: {}. No downloaded local model available for fallback.",
-                                groq_error
-                            )
-                        })?;
-
-                    let local_engine_loaded = {
-                        let engine_guard = self.lock_engine();
-                        engine_guard.is_some()
-                    };
-                    let current_model = self.get_current_model();
-                    if current_model.as_deref() != Some(fallback_local_model_id.as_str())
-                        || !local_engine_loaded
-                    {
-                        warn!(
-                            "Switching transcription to local fallback model '{}' after Groq failure",
-                            fallback_local_model_id
-                        );
-                        self.load_model(&fallback_local_model_id).map_err(|load_error| {
-                            anyhow::anyhow!(
-                                "Groq transcription failed: {}. Local fallback model '{}' failed to load: {}",
-                                groq_error,
-                                fallback_local_model_id,
-                                load_error
-                            )
-                        })?;
-                    }
-
-                    self.transcribe_raw_local_with_settings_async(audio, settings)
-                        .await
-                }
-            }
-        } else {
-            self.transcribe_raw_local_with_settings_async(audio, settings)
-                .await
         }
     }
 
@@ -859,20 +1088,6 @@ impl TranscriptionManager {
             .ok_or_else(|| anyhow::anyhow!("Model not found: {}", model_id))?;
 
         if is_cloud_model_id(model_id) {
-            if self.resolve_groq_api_key().is_none() {
-                let error_msg = "Groq API key is required. Add it in Models > Groq Cloud API key.";
-                let _ = self.app_handle.emit(
-                    "model-state-changed",
-                    ModelStateEvent {
-                        event_type: "loading_failed".to_string(),
-                        model_id: Some(model_id.to_string()),
-                        model_name: Some(model_info.name.clone()),
-                        error: Some(error_msg.to_string()),
-                    },
-                );
-                return Err(anyhow::anyhow!(error_msg));
-            }
-
             {
                 let mut engine = self.engine.lock().unwrap();
                 *engine = None;
@@ -1080,8 +1295,7 @@ impl TranscriptionManager {
 
             let settings = get_settings(&self_clone.app_handle);
             let model_id = settings.selected_model.clone();
-            let load_result =
-                catch_unwind(AssertUnwindSafe(|| self_clone.load_model(&model_id)));
+            let load_result = catch_unwind(AssertUnwindSafe(|| self_clone.load_model(&model_id)));
 
             match load_result {
                 Ok(Ok(())) => {}
@@ -1094,10 +1308,7 @@ impl TranscriptionManager {
                     } else {
                         "unknown panic".to_string()
                     };
-                    error!(
-                        "Model loading panicked for '{}': {}",
-                        model_id, panic_msg
-                    );
+                    error!("Model loading panicked for '{}': {}", model_id, panic_msg);
                 }
             }
         });

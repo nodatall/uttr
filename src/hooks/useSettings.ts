@@ -1,10 +1,15 @@
 import { useEffect } from "react";
 import { useSettingsStore } from "../stores/settingsStore";
-import type { AppSettings as Settings, AudioDevice } from "@/bindings";
+import type {
+  AppSettings as Settings,
+  AudioDevice,
+  InstallAccessSnapshot,
+} from "@/bindings";
 
 interface UseSettingsReturn {
   // State
   settings: Settings | null;
+  installAccess: InstallAccessSnapshot | null;
   isLoading: boolean;
   isUpdating: (key: string) => boolean;
   audioDevices: AudioDevice[];
@@ -19,6 +24,7 @@ interface UseSettingsReturn {
   ) => Promise<void>;
   resetSetting: (key: keyof Settings) => Promise<void>;
   refreshSettings: () => Promise<void>;
+  refreshInstallAccess: () => Promise<void>;
   refreshAudioDevices: () => Promise<void>;
   refreshOutputDevices: () => Promise<void>;
 
@@ -40,6 +46,7 @@ interface UseSettingsReturn {
     apiKey: string,
   ) => Promise<void>;
   updatePostProcessModel: (providerId: string, model: string) => Promise<void>;
+  validateByokGroqKey: () => Promise<void>;
   fetchPostProcessModels: (providerId: string) => Promise<string[]>;
 }
 
@@ -55,6 +62,7 @@ export const useSettings = (): UseSettingsReturn => {
 
   return {
     settings: store.settings,
+    installAccess: store.installAccess,
     isLoading: store.isLoading,
     isUpdating: store.isUpdatingKey,
     audioDevices: store.audioDevices,
@@ -64,6 +72,7 @@ export const useSettings = (): UseSettingsReturn => {
     updateSetting: store.updateSetting,
     resetSetting: store.resetSetting,
     refreshSettings: store.refreshSettings,
+    refreshInstallAccess: store.refreshInstallAccess,
     refreshAudioDevices: store.refreshAudioDevices,
     refreshOutputDevices: store.refreshOutputDevices,
     updateBinding: store.updateBinding,
@@ -73,6 +82,7 @@ export const useSettings = (): UseSettingsReturn => {
     updatePostProcessBaseUrl: store.updatePostProcessBaseUrl,
     updatePostProcessApiKey: store.updatePostProcessApiKey,
     updatePostProcessModel: store.updatePostProcessModel,
+    validateByokGroqKey: store.validateByokGroqKey,
     fetchPostProcessModels: store.fetchPostProcessModels,
   };
 };

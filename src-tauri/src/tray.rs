@@ -84,7 +84,9 @@ pub fn update_tray_menu(app: &AppHandle, state: &TrayIconState, locale: Option<&
 
     let locale = locale.unwrap_or(&settings.app_language);
     let strings = get_tray_translations(Some(locale.to_string()));
-    let settings_label = strings.settings.trim_matches(|c: char| c == '.' || c == '…' || c.is_whitespace());
+    let settings_label = strings
+        .settings
+        .trim_matches(|c: char| c == '.' || c == '…' || c.is_whitespace());
 
     // Platform-specific accelerators
     #[cfg(target_os = "macos")]
@@ -100,14 +102,8 @@ pub fn update_tray_menu(app: &AppHandle, state: &TrayIconState, locale: Option<&
     };
     let version_i = MenuItem::with_id(app, "version", &version_label, false, None::<&str>)
         .expect("failed to create version item");
-    let settings_i = MenuItem::with_id(
-        app,
-        "settings",
-        settings_label,
-        true,
-        settings_accelerator,
-    )
-    .expect("failed to create settings item");
+    let settings_i = MenuItem::with_id(app, "settings", settings_label, true, settings_accelerator)
+        .expect("failed to create settings item");
     let check_updates_i = MenuItem::with_id(
         app,
         "check_updates",

@@ -1,8 +1,10 @@
+mod access;
 mod actions;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod apple_intelligence;
 mod audio_feedback;
 pub mod audio_toolkit;
+mod byok_secrets;
 mod clipboard;
 mod commands;
 mod groq_client;
@@ -304,6 +306,12 @@ pub fn run() {
         commands::open_recordings_folder,
         commands::open_log_dir,
         commands::open_app_data_dir,
+        commands::change_byok_enabled_setting,
+        commands::validate_byok_groq_key,
+        commands::access::bootstrap_install_access,
+        commands::access::refresh_install_entitlement,
+        commands::access::create_trial_claim,
+        commands::access::get_install_access_snapshot,
         commands::check_apple_intelligence_available,
         commands::initialize_enigo,
         commands::initialize_shortcuts,
@@ -334,6 +342,8 @@ pub fn run() {
         commands::transcription::set_model_unload_timeout,
         commands::transcription::get_model_load_status,
         commands::transcription::unload_model_manually,
+        commands::transcription::clear_file_transcription_history,
+        commands::transcription::transcribe_audio_file,
         commands::history::get_history_entries,
         commands::history::toggle_history_entry_saved,
         commands::history::get_audio_file_path,
@@ -400,12 +410,22 @@ pub fn run() {
             Some(vec![]),
         ))
         .setup(move |app| {
-            let settings = get_settings(&app.handle());
+            let app_handle = app.handle().clone();
+            let stronghold_salt_path = app_handle
+                .path()
+                .app_data_dir()
+                .expect("Failed to resolve app data directory")
+                .join("stronghold_salt.txt");
+            app.handle()
+                .plugin(
+                    tauri_plugin_stronghold::Builder::with_argon2(&stronghold_salt_path).build(),
+                )
+                .expect("Failed to initialize Stronghold plugin");
+            let settings = get_settings(&app_handle);
             let tauri_log_level: tauri_plugin_log::LogLevel = settings.log_level.into();
             let file_log_level: log::Level = tauri_log_level.into();
             // Store the file log level in the atomic for the filter to use
             FILE_LOG_LEVEL.store(file_log_level.to_level_filter() as u8, Ordering::Relaxed);
-            let app_handle = app.handle().clone();
             app.manage(TranscriptionCoordinator::new(app_handle.clone()));
 
             initialize_core_logic(&app_handle);
