@@ -384,14 +384,13 @@ where
         } else {
             None
         };
-        self.cleanup_last_session();
-
         let transcription_samples = mix_session_audio(
             microphone_samples,
             bridge_result
                 .as_mut()
                 .and_then(|result| result.pcm.take_samples()),
         );
+        self.cleanup_last_session();
 
         let mut state = self.state.lock().unwrap();
         *state = FullSystemSessionState::Idle;
