@@ -26,6 +26,7 @@ use tauri_specta::{collect_commands, Builder};
 
 use env_filter::Builder as EnvFilterBuilder;
 use managers::audio::AudioRecordingManager;
+use managers::full_system_audio::FullSystemAudioSessionManager;
 use managers::history::HistoryManager;
 use managers::model::ModelManager;
 use managers::transcription::TranscriptionManager;
@@ -115,6 +116,9 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     let recording_manager = Arc::new(
         AudioRecordingManager::new(app_handle).expect("Failed to initialize recording manager"),
     );
+    let full_system_audio_manager = Arc::new(FullSystemAudioSessionManager::new(
+        recording_manager.clone(),
+    ));
     let model_manager =
         Arc::new(ModelManager::new(app_handle).expect("Failed to initialize model manager"));
     let transcription_manager = Arc::new(
@@ -126,6 +130,7 @@ fn initialize_core_logic(app_handle: &AppHandle) {
 
     // Add managers to Tauri's managed state
     app_handle.manage(recording_manager.clone());
+    app_handle.manage(full_system_audio_manager.clone());
     app_handle.manage(model_manager.clone());
     app_handle.manage(transcription_manager.clone());
     app_handle.manage(history_manager.clone());

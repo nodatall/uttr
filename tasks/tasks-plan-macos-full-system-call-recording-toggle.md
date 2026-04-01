@@ -81,7 +81,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 - [ ] 3.0 Build the mixed full-system capture session controller
   - covers_prd: `FR-009`, `FR-010`, `FR-011`
   - covers_tdd: `TDR-004`, `TDR-007`, `TDR-008`
-  - [ ] 3.1 Add a Rust-side full-system session manager that starts and stops system audio plus microphone capture together
+  - [x] 3.1 Add a Rust-side full-system session manager that starts and stops system audio plus microphone capture together
     - covers_prd: `FR-009`, `FR-011`
     - covers_tdd: `TDR-004`, `TDR-007`
     - output: `src-tauri/src/managers/full_system_audio.rs`, `src-tauri/src/lib.rs`
