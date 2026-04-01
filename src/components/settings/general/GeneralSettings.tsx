@@ -2,6 +2,7 @@ import React from "react";
 import { useTranslation } from "react-i18next";
 import { MicrophoneSelector } from "../MicrophoneSelector";
 import { ShortcutInput } from "../ShortcutInput";
+import { RecordFullSystemAudio } from "../RecordFullSystemAudio";
 import { SettingsGroup } from "../../ui/SettingsGroup";
 import { PushToTalk } from "../PushToTalk";
 import { MuteWhileRecording } from "../MuteWhileRecording";
@@ -23,12 +24,19 @@ export const GeneralSettings: React.FC = () => {
   const { t } = useTranslation();
   const { getSetting } = useSettings();
   const postProcessEnabled = getSetting("post_process_enabled") || false;
+  const recordFullSystemAudio = getSetting("record_full_system_audio") || false;
   const showModelOnboardingButton = import.meta.env.DEV;
 
   return (
     <div className="max-w-3xl w-full mx-auto space-y-6">
       <SettingsGroup title={t("settings.general.title")}>
         <ShortcutInput shortcutId="transcribe" grouped={true} />
+        {recordFullSystemAudio && (
+          <ShortcutInput
+            shortcutId="transcribe_full_system_audio"
+            grouped={true}
+          />
+        )}
         <PushToTalk descriptionMode="tooltip" grouped={true} />
         <AutostartToggle descriptionMode="tooltip" grouped={true} />
         <ShowTrayIcon descriptionMode="tooltip" grouped={true} />
@@ -54,11 +62,15 @@ export const GeneralSettings: React.FC = () => {
       </SettingsGroup>
       <SettingsGroup title={t("settings.sound.title")}>
         <MicrophoneSelector descriptionMode="tooltip" grouped={true} />
+        <RecordFullSystemAudio descriptionMode="tooltip" grouped={true} />
         <MuteWhileRecording descriptionMode="tooltip" grouped={true} />
       </SettingsGroup>
       <SettingsGroup title={t("settings.advanced.groups.transcription")}>
         <TypingToolSetting descriptionMode="tooltip" grouped={true} />
-        <ShortcutInput shortcutId="transcribe_with_post_process" grouped={true} />
+        <ShortcutInput
+          shortcutId="transcribe_with_post_process"
+          grouped={true}
+        />
         <PostProcessingToggle descriptionMode="tooltip" grouped={true} />
         {postProcessEnabled && <PostProcessingSettingsApi />}
         {postProcessEnabled && <PostProcessingSettingsAdvanced />}

@@ -40,7 +40,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 
 ## Tasks
 
-- [ ] 1.0 Add the settings, binding, and readiness surfaces for full-system recording
+- [x] 1.0 Add the settings, binding, and readiness surfaces for full-system recording
   - covers_prd: `FR-001`, `FR-002`, `FR-003`, `FR-004`, `FR-005`, `FR-006`, `FR-012`
   - covers_tdd: `TDR-001`, `TDR-002`, `TDR-009`
   - [x] 1.1 Extend Rust settings defaults and binding metadata for `record_full_system_audio` and `transcribe_full_system_audio`
@@ -55,7 +55,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - output: `src-tauri/src/commands/audio.rs`, `src-tauri/src/lib.rs`, `src/bindings.ts`
     - verify: `cargo test --manifest-path src-tauri/Cargo.toml`
     - done_when: The backend exposes commands that can report support/readiness and can attempt to enable the feature without blindly persisting `true` when permission is missing.
-  - [ ] 1.3 Update frontend settings state and Sound settings UI to use the readiness-aware toggle
+  - [x] 1.3 Update frontend settings state and Sound settings UI to use the readiness-aware toggle
     - covers_prd: `FR-003`, `FR-004`, `FR-005`, `FR-006`, `FR-012`
     - covers_tdd: `TDR-001`, `TDR-002`, `TDR-009`
     - output: `src/stores/settingsStore.ts`, `src/components/settings/general/GeneralSettings.tsx`, `src/components/settings/RecordFullSystemAudio.tsx`, `src/components/settings/ShortcutInput.tsx`, `src/i18n/locales/en/translation.json`
