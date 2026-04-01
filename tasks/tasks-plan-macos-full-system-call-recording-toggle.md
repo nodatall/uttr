@@ -135,7 +135,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 - [ ] 6.0 Add verification for the new path and for microphone-only regressions
   - covers_prd: `FR-001`, `FR-004`, `FR-005`, `FR-007`, `FR-008`, `FR-009`, `FR-010`, `FR-011`
   - covers_tdd: `TDR-010`
-  - [ ] 6.1 Add focused backend/unit coverage for readiness logic, binding semantics, and mixed-session lifecycle
+  - [x] 6.1 Add focused backend/unit coverage for readiness logic, binding semantics, and mixed-session lifecycle
     - covers_prd: `FR-004`, `FR-005`, `FR-007`, `FR-009`, `FR-010`, `FR-011`
     - covers_tdd: `TDR-010`
     - output: `src-tauri/src/transcription_coordinator.rs`, `src-tauri/src/managers/full_system_audio.rs`, `src-tauri/src/commands/audio.rs`

@@ -101,8 +101,7 @@ fn support_status_from_environment(
         FullSystemAudioSupportStatus {
             supported: false,
             reason: Some(
-                "Full-system audio recording is unavailable in this build of Uttr."
-                    .to_string(),
+                "Full-system audio recording is unavailable in this build of Uttr.".to_string(),
             ),
         }
     }
@@ -460,8 +459,7 @@ mod tests {
 
     #[test]
     fn non_macos_platform_is_reported_as_unsupported() {
-        let support =
-            support_status_from_environment(&Version::Semantic(14, 0, 0), false, false);
+        let support = support_status_from_environment(&Version::Semantic(14, 0, 0), false, false);
 
         assert!(!support.supported);
         assert!(support
@@ -552,6 +550,26 @@ mod tests {
 
         assert!(toggle.requested_enabled);
         assert!(toggle.stored_enabled);
+        assert!(toggle.error.is_none());
+    }
+
+    #[test]
+    fn toggle_result_always_keeps_disabled_state_when_requested() {
+        let support = FullSystemAudioSupportStatus {
+            supported: true,
+            reason: None,
+        };
+        let readiness = FullSystemAudioReadinessStatus {
+            supported: true,
+            ready: false,
+            screen_recording_permission_granted: Some(false),
+            reason: Some("Screen Recording access is required.".into()),
+        };
+
+        let toggle = toggle_result_from_readiness(false, support, readiness);
+
+        assert!(!toggle.requested_enabled);
+        assert!(!toggle.stored_enabled);
         assert!(toggle.error.is_none());
     }
 
