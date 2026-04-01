@@ -65,7 +65,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 - [ ] 2.0 Add the macOS ScreenCaptureKit bridge and permission helpers
   - covers_prd: `FR-001`, `FR-004`, `FR-005`, `FR-009`, `FR-012`
   - covers_tdd: `TDR-002`, `TDR-003`, `TDR-009`
-  - [ ] 2.1 Compile a dedicated full-system audio Swift bridge from `build.rs`
+  - [x] 2.1 Compile a dedicated full-system audio Swift bridge from `build.rs`
     - covers_prd: `FR-009`
     - covers_tdd: `TDR-003`
     - output: `src-tauri/build.rs`, `src-tauri/swift/full_system_audio.swift`, `src-tauri/swift/full_system_audio_stub.swift`, `src-tauri/swift/full_system_audio_bridge.h`, `src-tauri/src/full_system_audio_bridge.rs`
