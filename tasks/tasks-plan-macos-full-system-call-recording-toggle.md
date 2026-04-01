@@ -49,7 +49,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - output: `src-tauri/src/settings.rs`
     - verify: `cargo test --manifest-path src-tauri/Cargo.toml settings`
     - done_when: `AppSettings` defaults include the new boolean setting and the bindings map auto-populates `transcribe_full_system_audio` with the planned macOS default without changing existing shortcut defaults.
-  - [ ] 1.2 Add backend command contracts for support, readiness, and explicit enable/disable flow
+  - [x] 1.2 Add backend command contracts for support, readiness, and explicit enable/disable flow
     - covers_prd: `FR-001`, `FR-004`, `FR-005`
     - covers_tdd: `TDR-002`
     - output: `src-tauri/src/commands/audio.rs`, `src-tauri/src/lib.rs`, `src/bindings.ts`
