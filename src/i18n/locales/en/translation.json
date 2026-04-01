@@ -263,8 +263,8 @@
         "loading": "Checking support and Screen Recording readiness...",
         "statusCheckFailed": "Uttr could not check full-system audio support right now.",
         "unsupportedDescription": "This feature is available only on macOS 13 or later.",
-        "permissionRequired": "Screen Recording access is required before this can be enabled.",
-        "pendingDescription": "{{reason}} Uttr will retry automatically when this window regains focus."
+        "permissionRequired": "Screen Recording access is required before this can be enabled. Microphone access alone is not enough.",
+        "pendingDescription": "{{reason}} Microphone access is handled separately. Uttr will retry automatically when this window regains focus."
       },
       "audioFeedback": {
         "label": "Audio Feedback",
