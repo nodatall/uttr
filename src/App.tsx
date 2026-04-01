@@ -221,7 +221,12 @@ function App() {
   }
 
   if (onboardingStep === "accessibility") {
-    return <AccessibilityOnboarding onComplete={handleAccessibilityComplete} />;
+    return (
+      <AccessibilityOnboarding
+        onComplete={handleAccessibilityComplete}
+        showScreenRecordingGuidance={platform() === "macos"}
+      />
+    );
   }
 
   if (onboardingStep === "model") {

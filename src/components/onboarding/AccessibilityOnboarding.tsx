@@ -11,10 +11,11 @@ import { toast } from "sonner";
 import { commands } from "@/bindings";
 import WindowDragRegion from "@/components/ui/WindowDragRegion";
 import { useSettingsStore } from "@/stores/settingsStore";
-import { Keyboard, Mic, Check, Loader2 } from "lucide-react";
+import { Check, Info, Keyboard, Loader2, Mic } from "lucide-react";
 
 interface AccessibilityOnboardingProps {
   onComplete: () => void;
+  showScreenRecordingGuidance?: boolean;
 }
 
 type PermissionStatus = "checking" | "needed" | "waiting" | "granted";
@@ -25,6 +26,7 @@ interface PermissionsState {
 }
 
 const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
+  showScreenRecordingGuidance = true,
   onComplete,
 }) => {
   const { t } = useTranslation();
@@ -289,6 +291,29 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
               </div>
             </div>
           </div>
+
+          {showScreenRecordingGuidance && (
+            <div className="w-full p-4 rounded-lg border border-logo-primary/20 bg-[linear-gradient(180deg,rgba(19,28,43,0.72),rgba(10,16,27,0.54))]">
+              <div className="flex items-start gap-4">
+                <div className="p-3 rounded-full bg-logo-primary/20 shrink-0">
+                  <Info className="w-6 h-6 text-logo-primary" />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h3 className="font-medium text-text">
+                    {t("onboarding.permissions.screenRecording.title", {
+                      defaultValue: "Screen Recording access",
+                    })}
+                  </h3>
+                  <p className="text-sm text-text/60 mt-1 leading-5">
+                    {t("onboarding.permissions.screenRecording.description", {
+                      defaultValue:
+                        "This is only needed if you enable full-system recording later. Microphone-only transcription still works with the permissions above.",
+                    })}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Accessibility Permission Card */}
           <div className="w-full p-4 rounded-lg bg-white/5 border border-mid-gray/20">

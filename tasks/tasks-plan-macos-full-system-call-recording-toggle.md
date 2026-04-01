@@ -116,7 +116,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - verify: `cargo test --manifest-path src-tauri/Cargo.toml`
     - done_when: Cancel stops both capture sources, clears bridge/session state, and returns the app to idle without leaving tray, overlay, or coordinator state stuck.
 
-- [ ] 5.0 Update copy and permission UX to match the new behavior
+- [x] 5.0 Update copy and permission UX to match the new behavior
   - covers_prd: `FR-001`, `FR-003`, `FR-004`, `FR-005`, `FR-012`
   - covers_tdd: `TDR-002`, `TDR-009`
   - [x] 5.1 Add localization and settings copy for the new toggle, shortcut, support gating, and blocked states
@@ -125,7 +125,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - output: `src/i18n/locales/en/translation.json`, `src/i18n/locales/**/translation.json`
     - verify: `npm test`
     - done_when: The UI has clear strings for the new setting, dedicated shortcut, unsupported-system state, and Screen Recording guidance that distinguish it from microphone access.
-  - [ ] 5.2 Update onboarding or permission surfaces to explain microphone versus Screen Recording access
+  - [x] 5.2 Update onboarding or permission surfaces to explain microphone versus Screen Recording access
     - covers_prd: `FR-004`, `FR-005`, `FR-012`
     - covers_tdd: `TDR-002`, `TDR-009`
     - output: `src/components/onboarding/AccessibilityOnboarding.tsx`, `src/App.tsx`
