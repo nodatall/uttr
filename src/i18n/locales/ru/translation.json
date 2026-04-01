@@ -182,6 +182,10 @@
           "transcribe_with_post_process": {
             "name": "Горячая клавиша постобработки",
             "description": "Необязательно: Специальная горячая клавиша, которая всегда применяет AI-постобработку к вашей транскрипции."
+          },
+          "transcribe_full_system_audio": {
+            "name": "Full-System Recording Shortcut",
+            "description": "A dedicated toggle shortcut that starts and stops system audio plus microphone capture."
           }
         },
         "errors": {
@@ -224,6 +228,15 @@
       "volume": {
         "title": "Объем",
         "description": "Отрегулируйте громкость звуков звуковой обратной связи"
+      },
+      "fullSystemAudio": {
+        "title": "Record full system audio",
+        "description": "Capture system audio and microphone together for calls and meetings.",
+        "loading": "Checking support and Screen Recording readiness...",
+        "statusCheckFailed": "Uttr could not check full-system audio support right now.",
+        "unsupportedDescription": "This feature is available only on macOS 13 or later.",
+        "permissionRequired": "Screen Recording access is required before this can be enabled. Microphone access alone is not enough.",
+        "pendingDescription": "{{reason}} Microphone access is handled separately. Uttr will retry automatically when this window regains focus."
       }
     },
     "advanced": {

@@ -119,7 +119,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 - [ ] 5.0 Update copy and permission UX to match the new behavior
   - covers_prd: `FR-001`, `FR-003`, `FR-004`, `FR-005`, `FR-012`
   - covers_tdd: `TDR-002`, `TDR-009`
-  - [ ] 5.1 Add localization and settings copy for the new toggle, shortcut, support gating, and blocked states
+  - [x] 5.1 Add localization and settings copy for the new toggle, shortcut, support gating, and blocked states
     - covers_prd: `FR-003`, `FR-004`, `FR-012`
     - covers_tdd: `TDR-009`
     - output: `src/i18n/locales/en/translation.json`, `src/i18n/locales/**/translation.json`
