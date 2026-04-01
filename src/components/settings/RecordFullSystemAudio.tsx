@@ -13,6 +13,22 @@ interface RecordFullSystemAudioProps {
   grouped?: boolean;
 }
 
+type BrowserE2ETestState = {
+  fullSystemAudio?: {
+    supportStatus?: FullSystemAudioSupportStatus | null;
+    readinessStatus?: FullSystemAudioReadinessStatus | null;
+  };
+};
+
+declare global {
+  interface Window {
+    __UTTR_E2E__?: BrowserE2ETestState;
+  }
+}
+
+const getBrowserE2ETestState = () =>
+  typeof window !== "undefined" ? window.__UTTR_E2E__ : undefined;
+
 export const RecordFullSystemAudio: React.FC<RecordFullSystemAudioProps> =
   React.memo(({ descriptionMode = "tooltip", grouped = false }) => {
     const { t } = useTranslation();
@@ -29,6 +45,16 @@ export const RecordFullSystemAudio: React.FC<RecordFullSystemAudioProps> =
       getSetting("record_full_system_audio") || false;
 
     const refreshStatus = useCallback(async () => {
+      const testState = getBrowserE2ETestState();
+      if (testState?.fullSystemAudio) {
+        const support = testState.fullSystemAudio.supportStatus ?? null;
+        const readiness = testState.fullSystemAudio.readinessStatus ?? null;
+        setSupportStatus(support);
+        setReadinessStatus(readiness);
+        setStatusLoaded(true);
+        return { support, readiness };
+      }
+
       try {
         const [support, readiness] = await Promise.all([
           commands.getFullSystemAudioSupportStatus(),
@@ -170,6 +196,8 @@ export const RecordFullSystemAudio: React.FC<RecordFullSystemAudioProps> =
           >
             <input
               type="checkbox"
+              aria-label={t("settings.sound.fullSystemAudio.title")}
+              data-testid="record-full-system-audio-toggle"
               value=""
               className="sr-only peer"
               checked={recordFullSystemAudio}

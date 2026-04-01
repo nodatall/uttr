@@ -62,7 +62,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - verify: `npm test`
     - done_when: Supported macOS users can see the toggle in Sound settings, unsupported users get truthful disabled or hidden behavior, and the full-system shortcut UI appears only when the feature is enabled.
 
-- [ ] 2.0 Add the macOS ScreenCaptureKit bridge and permission helpers
+- [x] 2.0 Add the macOS ScreenCaptureKit bridge and permission helpers
   - covers_prd: `FR-001`, `FR-004`, `FR-005`, `FR-009`, `FR-012`
   - covers_tdd: `TDR-002`, `TDR-003`, `TDR-009`
   - [x] 2.1 Compile a dedicated full-system audio Swift bridge from `build.rs`
@@ -132,7 +132,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - verify: `npm test`
     - done_when: Users can understand why microphone-only recording may work while full-system recording remains blocked on Screen Recording access.
 
-- [ ] 6.0 Add verification for the new path and for microphone-only regressions
+- [x] 6.0 Add verification for the new path and for microphone-only regressions
   - covers_prd: `FR-001`, `FR-004`, `FR-005`, `FR-007`, `FR-008`, `FR-009`, `FR-010`, `FR-011`
   - covers_tdd: `TDR-010`
   - [x] 6.1 Add focused backend/unit coverage for readiness logic, binding semantics, and mixed-session lifecycle
@@ -141,7 +141,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - output: `src-tauri/src/transcription_coordinator.rs`, `src-tauri/src/managers/full_system_audio.rs`, `src-tauri/src/commands/audio.rs`
     - verify: `cargo test --manifest-path src-tauri/Cargo.toml`
     - done_when: Tests exercise enable/disable readiness flow, forced toggle behavior for the new binding, cancel cleanup, degraded-source handling, and transcription handoff.
-  - [ ] 6.2 Add frontend or end-to-end coverage for settings gating and unchanged ordinary transcription behavior
+  - [x] 6.2 Add frontend or end-to-end coverage for settings gating and unchanged ordinary transcription behavior
     - covers_prd: `FR-001`, `FR-003`, `FR-008`, `FR-012`
     - covers_tdd: `TDR-010`
     - output: `tests/e2e/full-system-audio.spec.ts`, `src/components/settings/RecordFullSystemAudio.tsx`, `src/stores/settingsStore.ts`
