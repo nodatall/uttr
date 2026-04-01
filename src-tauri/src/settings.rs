@@ -383,6 +383,8 @@ pub struct AppSettings {
     pub bindings: HashMap<String, ShortcutBinding>,
     pub push_to_talk: bool,
     pub audio_feedback: bool,
+    #[serde(default = "default_record_full_system_audio")]
+    pub record_full_system_audio: bool,
     #[serde(default = "default_audio_feedback_volume")]
     pub audio_feedback_volume: f32,
     #[serde(default = "default_sound_theme")]
@@ -523,6 +525,10 @@ fn default_byok_validation_state() -> ByokValidationState {
 }
 
 fn default_always_on_microphone() -> bool {
+    false
+}
+
+fn default_record_full_system_audio() -> bool {
     false
 }
 
@@ -888,6 +894,26 @@ pub fn get_default_settings() -> AppSettings {
             current_binding: default_post_process_shortcut.to_string(),
         },
     );
+    #[cfg(target_os = "windows")]
+    let default_full_system_shortcut = "ctrl+alt+space";
+    #[cfg(target_os = "macos")]
+    let default_full_system_shortcut = "option+ctrl+space";
+    #[cfg(target_os = "linux")]
+    let default_full_system_shortcut = "ctrl+alt+space";
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    let default_full_system_shortcut = "ctrl+alt+space";
+
+    bindings.insert(
+        "transcribe_full_system_audio".to_string(),
+        ShortcutBinding {
+            id: "transcribe_full_system_audio".to_string(),
+            name: "Transcribe Full System Audio".to_string(),
+            description: "Converts your full-system and microphone audio into text."
+                .to_string(),
+            default_binding: default_full_system_shortcut.to_string(),
+            current_binding: default_full_system_shortcut.to_string(),
+        },
+    );
     bindings.insert(
         "cancel".to_string(),
         ShortcutBinding {
@@ -918,6 +944,7 @@ pub fn get_default_settings() -> AppSettings {
         byok_enabled: false,
         byok_validation_state: default_byok_validation_state(),
         always_on_microphone: false,
+        record_full_system_audio: default_record_full_system_audio(),
         selected_microphone: None,
         clamshell_microphone: None,
         selected_output_device: None,
@@ -1223,6 +1250,31 @@ mod tests {
         assert_eq!(settings.entitlement_state, EntitlementState::Inactive);
         assert!(!settings.byok_enabled);
         assert_eq!(settings.byok_validation_state, ByokValidationState::Unknown);
+    }
+
+    #[test]
+    fn default_full_system_audio_setting_is_disabled() {
+        let settings = get_default_settings();
+        assert!(!settings.record_full_system_audio);
+    }
+
+    #[test]
+    fn default_full_system_audio_binding_is_registered() {
+        let settings = get_default_settings();
+        let binding = settings
+            .bindings
+            .get("transcribe_full_system_audio")
+            .expect("missing full-system audio binding");
+
+        assert_eq!(binding.id, "transcribe_full_system_audio");
+
+        #[cfg(target_os = "macos")]
+        assert_eq!(binding.default_binding, "option+ctrl+space");
+
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(binding.default_binding, "ctrl+alt+space");
+
+        assert_eq!(binding.current_binding, binding.default_binding);
     }
 
     #[test]
