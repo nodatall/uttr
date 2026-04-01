@@ -1,0 +1,67 @@
+import Foundation
+
+private func makeStartResult(
+    started: Int32,
+    permissionState: Int32
+) -> UttrFullSystemAudioStartResult {
+    return UttrFullSystemAudioStartResult(
+        started: started,
+        permission_state: permissionState
+    )
+}
+
+private func makeStopResult(
+    stopped: Int32,
+    sampleRate: Int32,
+    channelCount: Int32,
+    frameCount: Int64
+) -> UttrFullSystemAudioStopResult {
+    return UttrFullSystemAudioStopResult(
+        stopped: stopped,
+        sample_rate: sampleRate,
+        channel_count: channelCount,
+        frame_count: frameCount
+    )
+}
+
+@_cdecl("uttr_full_system_audio_is_supported")
+public func uttrFullSystemAudioIsSupported() -> Int32 {
+    return 0
+}
+
+@_cdecl("uttr_full_system_audio_preflight_permission")
+public func uttrFullSystemAudioPreflightPermission() -> UttrFullSystemAudioPermissionState {
+    return Int32(UTTR_FULL_SYSTEM_AUDIO_PERMISSION_UNSUPPORTED)
+}
+
+@_cdecl("uttr_full_system_audio_request_permission")
+public func uttrFullSystemAudioRequestPermission() -> UttrFullSystemAudioPermissionState {
+    return Int32(UTTR_FULL_SYSTEM_AUDIO_PERMISSION_UNSUPPORTED)
+}
+
+@_cdecl("uttr_full_system_audio_start_capture")
+public func uttrFullSystemAudioStartCapture(
+    _ config: UnsafePointer<UttrFullSystemAudioCaptureConfig>?
+) -> UttrFullSystemAudioStartResult {
+    _ = config
+    return makeStartResult(
+        started: 0,
+        permissionState: Int32(UTTR_FULL_SYSTEM_AUDIO_PERMISSION_UNSUPPORTED)
+    )
+}
+
+@_cdecl("uttr_full_system_audio_stop_capture")
+public func uttrFullSystemAudioStopCapture() -> UttrFullSystemAudioStopResult {
+    return makeStopResult(
+        stopped: 0,
+        sampleRate: 0,
+        channelCount: 0,
+        frameCount: 0
+    )
+}
+
+@_cdecl("uttr_full_system_audio_cancel_capture")
+public func uttrFullSystemAudioCancelCapture() {}
+
+@_cdecl("uttr_full_system_audio_cleanup_last_session")
+public func uttrFullSystemAudioCleanupLastSession() {}
