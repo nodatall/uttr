@@ -43,7 +43,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 - [ ] 1.0 Add the settings, binding, and readiness surfaces for full-system recording
   - covers_prd: `FR-001`, `FR-002`, `FR-003`, `FR-004`, `FR-005`, `FR-006`, `FR-012`
   - covers_tdd: `TDR-001`, `TDR-002`, `TDR-009`
-  - [ ] 1.1 Extend Rust settings defaults and binding metadata for `record_full_system_audio` and `transcribe_full_system_audio`
+  - [x] 1.1 Extend Rust settings defaults and binding metadata for `record_full_system_audio` and `transcribe_full_system_audio`
     - covers_prd: `FR-002`, `FR-006`
     - covers_tdd: `TDR-001`
     - output: `src-tauri/src/settings.rs`
