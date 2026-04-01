@@ -78,7 +78,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - verify: `cargo test --manifest-path src-tauri/Cargo.toml`
     - done_when: Rust can query support, preflight permission state, trigger the permission flow, and distinguish Screen Recording access from microphone access in user-facing copy and privacy strings.
 
-- [ ] 3.0 Build the mixed full-system capture session controller
+- [x] 3.0 Build the mixed full-system capture session controller
   - covers_prd: `FR-009`, `FR-010`, `FR-011`
   - covers_tdd: `TDR-004`, `TDR-007`, `TDR-008`
   - [x] 3.1 Add a Rust-side full-system session manager that starts and stops system audio plus microphone capture together
@@ -87,7 +87,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - output: `src-tauri/src/managers/full_system_audio.rs`, `src-tauri/src/lib.rs`
     - verify: `cargo test --manifest-path src-tauri/Cargo.toml`
     - done_when: The app can create a full-system session, start both capture sources, tolerate one source failing after start, and stop the session without altering the current microphone-only manager behavior.
-  - [ ] 3.2 Resample, normalize, and mix microphone plus system-audio PCM into the existing transcription input format
+  - [x] 3.2 Resample, normalize, and mix microphone plus system-audio PCM into the existing transcription input format
     - covers_prd: `FR-009`, `FR-011`
     - covers_tdd: `TDR-004`, `TDR-007`, `TDR-008`
     - output: `src-tauri/src/managers/full_system_audio.rs`, `src-tauri/src/audio_toolkit/audio/recorder.rs`, `src-tauri/src/managers/transcription.rs`
