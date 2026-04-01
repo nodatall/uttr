@@ -1,7 +1,8 @@
 use crate::managers::audio::AudioRecordingManager;
+use crate::managers::full_system_audio::FullSystemAudioSessionManager;
 use crate::managers::transcription::TranscriptionManager;
 use crate::shortcut;
-use crate::TranscriptionCoordinator;
+use crate::transcription_coordinator::{transcription_session_is_active, TranscriptionCoordinator};
 use log::info;
 use std::sync::Arc;
 use tauri::{AppHandle, Manager};
@@ -20,10 +21,22 @@ pub fn cancel_current_operation(app: &AppHandle) {
     // Unregister the cancel shortcut asynchronously
     shortcut::unregister_cancel_shortcut(app);
 
-    // Cancel any ongoing recording
+    let full_system_audio_manager = app.try_state::<Arc<FullSystemAudioSessionManager>>();
+    let full_system_was_active = full_system_audio_manager
+        .as_ref()
+        .is_some_and(|manager| manager.is_active());
+
     let audio_manager = app.state::<Arc<AudioRecordingManager>>();
-    let recording_was_active = audio_manager.is_recording();
-    audio_manager.cancel_recording();
+    let recording_was_active =
+        transcription_session_is_active(audio_manager.is_recording(), full_system_was_active);
+
+    if full_system_was_active {
+        if let Some(manager) = full_system_audio_manager {
+            manager.cancel_session();
+        }
+    } else {
+        audio_manager.cancel_recording();
+    }
 
     // Update tray icon and hide overlay
     change_tray_icon(app, crate::tray::TrayIconState::Idle);
