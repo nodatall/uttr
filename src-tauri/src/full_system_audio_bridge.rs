@@ -1,4 +1,6 @@
+use std::ffi::c_void;
 use std::os::raw::c_int;
+use std::{mem, ptr, slice};
 
 #[repr(i32)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,12 +52,110 @@ pub struct FullSystemAudioStartResult {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct FullSystemAudioPcmBuffer {
+    pub samples: *mut f32,
+    pub sample_count: usize,
+    pub sample_rate: i32,
+    pub channel_count: i32,
+}
+
+unsafe impl Send for FullSystemAudioPcmBuffer {}
+unsafe impl Sync for FullSystemAudioPcmBuffer {}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FullSystemAudioCapturedPcm {
+    pub samples: Vec<f32>,
+    pub sample_rate: u32,
+    pub channel_count: usize,
+}
+
+#[repr(C)]
+#[derive(Debug, Default, PartialEq, Eq)]
 pub struct FullSystemAudioStopResult {
     pub stopped: c_int,
     pub sample_rate: i32,
     pub channel_count: i32,
     pub frame_count: i64,
+    pub pcm: FullSystemAudioPcmBuffer,
+}
+
+unsafe impl Send for FullSystemAudioStopResult {}
+unsafe impl Sync for FullSystemAudioStopResult {}
+
+impl FullSystemAudioPcmBuffer {
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    pub fn from_samples(samples: &[f32], sample_rate: i32, channel_count: i32) -> Self {
+        if samples.is_empty() {
+            return Self {
+                samples: ptr::null_mut(),
+                sample_count: 0,
+                sample_rate,
+                channel_count,
+            };
+        }
+
+        unsafe {
+            let byte_len = samples.len() * mem::size_of::<f32>();
+            let raw_ptr = malloc(byte_len) as *mut f32;
+            if raw_ptr.is_null() {
+                return Self::default();
+            }
+
+            ptr::copy_nonoverlapping(samples.as_ptr(), raw_ptr, samples.len());
+            Self {
+                samples: raw_ptr,
+                sample_count: samples.len(),
+                sample_rate,
+                channel_count,
+            }
+        }
+    }
+
+    pub fn take_samples(&mut self) -> Option<FullSystemAudioCapturedPcm> {
+        if self.samples.is_null() || self.sample_count == 0 {
+            self.samples = ptr::null_mut();
+            self.sample_count = 0;
+            return None;
+        }
+
+        let sample_rate = match u32::try_from(self.sample_rate) {
+            Ok(value) => value,
+            Err(_) => {
+                free_samples(self.samples);
+                self.samples = ptr::null_mut();
+                self.sample_count = 0;
+                return None;
+            }
+        };
+        let channel_count = match usize::try_from(self.channel_count) {
+            Ok(value) => value,
+            Err(_) => {
+                free_samples(self.samples);
+                self.samples = ptr::null_mut();
+                self.sample_count = 0;
+                return None;
+            }
+        };
+
+        let samples = unsafe { slice::from_raw_parts(self.samples, self.sample_count).to_vec() };
+        free_samples(self.samples);
+        self.samples = ptr::null_mut();
+        self.sample_count = 0;
+
+        Some(FullSystemAudioCapturedPcm {
+            samples,
+            sample_rate,
+            channel_count,
+        })
+    }
+}
+
+unsafe extern "C" {
+    fn malloc(size: usize) -> *mut c_void;
 }
 
 #[cfg(target_os = "macos")]
@@ -69,6 +169,20 @@ extern "C" {
     fn uttr_full_system_audio_stop_capture() -> FullSystemAudioStopResult;
     fn uttr_full_system_audio_cancel_capture();
     fn uttr_full_system_audio_cleanup_last_session();
+    fn uttr_full_system_audio_free_samples(samples: *mut f32);
+}
+
+#[cfg(not(target_os = "macos"))]
+unsafe extern "C" {
+    fn free(ptr: *mut c_void);
+}
+
+pub fn owned_pcm_buffer_from_samples(
+    samples: &[f32],
+    sample_rate: i32,
+    channel_count: i32,
+) -> FullSystemAudioPcmBuffer {
+    FullSystemAudioPcmBuffer::from_samples(samples, sample_rate, channel_count)
 }
 
 pub fn is_supported() -> bool {
@@ -146,5 +260,17 @@ pub fn cleanup_last_session() {
     #[cfg(target_os = "macos")]
     unsafe {
         uttr_full_system_audio_cleanup_last_session();
+    }
+}
+
+pub fn free_samples(samples: *mut f32) {
+    #[cfg(target_os = "macos")]
+    unsafe {
+        uttr_full_system_audio_free_samples(samples);
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    unsafe {
+        free(samples.cast::<c_void>());
     }
 }

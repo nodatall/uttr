@@ -1,3 +1,4 @@
+import Darwin
 import CoreGraphics
 import Foundation
 import ScreenCaptureKit
@@ -37,13 +38,24 @@ private func makeStopResult(
     stopped: Int32,
     sampleRate: Int32,
     channelCount: Int32,
-    frameCount: Int64
+    frameCount: Int64,
+    pcm: UttrFullSystemAudioPcmBuffer
 ) -> UttrFullSystemAudioStopResult {
     return UttrFullSystemAudioStopResult(
         stopped: stopped,
         sample_rate: sampleRate,
         channel_count: channelCount,
-        frame_count: frameCount
+        frame_count: frameCount,
+        pcm: pcm
+    )
+}
+
+private func makeEmptyPcmBuffer(sampleRate: Int32 = 0, channelCount: Int32 = 0) -> UttrFullSystemAudioPcmBuffer {
+    return UttrFullSystemAudioPcmBuffer(
+        samples: nil,
+        sample_count: 0,
+        sample_rate: sampleRate,
+        channel_count: channelCount
     )
 }
 
@@ -95,7 +107,8 @@ public func uttrFullSystemAudioStopCapture() -> UttrFullSystemAudioStopResult {
         stopped: 0,
         sampleRate: 0,
         channelCount: 0,
-        frameCount: 0
+        frameCount: 0,
+        pcm: makeEmptyPcmBuffer()
     )
 }
 
@@ -104,3 +117,9 @@ public func uttrFullSystemAudioCancelCapture() {}
 
 @_cdecl("uttr_full_system_audio_cleanup_last_session")
 public func uttrFullSystemAudioCleanupLastSession() {}
+
+@_cdecl("uttr_full_system_audio_free_samples")
+public func uttrFullSystemAudioFreeSamples(_ samples: UnsafeMutablePointer<Float>?) {
+    guard let samples = samples else { return }
+    free(samples)
+}

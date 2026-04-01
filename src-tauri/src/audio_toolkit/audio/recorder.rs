@@ -6,10 +6,12 @@ use std::{
     time::Duration,
 };
 
+use anyhow::{anyhow, Result as AnyResult};
 use cpal::{
     traits::{DeviceTrait, HostTrait, StreamTrait},
     Device, Sample, SizedSample,
 };
+use rubato::Resampler;
 
 use crate::audio_toolkit::{
     audio::{AudioVisualiser, FrameResampler},
@@ -35,6 +37,112 @@ pub struct DrainResult {
     pub samples: Vec<f32>,
     pub total_speech_samples: usize,
     pub saw_pause: bool,
+}
+
+const TRANSCRIPTION_SAMPLE_RATE: u32 = crate::audio_toolkit::constants::WHISPER_SAMPLE_RATE;
+
+pub fn normalize_transcription_pcm(
+    samples: &[f32],
+    sample_rate: u32,
+    channel_count: usize,
+) -> AnyResult<Vec<f32>> {
+    if samples.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    if sample_rate == 0 {
+        return Err(anyhow!("Audio sample rate must be greater than zero."));
+    }
+
+    if channel_count == 0 {
+        return Err(anyhow!("Audio channel count must be greater than zero."));
+    }
+
+    let mono = downmix_to_mono(samples, channel_count);
+    if mono.is_empty() || sample_rate == TRANSCRIPTION_SAMPLE_RATE {
+        return Ok(mono);
+    }
+
+    resample_samples(&mono, sample_rate, TRANSCRIPTION_SAMPLE_RATE)
+}
+
+pub fn mix_transcription_pcm_sources(sources: &[&[f32]]) -> Vec<f32> {
+    let max_len = sources.iter().map(|source| source.len()).max().unwrap_or(0);
+    let mut mixed = Vec::with_capacity(max_len);
+
+    for index in 0..max_len {
+        let mut sum = 0.0f32;
+        let mut active_sources = 0usize;
+
+        for source in sources {
+            if let Some(sample) = source.get(index) {
+                sum += *sample;
+                active_sources += 1;
+            }
+        }
+
+        if active_sources == 0 {
+            continue;
+        }
+
+        mixed.push((sum / active_sources as f32).clamp(-1.0, 1.0));
+    }
+
+    mixed
+}
+
+fn downmix_to_mono(samples: &[f32], channel_count: usize) -> Vec<f32> {
+    if channel_count <= 1 {
+        return samples.to_vec();
+    }
+
+    let mut mono = Vec::with_capacity(samples.len().div_ceil(channel_count));
+    for frame in samples.chunks(channel_count) {
+        let sum: f32 = frame.iter().copied().sum();
+        mono.push(sum / frame.len() as f32);
+    }
+
+    mono
+}
+
+fn resample_samples(
+    samples: &[f32],
+    input_sample_rate: u32,
+    output_sample_rate: u32,
+) -> AnyResult<Vec<f32>> {
+    if samples.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut resampler = rubato::FftFixedIn::<f32>::new(
+        input_sample_rate as usize,
+        output_sample_rate as usize,
+        1024,
+        1,
+        1,
+    )?;
+    let mut resampled = Vec::new();
+    let mut offset = 0usize;
+
+    while offset < samples.len() {
+        let end = (offset + 1024).min(samples.len());
+        let mut chunk = samples[offset..end].to_vec();
+        if chunk.len() < 1024 {
+            chunk.resize(1024, 0.0);
+        }
+
+        let processed = resampler
+            .process(&[&chunk], None)
+            .map_err(|err| anyhow!("Failed to resample audio: {}", err))?;
+        resampled.extend_from_slice(&processed[0]);
+        offset = end;
+    }
+
+    let expected_length = ((samples.len() as f64) * output_sample_rate as f64
+        / input_sample_rate as f64)
+        .round() as usize;
+    resampled.truncate(expected_length);
+    Ok(resampled)
 }
 
 pub struct AudioRecorder {
@@ -671,7 +779,10 @@ fn run_consumer(
 
 #[cfg(test)]
 mod tests {
-    use super::{drain_recording, handle_start, DrainResult, PreRollBuffer};
+    use super::{
+        drain_recording, handle_start, mix_transcription_pcm_sources, normalize_transcription_pcm,
+        DrainResult, PreRollBuffer,
+    };
 
     #[test]
     fn recorder_pre_roll_buffer_caps_to_latest_samples() {
@@ -806,5 +917,31 @@ mod tests {
                 saw_pause: false,
             }
         );
+    }
+
+    #[test]
+    fn normalize_transcription_pcm_downmixes_stereo_to_mono() {
+        let samples = vec![1.0, 0.5, -0.5, -1.0];
+        let normalized = normalize_transcription_pcm(&samples, 16_000, 2).expect("normalize audio");
+
+        assert_eq!(normalized, vec![0.75, -0.75]);
+    }
+
+    #[test]
+    fn normalize_transcription_pcm_resamples_to_target_rate() {
+        let source = vec![0.0; 44_100];
+        let normalized = normalize_transcription_pcm(&source, 44_100, 1).expect("resample audio");
+
+        assert_eq!(normalized.len(), 16_000);
+    }
+
+    #[test]
+    fn mix_transcription_pcm_sources_averages_active_sources() {
+        let first = [0.5, 0.25];
+        let second = [0.75];
+
+        let mixed = mix_transcription_pcm_sources(&[&first, &second]);
+
+        assert_eq!(mixed, vec![0.625, 0.25]);
     }
 }

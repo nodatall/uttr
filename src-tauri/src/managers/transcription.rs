@@ -140,6 +140,19 @@ fn audio_levels(audio: &[f32]) -> Option<(f32, f32)> {
     Some((rms, peak))
 }
 
+pub(crate) fn sanitize_transcription_audio(mut audio: Vec<f32>) -> Vec<f32> {
+    for sample in &mut audio {
+        if !sample.is_finite() {
+            *sample = 0.0;
+            continue;
+        }
+
+        *sample = (*sample).clamp(-1.0, 1.0);
+    }
+
+    audio
+}
+
 fn is_effectively_silent(levels: (f32, f32)) -> bool {
     const MAX_SILENT_RMS: f32 = 0.0035;
     const MAX_SILENT_PEAK: f32 = 0.02;
@@ -1700,6 +1713,7 @@ impl TranscriptionManager {
         self.update_last_activity();
 
         let st = std::time::Instant::now();
+        let audio = sanitize_transcription_audio(audio);
 
         debug!("Audio vector length: {}", audio.len());
 
