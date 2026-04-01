@@ -103,7 +103,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - output: `src-tauri/src/transcription_coordinator.rs`, `src-tauri/src/shortcut/handler.rs`, `src-tauri/src/settings.rs`
     - verify: `cargo test --manifest-path src-tauri/Cargo.toml`
     - done_when: The new binding starts on first press and stops on second press regardless of `push_to_talk`, while `transcribe` and `transcribe_with_post_process` still follow current behavior.
-  - [ ] 4.2 Reuse the existing transcription pipeline and UI state transitions for the full-system path
+  - [x] 4.2 Reuse the existing transcription pipeline and UI state transitions for the full-system path
     - covers_prd: `FR-009`, `FR-010`
     - covers_tdd: `TDR-004`, `TDR-006`
     - output: `src-tauri/src/actions.rs`, `src-tauri/src/managers/transcription.rs`, `src-tauri/src/tray.rs`, `src-tauri/src/overlay.rs`

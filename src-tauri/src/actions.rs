@@ -3,6 +3,9 @@ use crate::apple_intelligence;
 use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, SoundType};
 use crate::audio_toolkit::{normalize_spoken_lists, normalize_spoken_punctuation};
 use crate::managers::audio::AudioRecordingManager;
+use crate::managers::full_system_audio::{
+    FullSystemAudioSessionManager, FullSystemSessionStopResult,
+};
 use crate::managers::history::HistoryManager;
 use crate::managers::model::is_cloud_model_id;
 use crate::managers::transcription::TranscriptionManager;
@@ -68,6 +71,10 @@ pub trait ShortcutAction: Send + Sync {
 
 // Transcribe Action
 struct TranscribeAction {
+    post_process: bool,
+}
+
+struct FullSystemTranscribeAction {
     post_process: bool,
 }
 
@@ -437,6 +444,210 @@ async fn transcribe_full_pass_with_timeout(
     }
 }
 
+fn start_transcription_session(app: &AppHandle, binding_id: &str, started: bool) {
+    let tm = app.state::<Arc<TranscriptionManager>>();
+    if started {
+        tm.cancel_incremental_session();
+        shortcut::register_cancel_shortcut(app);
+    } else {
+        utils::hide_recording_overlay(app);
+        change_tray_icon(app, TrayIconState::Idle);
+    }
+    debug!(
+        "Transcription session start completed for '{}' (started={})",
+        binding_id, started
+    );
+}
+
+fn handle_transcription_stop(
+    app: &AppHandle,
+    binding_id: &str,
+    samples: Option<Vec<f32>>,
+    post_process: bool,
+    tm: Arc<TranscriptionManager>,
+    hm: Arc<HistoryManager>,
+) {
+    let ah = app.clone();
+    let binding_id = binding_id.to_string();
+    let task_completed = Arc::new(AtomicBool::new(false));
+    let task_completed_for_worker = Arc::clone(&task_completed);
+    let tm_for_worker = tm.clone();
+
+    let transcription_task = tauri::async_runtime::spawn(async move {
+        let _guard = FinishGuard(ah.clone());
+        let _completion_guard = CompletionGuard(task_completed_for_worker);
+        let _ui_guard = UiResetGuard(ah.clone());
+        let binding_id = binding_id.clone();
+        debug!(
+            "Starting async transcription task for binding: {}",
+            binding_id
+        );
+
+        let Some(samples) = samples else {
+            warn!("No samples retrieved from recording stop");
+            utils::hide_recording_overlay(&ah);
+            change_tray_icon(&ah, TrayIconState::Idle);
+            return;
+        };
+
+        let stop_recording_time = Instant::now();
+        debug!(
+            "Recording stopped and samples retrieved in {:?}, sample count: {}",
+            stop_recording_time.elapsed(),
+            samples.len()
+        );
+
+        if samples.is_empty() {
+            let settings = get_settings(&ah);
+            let binding = settings
+                .bindings
+                .get(&binding_id)
+                .map(|b| b.current_binding.as_str())
+                .unwrap_or("");
+            let message = if binding == "fn" {
+                "No audio captured. The Fn-only shortcut can be unreliable. Use a shortcut like Option+Space."
+            } else {
+                "No audio captured. Hold the push-to-talk key a bit longer or choose a different shortcut."
+            };
+            warn!("{}", message);
+            let _ = ah.emit("transcription-error", message.to_string());
+            utils::hide_recording_overlay(&ah);
+            change_tray_icon(&ah, TrayIconState::Idle);
+            return;
+        }
+
+        let transcription_time = Instant::now();
+        let samples_clone = samples.clone();
+        let transcription_result = if samples.len() < SHORT_UTTERANCE_SAMPLES {
+            debug!(
+                "Using short-utterance fast path ({} samples)",
+                samples.len()
+            );
+            transcribe_full_pass_with_timeout(&tm_for_worker, samples).await
+        } else {
+            transcribe_full_pass_with_timeout(&tm_for_worker, samples).await
+        };
+        match transcription_result {
+            Ok(transcription) => {
+                if tm_for_worker.is_cancel_requested() {
+                    debug!("Transcription was cancelled before output handling");
+                    utils::hide_recording_overlay(&ah);
+                    change_tray_icon(&ah, TrayIconState::Idle);
+                    return;
+                }
+                debug!(
+                    "Transcription completed in {:?}: '{}'",
+                    transcription_time.elapsed(),
+                    transcription
+                );
+                if !transcription.is_empty() {
+                    let settings = get_settings(&ah);
+                    if post_process {
+                        show_processing_overlay(&ah);
+                    }
+                    let finalized =
+                        finalize_transcription_output(&ah, &settings, &transcription, post_process)
+                            .await;
+                    let final_text = finalized.final_text;
+                    let post_processed_text = finalized.post_processed_text;
+                    let post_process_prompt = finalized.post_process_prompt;
+
+                    let hm_clone = Arc::clone(&hm);
+                    let transcription_for_history = transcription.clone();
+                    tauri::async_runtime::spawn(async move {
+                        if let Err(e) = hm_clone
+                            .save_transcription(
+                                samples_clone,
+                                transcription_for_history,
+                                post_processed_text,
+                                post_process_prompt,
+                            )
+                            .await
+                        {
+                            error!("Failed to save transcription to history: {}", e);
+                        }
+                    });
+
+                    let ah_clone = ah.clone();
+                    let paste_time = Instant::now();
+                    ah.run_on_main_thread(move || {
+                        let text_for_paste = final_text.clone();
+                        match utils::paste(text_for_paste.clone(), ah_clone.clone()) {
+                            Ok(()) => debug!(
+                                "Text pasted successfully in {:?}",
+                                paste_time.elapsed()
+                            ),
+                            Err(e) => {
+                                error!("Failed to paste transcription: {}", e);
+                                let _ = ah_clone.emit(
+                                    "transcription-error",
+                                    format!(
+                                        "Transcription succeeded, but paste failed: {}",
+                                        e
+                                    ),
+                                );
+                                if let Err(copy_err) =
+                                    ah_clone.clipboard().write_text(&text_for_paste)
+                                {
+                                    error!(
+                                        "Failed to copy transcription to clipboard after paste error: {}",
+                                        copy_err
+                                    );
+                                }
+                            }
+                        }
+                        utils::hide_recording_overlay(&ah_clone);
+                        change_tray_icon(&ah_clone, TrayIconState::Idle);
+                    })
+                    .unwrap_or_else(|e| {
+                        error!("Failed to run paste on main thread: {:?}", e);
+                        utils::hide_recording_overlay(&ah);
+                        change_tray_icon(&ah, TrayIconState::Idle);
+                    });
+                } else {
+                    utils::hide_recording_overlay(&ah);
+                    change_tray_icon(&ah, TrayIconState::Idle);
+                }
+            }
+            Err(err) => {
+                if tm_for_worker.is_cancel_requested() {
+                    debug!("Transcription task cancelled");
+                    utils::hide_recording_overlay(&ah);
+                    change_tray_icon(&ah, TrayIconState::Idle);
+                    return;
+                }
+                error!("Global Shortcut Transcription error: {}", err);
+                let _ = ah.emit("transcription-error", err.to_string());
+                utils::hide_recording_overlay(&ah);
+                change_tray_icon(&ah, TrayIconState::Idle);
+            }
+        }
+    });
+
+    {
+        let app_for_watchdog = app.clone();
+        let tm_for_watchdog = tm.clone();
+        let task_completed = Arc::clone(&task_completed);
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_secs(12)).await;
+            if task_completed.load(Ordering::Relaxed) {
+                return;
+            }
+
+            warn!(
+                "Transcription watchdog fired after 12s; forcing cancellation and coordinator reset"
+            );
+            tm_for_watchdog.request_cancel();
+            transcription_task.abort();
+            utils::cancel_current_operation(&app_for_watchdog);
+            let _ = app_for_watchdog.emit(
+                "transcription-error",
+                "Transcription timed out. Please try again.".to_string(),
+            );
+        });
+    }
+}
+
 impl ShortcutAction for TranscribeAction {
     fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
         let start_time = Instant::now();
@@ -511,14 +722,7 @@ impl ShortcutAction for TranscribeAction {
             }
         }
 
-        if recording_started {
-            tm.cancel_incremental_session();
-            // Dynamically register the cancel shortcut in a separate task to avoid deadlock
-            shortcut::register_cancel_shortcut(app);
-        } else {
-            utils::hide_recording_overlay(app);
-            change_tray_icon(app, TrayIconState::Idle);
-        }
+        start_transcription_session(app, &binding_id, recording_started);
 
         debug!(
             "TranscribeAction::start completed in {:?}",
@@ -533,7 +737,6 @@ impl ShortcutAction for TranscribeAction {
         let stop_time = Instant::now();
         debug!("TranscribeAction::stop called for binding: {}", binding_id);
 
-        let ah = app.clone();
         let rm = Arc::clone(&app.state::<Arc<AudioRecordingManager>>());
         let tm = Arc::clone(&app.state::<Arc<TranscriptionManager>>());
         let hm = Arc::clone(&app.state::<Arc<HistoryManager>>());
@@ -547,200 +750,132 @@ impl ShortcutAction for TranscribeAction {
         // Play audio feedback for recording stop
         play_feedback_sound(app, SoundType::Stop);
 
-        let binding_id = binding_id.to_string(); // Clone binding_id for the async task
         let settings = get_settings(app);
         // When post-processing is enabled in settings, apply it automatically for normal
         // transcription. The dedicated post-process hotkey still forces it on.
         let post_process = self.post_process || settings.post_process_enabled;
-        let task_completed = Arc::new(AtomicBool::new(false));
-        let task_completed_for_worker = Arc::clone(&task_completed);
-        let tm_for_worker = tm.clone();
-
-        let transcription_task = tauri::async_runtime::spawn(async move {
-            let _guard = FinishGuard(ah.clone());
-            let _completion_guard = CompletionGuard(task_completed_for_worker);
-            let _ui_guard = UiResetGuard(ah.clone());
-            let binding_id = binding_id.clone(); // Clone for the inner async task
-            debug!(
-                "Starting async transcription task for binding: {}",
-                binding_id
-            );
-
-            let stop_recording_time = Instant::now();
-            if let Some(samples) = rm.stop_recording(&binding_id) {
-                debug!(
-                    "Recording stopped and samples retrieved in {:?}, sample count: {}",
-                    stop_recording_time.elapsed(),
-                    samples.len()
-                );
-
-                if samples.is_empty() {
-                    let settings = get_settings(&ah);
-                    let binding = settings
-                        .bindings
-                        .get(&binding_id)
-                        .map(|b| b.current_binding.as_str())
-                        .unwrap_or("");
-                    let message = if binding == "fn" {
-                        "No audio captured. The Fn-only shortcut can be unreliable. Use a shortcut like Option+Space."
-                    } else {
-                        "No audio captured. Hold the push-to-talk key a bit longer or choose a different shortcut."
-                    };
-                    warn!("{}", message);
-                    let _ = ah.emit("transcription-error", message.to_string());
-                    utils::hide_recording_overlay(&ah);
-                    change_tray_icon(&ah, TrayIconState::Idle);
-                    return;
-                }
-
-                let transcription_time = Instant::now();
-                let samples_clone = samples.clone(); // Clone for history saving
-                let transcription_result = if samples.len() < SHORT_UTTERANCE_SAMPLES {
-                    // Short utterance fast path: run direct transcription with no chunking/fallback
-                    // orchestration so <10s clips match pre-chunk latency.
-                    // Keep timeout protection so UI cannot get stuck indefinitely.
-                    debug!(
-                        "Using short-utterance fast path ({} samples)",
-                        samples.len()
-                    );
-                    transcribe_full_pass_with_timeout(&tm_for_worker, samples).await
-                } else {
-                    transcribe_full_pass_with_timeout(&tm_for_worker, samples).await
-                };
-                match transcription_result {
-                    Ok(transcription) => {
-                        if tm_for_worker.is_cancel_requested() {
-                            debug!("Transcription was cancelled before output handling");
-                            utils::hide_recording_overlay(&ah);
-                            change_tray_icon(&ah, TrayIconState::Idle);
-                            return;
-                        }
-                        debug!(
-                            "Transcription completed in {:?}: '{}'",
-                            transcription_time.elapsed(),
-                            transcription
-                        );
-                        if !transcription.is_empty() {
-                            let settings = get_settings(&ah);
-                            if post_process {
-                                show_processing_overlay(&ah);
-                            }
-                            let finalized = finalize_transcription_output(
-                                &ah,
-                                &settings,
-                                &transcription,
-                                post_process,
-                            )
-                            .await;
-                            let final_text = finalized.final_text;
-                            let post_processed_text = finalized.post_processed_text;
-                            let post_process_prompt = finalized.post_process_prompt;
-
-                            // Save to history with post-processed text and prompt
-                            let hm_clone = Arc::clone(&hm);
-                            let transcription_for_history = transcription.clone();
-                            tauri::async_runtime::spawn(async move {
-                                if let Err(e) = hm_clone
-                                    .save_transcription(
-                                        samples_clone,
-                                        transcription_for_history,
-                                        post_processed_text,
-                                        post_process_prompt,
-                                    )
-                                    .await
-                                {
-                                    error!("Failed to save transcription to history: {}", e);
-                                }
-                            });
-
-                            // Paste the final text (either processed or original)
-                            let ah_clone = ah.clone();
-                            let paste_time = Instant::now();
-                            ah.run_on_main_thread(move || {
-                                let text_for_paste = final_text.clone();
-                                match utils::paste(text_for_paste.clone(), ah_clone.clone()) {
-                                    Ok(()) => debug!(
-                                        "Text pasted successfully in {:?}",
-                                        paste_time.elapsed()
-                                    ),
-                                    Err(e) => {
-                                        error!("Failed to paste transcription: {}", e);
-                                        let _ = ah_clone.emit(
-                                            "transcription-error",
-                                            format!(
-                                                "Transcription succeeded, but paste failed: {}",
-                                                e
-                                            ),
-                                        );
-                                        if let Err(copy_err) =
-                                            ah_clone.clipboard().write_text(&text_for_paste)
-                                        {
-                                            error!(
-                                                "Failed to copy transcription to clipboard after paste error: {}",
-                                                copy_err
-                                            );
-                                        }
-                                    }
-                                }
-                                // Hide the overlay after transcription is complete
-                                utils::hide_recording_overlay(&ah_clone);
-                                change_tray_icon(&ah_clone, TrayIconState::Idle);
-                            })
-                            .unwrap_or_else(|e| {
-                                error!("Failed to run paste on main thread: {:?}", e);
-                                utils::hide_recording_overlay(&ah);
-                                change_tray_icon(&ah, TrayIconState::Idle);
-                            });
-                        } else {
-                            utils::hide_recording_overlay(&ah);
-                            change_tray_icon(&ah, TrayIconState::Idle);
-                        }
-                    }
-                    Err(err) => {
-                        if tm_for_worker.is_cancel_requested() {
-                            debug!("Transcription task cancelled");
-                            utils::hide_recording_overlay(&ah);
-                            change_tray_icon(&ah, TrayIconState::Idle);
-                            return;
-                        }
-                        error!("Global Shortcut Transcription error: {}", err);
-                        let _ = ah.emit("transcription-error", err.to_string());
-                        utils::hide_recording_overlay(&ah);
-                        change_tray_icon(&ah, TrayIconState::Idle);
-                    }
-                }
-            } else {
-                warn!("No samples retrieved from recording stop");
-                utils::hide_recording_overlay(&ah);
-                change_tray_icon(&ah, TrayIconState::Idle);
-            }
-        });
-
-        {
-            let app_for_watchdog = app.clone();
-            let tm_for_watchdog = tm.clone();
-            let task_completed = Arc::clone(&task_completed);
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(Duration::from_secs(12)).await;
-                if task_completed.load(Ordering::Relaxed) {
-                    return;
-                }
-
-                warn!(
-                    "Transcription watchdog fired after 12s; forcing cancellation and coordinator reset"
-                );
-                tm_for_watchdog.request_cancel();
-                transcription_task.abort();
-                utils::cancel_current_operation(&app_for_watchdog);
-                let _ = app_for_watchdog.emit(
-                    "transcription-error",
-                    "Transcription timed out. Please try again.".to_string(),
-                );
-            });
-        }
+        let samples = rm.stop_recording(binding_id);
+        handle_transcription_stop(app, binding_id, samples, post_process, tm, hm);
 
         debug!(
             "TranscribeAction::stop completed in {:?}",
+            stop_time.elapsed()
+        );
+    }
+}
+
+impl ShortcutAction for FullSystemTranscribeAction {
+    fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
+        let start_time = Instant::now();
+        debug!(
+            "FullSystemTranscribeAction::start called for binding: {}",
+            binding_id
+        );
+
+        let tm = app.state::<Arc<TranscriptionManager>>();
+        tm.clear_cancel_request();
+        let settings = get_settings(app);
+        let preload_model_id = if settings.selected_model.is_empty() {
+            tm.get_current_model().unwrap_or_default()
+        } else {
+            settings.selected_model.clone()
+        };
+        if preload_model_id.is_empty() || !is_cloud_model_id(&preload_model_id) {
+            tm.initiate_model_load();
+        } else {
+            debug!(
+                "Skipping preload for cloud model '{}' in hot path",
+                preload_model_id
+            );
+        }
+
+        let binding_id = binding_id.to_string();
+        change_tray_icon(app, TrayIconState::Recording);
+        show_recording_overlay(app);
+
+        let full_system_audio = app.state::<Arc<FullSystemAudioSessionManager>>();
+        let rm = app.state::<Arc<AudioRecordingManager>>();
+
+        let is_always_on = settings.always_on_microphone;
+        debug!("Full-system mode - always_on: {}", is_always_on);
+
+        let mut recording_started = false;
+        let start_config = crate::full_system_audio_bridge::FullSystemAudioCaptureConfig::default();
+        if is_always_on {
+            let rm_clone = Arc::clone(&rm);
+            let app_clone = app.clone();
+            std::thread::spawn(move || {
+                play_feedback_sound_blocking(&app_clone, SoundType::Start);
+                rm_clone.apply_mute();
+            });
+
+            recording_started = full_system_audio
+                .start_session(&binding_id, start_config)
+                .started;
+            debug!("Full-system recording started: {}", recording_started);
+        } else {
+            let recording_start_time = Instant::now();
+            if full_system_audio
+                .start_session(&binding_id, start_config)
+                .started
+            {
+                recording_started = true;
+                debug!(
+                    "Full-system recording started in {:?}",
+                    recording_start_time.elapsed()
+                );
+                let app_clone = app.clone();
+                let rm_clone = Arc::clone(&rm);
+                std::thread::spawn(move || {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    debug!("Handling delayed full-system audio feedback/mute sequence");
+                    play_feedback_sound_blocking(&app_clone, SoundType::Start);
+                    rm_clone.apply_mute();
+                });
+            } else {
+                debug!("Failed to start full-system recording");
+            }
+        }
+
+        start_transcription_session(app, binding_id.as_str(), recording_started);
+
+        debug!(
+            "FullSystemTranscribeAction::start completed in {:?}",
+            start_time.elapsed()
+        );
+    }
+
+    fn stop(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
+        shortcut::unregister_cancel_shortcut(app);
+
+        let stop_time = Instant::now();
+        debug!(
+            "FullSystemTranscribeAction::stop called for binding: {}",
+            binding_id
+        );
+
+        let rm = Arc::clone(&app.state::<Arc<AudioRecordingManager>>());
+        let tm = Arc::clone(&app.state::<Arc<TranscriptionManager>>());
+        let hm = Arc::clone(&app.state::<Arc<HistoryManager>>());
+        let full_system_audio = app.state::<Arc<FullSystemAudioSessionManager>>();
+
+        change_tray_icon(app, TrayIconState::Transcribing);
+        show_transcribing_overlay(app);
+        rm.remove_mute();
+        play_feedback_sound(app, SoundType::Stop);
+
+        let stop_result: FullSystemSessionStopResult = full_system_audio.stop_session();
+        handle_transcription_stop(
+            app,
+            binding_id,
+            stop_result.transcription_samples,
+            self.post_process || get_settings(app).post_process_enabled,
+            tm,
+            hm,
+        );
+
+        debug!(
+            "FullSystemTranscribeAction::stop completed in {:?}",
             stop_time.elapsed()
         );
     }
@@ -797,7 +932,7 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
     );
     map.insert(
         "transcribe_full_system_audio".to_string(),
-        Arc::new(TranscribeAction {
+        Arc::new(FullSystemTranscribeAction {
             post_process: false,
         }) as Arc<dyn ShortcutAction>,
     );
