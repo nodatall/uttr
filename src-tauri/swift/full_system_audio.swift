@@ -1,8 +1,26 @@
+import CoreGraphics
 import Foundation
 import ScreenCaptureKit
 
 private func permissionStateValue(_ state: Int32) -> UttrFullSystemAudioPermissionState {
     return state
+}
+
+private func currentScreenRecordingPermissionState() -> UttrFullSystemAudioPermissionState {
+    guard CGPreflightScreenCaptureAccess() else {
+        return permissionStateValue(Int32(UTTR_FULL_SYSTEM_AUDIO_PERMISSION_NOT_DETERMINED))
+    }
+
+    return permissionStateValue(Int32(UTTR_FULL_SYSTEM_AUDIO_PERMISSION_GRANTED))
+}
+
+private func requestScreenRecordingPermission() -> UttrFullSystemAudioPermissionState {
+    let granted = CGRequestScreenCaptureAccess()
+    if granted || CGPreflightScreenCaptureAccess() {
+        return permissionStateValue(Int32(UTTR_FULL_SYSTEM_AUDIO_PERMISSION_GRANTED))
+    }
+
+    return permissionStateValue(Int32(UTTR_FULL_SYSTEM_AUDIO_PERMISSION_DENIED))
 }
 
 private func makeStartResult(
@@ -40,7 +58,7 @@ public func uttrFullSystemAudioIsSupported() -> Int32 {
 @_cdecl("uttr_full_system_audio_preflight_permission")
 public func uttrFullSystemAudioPreflightPermission() -> UttrFullSystemAudioPermissionState {
     if #available(macOS 13.0, *) {
-        return permissionStateValue(Int32(UTTR_FULL_SYSTEM_AUDIO_PERMISSION_NOT_DETERMINED))
+        return currentScreenRecordingPermissionState()
     }
     return permissionStateValue(Int32(UTTR_FULL_SYSTEM_AUDIO_PERMISSION_UNSUPPORTED))
 }
@@ -48,7 +66,7 @@ public func uttrFullSystemAudioPreflightPermission() -> UttrFullSystemAudioPermi
 @_cdecl("uttr_full_system_audio_request_permission")
 public func uttrFullSystemAudioRequestPermission() -> UttrFullSystemAudioPermissionState {
     if #available(macOS 13.0, *) {
-        return permissionStateValue(Int32(UTTR_FULL_SYSTEM_AUDIO_PERMISSION_NOT_DETERMINED))
+        return requestScreenRecordingPermission()
     }
     return permissionStateValue(Int32(UTTR_FULL_SYSTEM_AUDIO_PERMISSION_UNSUPPORTED))
 }

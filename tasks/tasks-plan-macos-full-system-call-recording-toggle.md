@@ -71,7 +71,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - output: `src-tauri/build.rs`, `src-tauri/swift/full_system_audio.swift`, `src-tauri/swift/full_system_audio_stub.swift`, `src-tauri/swift/full_system_audio_bridge.h`, `src-tauri/src/full_system_audio_bridge.rs`
     - verify: `cargo test --manifest-path src-tauri/Cargo.toml`
     - done_when: macOS builds compile a separate ScreenCaptureKit bridge alongside the Apple Intelligence bridge, with stubs or gating where the target cannot support the feature.
-  - [ ] 2.2 Implement support and Screen Recording permission helpers on the Swift/Rust boundary
+  - [x] 2.2 Implement support and Screen Recording permission helpers on the Swift/Rust boundary
     - covers_prd: `FR-001`, `FR-004`, `FR-005`, `FR-012`
     - covers_tdd: `TDR-002`, `TDR-003`, `TDR-009`
     - output: `src-tauri/swift/full_system_audio.swift`, `src-tauri/src/**`, `src-tauri/Info.plist`

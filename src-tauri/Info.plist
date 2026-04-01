@@ -3,6 +3,8 @@
 <plist version="1.0">
 <dict>
   <key>NSMicrophoneUsageDescription</key>
-  <string>Request microphone access to transcribe audio locally</string>
+  <string>Request microphone access to capture your voice for transcription.</string>
+  <key>NSAudioCaptureUsageDescription</key>
+  <string>Request Screen Recording access to capture system audio for full-system transcription.</string>
 </dict>
 </plist>

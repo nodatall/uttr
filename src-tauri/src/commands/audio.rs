@@ -1,5 +1,6 @@
 use crate::audio_feedback;
 use crate::audio_toolkit::audio::{list_input_devices, list_output_devices};
+use crate::full_system_audio_bridge::{self, FullSystemAudioPermissionState};
 use crate::managers::audio::{AudioRecordingManager, MicrophoneMode};
 use crate::settings::{get_settings, write_settings};
 use log::warn;
@@ -80,29 +81,81 @@ fn support_status_from_version(
     }
 }
 
+fn support_status_from_environment(
+    version: &tauri_plugin_os::Version,
+    is_macos_platform: bool,
+    bridge_supported: bool,
+) -> FullSystemAudioSupportStatus {
+    let version_support = support_status_from_version(version, is_macos_platform);
+
+    if !version_support.supported {
+        return version_support;
+    }
+
+    if bridge_supported {
+        FullSystemAudioSupportStatus {
+            supported: true,
+            reason: None,
+        }
+    } else {
+        FullSystemAudioSupportStatus {
+            supported: false,
+            reason: Some(
+                "Full-system audio recording is unavailable in this build of Uttr."
+                    .to_string(),
+            ),
+        }
+    }
+}
+
 fn full_system_audio_support_status() -> FullSystemAudioSupportStatus {
-    support_status_from_version(&tauri_plugin_os::version(), cfg!(target_os = "macos"))
+    support_status_from_environment(
+        &tauri_plugin_os::version(),
+        cfg!(target_os = "macos"),
+        full_system_audio_bridge::is_supported(),
+    )
+}
+
+fn permission_granted(permission_state: Option<FullSystemAudioPermissionState>) -> Option<bool> {
+    permission_state.map(|state| matches!(state, FullSystemAudioPermissionState::Granted))
+}
+
+fn readiness_reason_from_permission(
+    support: &FullSystemAudioSupportStatus,
+    permission_state: Option<FullSystemAudioPermissionState>,
+) -> Option<String> {
+    if !support.supported {
+        return support.reason.clone();
+    }
+
+    match permission_state {
+        Some(FullSystemAudioPermissionState::Granted) => None,
+        Some(FullSystemAudioPermissionState::Denied) => Some(
+            "Grant Screen Recording access in System Settings to enable full-system audio recording."
+                .to_string(),
+        ),
+        Some(FullSystemAudioPermissionState::Error) => Some(
+            "Uttr could not check Screen Recording access. Open System Settings and try again."
+                .to_string(),
+        ),
+        Some(FullSystemAudioPermissionState::NotDetermined) | None => Some(
+            "Screen Recording access is required before full-system audio recording can be enabled."
+                .to_string(),
+        ),
+        Some(FullSystemAudioPermissionState::Unsupported) => support.reason.clone(),
+    }
 }
 
 fn readiness_status_from_permission(
     support: FullSystemAudioSupportStatus,
-    screen_recording_permission_granted: Option<bool>,
+    permission_state: Option<FullSystemAudioPermissionState>,
 ) -> FullSystemAudioReadinessStatus {
+    let screen_recording_permission_granted = permission_granted(permission_state);
     let ready = support.supported && screen_recording_permission_granted == Some(true);
     let reason = if ready {
         None
-    } else if !support.supported {
-        support.reason.clone()
-    } else if screen_recording_permission_granted == Some(false) {
-        Some(
-            "Grant Screen Recording access in System Settings to enable full-system audio recording."
-                .to_string(),
-        )
     } else {
-        Some(
-            "Screen Recording permission is required before full-system audio recording can be enabled."
-                .to_string(),
-        )
+        readiness_reason_from_permission(&support, permission_state)
     };
 
     FullSystemAudioReadinessStatus {
@@ -119,9 +172,10 @@ async fn full_system_audio_readiness_status() -> FullSystemAudioReadinessStatus 
         return readiness_status_from_permission(support, None);
     }
 
-    let screen_recording_permission_granted =
-        Some(tauri_plugin_macos_permissions::check_screen_recording_permission().await);
-    readiness_status_from_permission(support, screen_recording_permission_granted)
+    readiness_status_from_permission(
+        support,
+        Some(full_system_audio_bridge::preflight_permission()),
+    )
 }
 
 fn toggle_result_from_readiness(
@@ -353,10 +407,27 @@ pub async fn set_record_full_system_audio_enabled(
     enabled: bool,
 ) -> FullSystemAudioToggleResult {
     let support = full_system_audio_support_status();
-    let readiness = full_system_audio_readiness_status().await;
-    let toggle = toggle_result_from_readiness(enabled, support, readiness);
-
     let mut settings = get_settings(&app);
+    if !enabled {
+        let readiness = full_system_audio_readiness_status().await;
+        let toggle = toggle_result_from_readiness(false, support, readiness);
+        settings.record_full_system_audio = false;
+        write_settings(&app, settings);
+        return toggle;
+    }
+
+    let requested_permission_state = match support.supported {
+        true => match full_system_audio_bridge::preflight_permission() {
+            FullSystemAudioPermissionState::Granted => {
+                Some(FullSystemAudioPermissionState::Granted)
+            }
+            _ => Some(full_system_audio_bridge::request_permission()),
+        },
+        false => None,
+    };
+
+    let readiness = readiness_status_from_permission(support.clone(), requested_permission_state);
+    let toggle = toggle_result_from_readiness(true, support, readiness);
     settings.record_full_system_audio = toggle.stored_enabled;
     write_settings(&app, settings);
 
@@ -370,7 +441,7 @@ mod tests {
 
     #[test]
     fn macos_13_or_later_is_reported_as_supported() {
-        let support = support_status_from_version(&Version::Semantic(13, 0, 0), true);
+        let support = support_status_from_environment(&Version::Semantic(13, 0, 0), true, true);
 
         assert!(support.supported);
         assert!(support.reason.is_none());
@@ -378,7 +449,7 @@ mod tests {
 
     #[test]
     fn macos_12_is_reported_as_unsupported() {
-        let support = support_status_from_version(&Version::Semantic(12, 6, 1), true);
+        let support = support_status_from_environment(&Version::Semantic(12, 6, 1), true, true);
 
         assert!(!support.supported);
         assert!(support
@@ -389,7 +460,8 @@ mod tests {
 
     #[test]
     fn non_macos_platform_is_reported_as_unsupported() {
-        let support = support_status_from_version(&Version::Semantic(14, 0, 0), false);
+        let support =
+            support_status_from_environment(&Version::Semantic(14, 0, 0), false, false);
 
         assert!(!support.supported);
         assert!(support
@@ -399,13 +471,27 @@ mod tests {
     }
 
     #[test]
+    fn macos_13_without_bridge_support_is_reported_as_unsupported() {
+        let support = support_status_from_environment(&Version::Semantic(13, 0, 0), true, false);
+
+        assert!(!support.supported);
+        assert!(support
+            .reason
+            .expect("missing support reason")
+            .contains("unavailable in this build"));
+    }
+
+    #[test]
     fn readiness_requires_screen_recording_permission_when_supported() {
         let support = FullSystemAudioSupportStatus {
             supported: true,
             reason: None,
         };
 
-        let readiness = readiness_status_from_permission(support, Some(false));
+        let readiness = readiness_status_from_permission(
+            support,
+            Some(FullSystemAudioPermissionState::NotDetermined),
+        );
 
         assert!(!readiness.ready);
         assert_eq!(readiness.screen_recording_permission_granted, Some(false));
@@ -467,5 +553,40 @@ mod tests {
         assert!(toggle.requested_enabled);
         assert!(toggle.stored_enabled);
         assert!(toggle.error.is_none());
+    }
+
+    #[test]
+    fn readiness_marks_screen_recording_as_granted_only_when_permission_is_granted() {
+        let support = FullSystemAudioSupportStatus {
+            supported: true,
+            reason: None,
+        };
+
+        let readiness = readiness_status_from_permission(
+            support,
+            Some(FullSystemAudioPermissionState::Granted),
+        );
+
+        assert!(readiness.ready);
+        assert_eq!(readiness.screen_recording_permission_granted, Some(true));
+        assert!(readiness.reason.is_none());
+    }
+
+    #[test]
+    fn readiness_reports_permission_needed_for_denied_state() {
+        let support = FullSystemAudioSupportStatus {
+            supported: true,
+            reason: None,
+        };
+
+        let readiness =
+            readiness_status_from_permission(support, Some(FullSystemAudioPermissionState::Denied));
+
+        assert!(!readiness.ready);
+        assert_eq!(readiness.screen_recording_permission_granted, Some(false));
+        assert!(readiness
+            .reason
+            .expect("missing readiness reason")
+            .contains("Grant Screen Recording access"));
     }
 }
