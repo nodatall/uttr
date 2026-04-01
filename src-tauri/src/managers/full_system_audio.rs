@@ -770,6 +770,35 @@ mod tests {
     }
 
     #[test]
+    fn cancel_session_resets_degraded_system_only_session() {
+        let microphone = Arc::new(FakeMicrophone::with_start_result(Err(anyhow!(
+            "mic failed"
+        ))));
+        let bridge = Arc::new(FakeBridge::supported(supported_start_result()));
+        let manager =
+            FullSystemAudioSessionManager::with_backend(microphone.clone(), bridge.clone());
+
+        let result = manager.start_session(
+            "transcribe_full_system_audio",
+            FullSystemAudioCaptureConfig::default(),
+        );
+
+        assert!(result.started);
+        assert!(result.session.as_ref().expect("missing session").degraded);
+        assert!(manager.is_active());
+
+        let cancel_result = manager.cancel_session();
+
+        assert!(cancel_result.stopped);
+        assert!(cancel_result.had_active_session);
+        assert!(manager.is_idle());
+        assert_eq!(microphone.cancel_calls(), 1);
+        assert_eq!(bridge.cancel_calls(), 1);
+        assert_eq!(bridge.stop_calls(), 0);
+        assert_eq!(bridge.cleanup_calls(), 1);
+    }
+
+    #[test]
     fn keeps_session_alive_when_system_start_fails() {
         let microphone = Arc::new(FakeMicrophone {
             stop_result: Mutex::new(Some(vec![0.25, -0.25])),

@@ -1,5 +1,6 @@
 use crate::actions::ACTION_MAP;
 use crate::managers::audio::AudioRecordingManager;
+use crate::managers::full_system_audio::FullSystemAudioSessionManager;
 use log::{debug, error, warn};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -48,6 +49,13 @@ pub fn is_transcribe_binding(id: &str) -> bool {
 
 pub fn transcribe_binding_push_to_talk(id: &str, push_to_talk: bool) -> bool {
     push_to_talk && id != "transcribe_full_system_audio"
+}
+
+pub fn transcription_session_is_active(
+    audio_recording_active: bool,
+    full_system_active: bool,
+) -> bool {
+    audio_recording_active || full_system_active
 }
 
 impl TranscriptionCoordinator {
@@ -216,10 +224,14 @@ fn start(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &s
         return;
     };
     action.start(app, binding_id, hotkey_string);
-    if app
+    let audio_recording_active = app
         .try_state::<Arc<AudioRecordingManager>>()
-        .map_or(false, |a| a.is_recording())
-    {
+        .map_or(false, |a| a.is_recording());
+    let full_system_active = app
+        .try_state::<Arc<FullSystemAudioSessionManager>>()
+        .map_or(false, |a| a.is_active());
+
+    if transcription_session_is_active(audio_recording_active, full_system_active) {
         *stage = Stage::Recording(binding_id.to_string());
     } else {
         debug!("Start for '{binding_id}' did not begin recording; staying idle");
@@ -237,7 +249,9 @@ fn stop(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &st
 
 #[cfg(test)]
 mod tests {
-    use super::{is_transcribe_binding, transcribe_binding_push_to_talk};
+    use super::{
+        is_transcribe_binding, transcribe_binding_push_to_talk, transcription_session_is_active,
+    };
 
     #[test]
     fn full_system_binding_routes_through_transcribe_coordinator() {
@@ -264,5 +278,13 @@ mod tests {
             "transcribe_with_post_process",
             true
         ));
+    }
+
+    #[test]
+    fn transcription_session_active_helper_treats_either_source_as_active() {
+        assert!(transcription_session_is_active(true, false));
+        assert!(transcription_session_is_active(false, true));
+        assert!(transcription_session_is_active(true, true));
+        assert!(!transcription_session_is_active(false, false));
     }
 }

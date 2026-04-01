@@ -94,7 +94,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - verify: `cargo test --manifest-path src-tauri/Cargo.toml`
     - done_when: A completed full-system session produces one transcription-compatible PCM buffer, and degraded single-source sessions still yield usable audio for transcription.
 
-- [ ] 4.0 Integrate the new binding into shortcut, coordinator, and cancel flows
+- [x] 4.0 Integrate the new binding into shortcut, coordinator, and cancel flows
   - covers_prd: `FR-006`, `FR-007`, `FR-008`, `FR-010`, `FR-011`
   - covers_tdd: `TDR-005`, `TDR-006`, `TDR-007`
   - [x] 4.1 Register `transcribe_full_system_audio` as a transcription binding with forced toggle semantics
@@ -109,7 +109,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - output: `src-tauri/src/actions.rs`, `src-tauri/src/managers/transcription.rs`, `src-tauri/src/tray.rs`, `src-tauri/src/overlay.rs`
     - verify: `cargo test --manifest-path src-tauri/Cargo.toml`
     - done_when: Starting and stopping the new binding drives the normal overlay, tray, processing, history, and post-processing flow using the mixed PCM result.
-  - [ ] 4.3 Extend cancel and lifecycle cleanup so full-system sessions always reset cleanly
+  - [x] 4.3 Extend cancel and lifecycle cleanup so full-system sessions always reset cleanly
     - covers_prd: `FR-010`, `FR-011`
     - covers_tdd: `TDR-006`, `TDR-007`
     - output: `src-tauri/src/utils.rs`, `src-tauri/src/managers/**`, `src-tauri/src/transcription_coordinator.rs`
