@@ -7,6 +7,35 @@ import type {
 } from "@/bindings";
 import { commands } from "@/bindings";
 
+type BrowserE2ETestState = {
+  settings?: Partial<Settings>;
+  defaultSettings?: Partial<Settings>;
+  installAccess?: InstallAccessSnapshot;
+  audioDevices?: AudioDevice[];
+  outputDevices?: AudioDevice[];
+  customSounds?: { start: boolean; stop: boolean };
+};
+
+declare global {
+  interface Window {
+    __UTTR_E2E__?: BrowserE2ETestState;
+  }
+}
+
+const getBrowserE2ETestState = () =>
+  typeof window !== "undefined" ? window.__UTTR_E2E__ : undefined;
+
+const normalizeTestSettings = (settings?: Partial<Settings> | null): Settings =>
+  ({
+    ...settings,
+    always_on_microphone: settings?.always_on_microphone ?? false,
+    record_full_system_audio: settings?.record_full_system_audio ?? false,
+    selected_microphone: settings?.selected_microphone ?? "Default",
+    clamshell_microphone: settings?.clamshell_microphone ?? "Default",
+    selected_output_device: settings?.selected_output_device ?? "Default",
+    bindings: settings?.bindings ?? {},
+  }) as Settings;
+
 interface SettingsStore {
   settings: Settings | null;
   defaultSettings: Settings | null;
@@ -178,6 +207,15 @@ export const useSettingsStore = create<SettingsStore>()(
     // Load settings from store
     refreshSettings: async () => {
       try {
+        const testState = getBrowserE2ETestState();
+        if (testState?.settings) {
+          set({
+            settings: normalizeTestSettings(testState.settings),
+            isLoading: false,
+          });
+          return;
+        }
+
         const result = await commands.getAppSettings();
         if (result.status === "ok") {
           const settings = result.data;
@@ -204,6 +242,12 @@ export const useSettingsStore = create<SettingsStore>()(
 
     refreshInstallAccess: async () => {
       try {
+        const testState = getBrowserE2ETestState();
+        if (testState?.installAccess) {
+          set({ installAccess: testState.installAccess });
+          return;
+        }
+
         const result = await commands.getInstallAccessSnapshot();
         if (result.status === "ok") {
           set({ installAccess: result.data });
@@ -221,6 +265,18 @@ export const useSettingsStore = create<SettingsStore>()(
     // Load audio devices
     refreshAudioDevices: async () => {
       try {
+        const testState = getBrowserE2ETestState();
+        if (testState?.audioDevices) {
+          const devicesWithDefault = [
+            DEFAULT_AUDIO_DEVICE,
+            ...testState.audioDevices.filter(
+              (d) => d.name !== "Default" && d.name !== "default",
+            ),
+          ];
+          set({ audioDevices: devicesWithDefault });
+          return;
+        }
+
         const result = await commands.getAvailableMicrophones();
         if (result.status === "ok") {
           const devicesWithDefault = [
@@ -242,6 +298,18 @@ export const useSettingsStore = create<SettingsStore>()(
     // Load output devices
     refreshOutputDevices: async () => {
       try {
+        const testState = getBrowserE2ETestState();
+        if (testState?.outputDevices) {
+          const devicesWithDefault = [
+            DEFAULT_AUDIO_DEVICE,
+            ...testState.outputDevices.filter(
+              (d) => d.name !== "Default" && d.name !== "default",
+            ),
+          ];
+          set({ outputDevices: devicesWithDefault });
+          return;
+        }
+
         const result = await commands.getAvailableOutputDevices();
         if (result.status === "ok") {
           const devicesWithDefault = [
@@ -271,6 +339,12 @@ export const useSettingsStore = create<SettingsStore>()(
 
     checkCustomSounds: async () => {
       try {
+        const testState = getBrowserE2ETestState();
+        if (testState?.customSounds) {
+          get().setCustomSounds(testState.customSounds);
+          return;
+        }
+
         const sounds = await commands.checkCustomSounds();
         get().setCustomSounds(sounds);
       } catch (error) {
@@ -548,6 +622,15 @@ export const useSettingsStore = create<SettingsStore>()(
     // Load default settings from Rust
     loadDefaultSettings: async () => {
       try {
+        const testState = getBrowserE2ETestState();
+        if (testState?.defaultSettings) {
+          const defaultSettings = normalizeTestSettings(
+            testState.defaultSettings,
+          );
+          set({ defaultSettings });
+          return;
+        }
+
         const result = await commands.getDefaultSettings();
         if (result.status === "ok") {
           const defaultSettings: Settings = {
