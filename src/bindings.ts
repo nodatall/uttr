@@ -650,6 +650,15 @@ async playTestSound(soundType: string) : Promise<void> {
 async checkCustomSounds() : Promise<CustomSounds> {
     return await TAURI_INVOKE("check_custom_sounds");
 },
+async getFullSystemAudioSupportStatus() : Promise<FullSystemAudioSupportStatus> {
+    return await TAURI_INVOKE("get_full_system_audio_support_status");
+},
+async getFullSystemAudioReadinessStatus() : Promise<FullSystemAudioReadinessStatus> {
+    return await TAURI_INVOKE("get_full_system_audio_readiness_status");
+},
+async setRecordFullSystemAudioEnabled(enabled: boolean) : Promise<FullSystemAudioToggleResult> {
+    return await TAURI_INVOKE("set_record_full_system_audio_enabled", { enabled });
+},
 async setClamshellMicrophone(deviceName: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_clamshell_microphone", { deviceName }) };
@@ -791,6 +800,9 @@ export type CustomSounds = { start: boolean; stop: boolean }
 export type EngineType = "Whisper" | "Parakeet" | "Moonshine" | "MoonshineStreaming" | "SenseVoice"
 export type EntitlementState = "inactive" | "active" | "past_due" | "canceled" | "expired"
 export type FileTranscriptionResult = { file_name: string; transcription_text: string; post_processed_text: string | null }
+export type FullSystemAudioReadinessStatus = { supported: boolean; ready: boolean; screen_recording_permission_granted: boolean | null; reason: string | null }
+export type FullSystemAudioSupportStatus = { supported: boolean; reason: string | null }
+export type FullSystemAudioToggleResult = { requested_enabled: boolean; stored_enabled: boolean; support: FullSystemAudioSupportStatus; readiness: FullSystemAudioReadinessStatus; error: string | null }
 export type HistoryEntry = { id: number; file_name: string; timestamp: number; saved: boolean; title: string; transcription_text: string; post_processed_text: string | null; post_process_prompt: string | null }
 /**
  * Result of changing keyboard implementation
