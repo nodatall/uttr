@@ -184,6 +184,8 @@ export const useSettingsStore = create<SettingsStore>()(
           const normalizedSettings: Settings = {
             ...settings,
             always_on_microphone: settings.always_on_microphone ?? false,
+            record_full_system_audio:
+              settings.record_full_system_audio ?? false,
             selected_microphone: settings.selected_microphone ?? "Default",
             clamshell_microphone: settings.clamshell_microphone ?? "Default",
             selected_output_device:
@@ -548,7 +550,12 @@ export const useSettingsStore = create<SettingsStore>()(
       try {
         const result = await commands.getDefaultSettings();
         if (result.status === "ok") {
-          set({ defaultSettings: result.data });
+          const defaultSettings: Settings = {
+            ...result.data,
+            record_full_system_audio:
+              result.data.record_full_system_audio ?? false,
+          };
+          set({ defaultSettings });
         } else {
           console.error("Failed to load default settings:", result.error);
         }
