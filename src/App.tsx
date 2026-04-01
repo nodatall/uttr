@@ -251,14 +251,14 @@ function App() {
         }}
       />
       <div className="flex h-full flex-col overflow-hidden bg-[linear-gradient(180deg,rgba(10,15,25,0.985),rgba(6,10,18,0.96))] backdrop-blur-xl">
-        <div className="flex min-h-0 flex-1 gap-4 p-5 pt-1">
+        <div className="flex min-h-0 flex-1 flex-col gap-3 p-3 pt-1 sm:p-4 sm:pt-1 md:flex-row md:gap-4 md:p-5 md:pt-1">
           <Sidebar
             activeSection={currentSection}
             onSectionChange={setCurrentSection}
           />
           <div className="min-w-0 flex-1 overflow-hidden rounded-[20px] border border-white/6 bg-[rgba(5,10,18,0.56)] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
             <div className="flex h-full flex-col overflow-x-hidden overflow-y-auto uttr-scrollbar">
-              <div className="flex flex-col items-center gap-6 px-6 py-7">
+              <div className="flex flex-col items-center gap-5 px-4 py-5 sm:px-5 sm:py-6 md:gap-6 md:px-6 md:py-7">
                 <AccessibilityPermissions />
                 {renderSettingsContent(currentSection)}
               </div>

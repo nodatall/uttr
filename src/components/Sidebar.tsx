@@ -157,23 +157,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
   }, [activeSection, hasVisibleByokAccess, onSectionChange]);
 
   return (
-    <div className="flex h-full w-[214px] min-w-[214px] flex-col rounded-[18px] border border-white/6 bg-[rgba(4,9,15,0.45)] px-3 py-4">
+    <div className="flex w-full min-w-0 flex-col rounded-[18px] border border-white/6 bg-[rgba(4,9,15,0.45)] px-3 py-4 md:h-full md:w-[214px] md:min-w-[214px]">
       <div className="mb-4 px-2">
         <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-text/35">
           {t("sidebar.workspace", { defaultValue: "Uttr" })}
         </p>
       </div>
-      <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto uttr-scrollbar">
+      <div className="flex min-h-0 flex-1 gap-1.5 overflow-x-auto pb-1 uttr-scrollbar md:flex-col md:overflow-x-hidden md:overflow-y-auto md:pb-0">
         {availableSections.map((section) => {
           const Icon = section.icon;
           const isActive = activeSection === section.id;
-          const defaultLabel = section.defaultLabel;
+          const defaultLabel =
+            "defaultLabel" in section ? section.defaultLabel : undefined;
 
           return (
             <button
               type="button"
               key={section.id}
-              className={`flex w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-all ${
+              className={`flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-all md:w-full ${
                 isActive
                   ? "bg-[linear-gradient(90deg,rgba(29,155,100,0.2),rgba(29,155,100,0.08))] text-text shadow-[inset_0_0_0_1px_rgba(103,215,163,0.32)]"
                   : "text-text/72 hover:bg-white/[0.04] hover:text-text"

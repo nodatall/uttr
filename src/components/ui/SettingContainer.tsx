@@ -38,19 +38,19 @@ export const SettingContainer: React.FC<SettingContainerProps> = ({
 
   // Horizontal layout (default)
   const horizontalContainerClasses = grouped
-    ? "flex min-h-[56px] items-center justify-between gap-6 px-4 py-3"
-    : "flex min-h-[56px] items-center justify-between gap-6 rounded-2xl border border-white/7 px-4 py-3";
+    ? "flex min-h-[56px] flex-col items-start gap-3 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6"
+    : "flex min-h-[56px] flex-col items-start gap-3 rounded-2xl border border-white/7 px-4 py-3 sm:flex-row sm:items-center sm:justify-between sm:gap-6";
 
   return (
     <div className={horizontalContainerClasses}>
-      <div className="max-w-[58%]">
+      <div className="w-full min-w-0 sm:max-w-[58%]">
         <h3
           className={`text-[15px] leading-5 font-medium ${disabled ? "opacity-50" : "text-text/92"}`}
         >
           {title}
         </h3>
       </div>
-      <div className="relative">{children}</div>
+      <div className="relative w-full sm:w-auto">{children}</div>
     </div>
   );
 };
