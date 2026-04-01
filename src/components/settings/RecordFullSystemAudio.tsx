@@ -7,23 +7,11 @@ import {
   type FullSystemAudioReadinessStatus,
   type FullSystemAudioSupportStatus,
 } from "@/bindings";
+import type { BrowserE2ETestState } from "@/types/browserE2E";
 
 interface RecordFullSystemAudioProps {
   descriptionMode?: "inline" | "tooltip";
   grouped?: boolean;
-}
-
-type BrowserE2ETestState = {
-  fullSystemAudio?: {
-    supportStatus?: FullSystemAudioSupportStatus | null;
-    readinessStatus?: FullSystemAudioReadinessStatus | null;
-  };
-};
-
-declare global {
-  interface Window {
-    __UTTR_E2E__?: BrowserE2ETestState;
-  }
 }
 
 const getBrowserE2ETestState = () =>

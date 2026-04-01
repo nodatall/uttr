@@ -6,21 +6,7 @@ import type {
   InstallAccessSnapshot,
 } from "@/bindings";
 import { commands } from "@/bindings";
-
-type BrowserE2ETestState = {
-  settings?: Partial<Settings>;
-  defaultSettings?: Partial<Settings>;
-  installAccess?: InstallAccessSnapshot;
-  audioDevices?: AudioDevice[];
-  outputDevices?: AudioDevice[];
-  customSounds?: { start: boolean; stop: boolean };
-};
-
-declare global {
-  interface Window {
-    __UTTR_E2E__?: BrowserE2ETestState;
-  }
-}
+import type { BrowserE2ETestState } from "@/types/browserE2E";
 
 const getBrowserE2ETestState = () =>
   typeof window !== "undefined" ? window.__UTTR_E2E__ : undefined;
