@@ -796,6 +796,12 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
         Arc::new(TranscribeAction { post_process: true }) as Arc<dyn ShortcutAction>,
     );
     map.insert(
+        "transcribe_full_system_audio".to_string(),
+        Arc::new(TranscribeAction {
+            post_process: false,
+        }) as Arc<dyn ShortcutAction>,
+    );
+    map.insert(
         "cancel".to_string(),
         Arc::new(CancelAction) as Arc<dyn ShortcutAction>,
     );
@@ -805,3 +811,13 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
     );
     map
 });
+
+#[cfg(test)]
+mod tests {
+    use super::ACTION_MAP;
+
+    #[test]
+    fn full_system_binding_is_registered_in_action_map() {
+        assert!(ACTION_MAP.contains_key("transcribe_full_system_audio"));
+    }
+}

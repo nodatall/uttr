@@ -97,7 +97,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 - [ ] 4.0 Integrate the new binding into shortcut, coordinator, and cancel flows
   - covers_prd: `FR-006`, `FR-007`, `FR-008`, `FR-010`, `FR-011`
   - covers_tdd: `TDR-005`, `TDR-006`, `TDR-007`
-  - [ ] 4.1 Register `transcribe_full_system_audio` as a transcription binding with forced toggle semantics
+  - [x] 4.1 Register `transcribe_full_system_audio` as a transcription binding with forced toggle semantics
     - covers_prd: `FR-006`, `FR-007`, `FR-008`
     - covers_tdd: `TDR-005`
     - output: `src-tauri/src/transcription_coordinator.rs`, `src-tauri/src/shortcut/handler.rs`, `src-tauri/src/settings.rs`

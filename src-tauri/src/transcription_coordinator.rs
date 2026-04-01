@@ -41,7 +41,13 @@ pub struct TranscriptionCoordinator {
 }
 
 pub fn is_transcribe_binding(id: &str) -> bool {
-    id == "transcribe" || id == "transcribe_with_post_process"
+    id == "transcribe"
+        || id == "transcribe_with_post_process"
+        || id == "transcribe_full_system_audio"
+}
+
+pub fn transcribe_binding_push_to_talk(id: &str, push_to_talk: bool) -> bool {
+    push_to_talk && id != "transcribe_full_system_audio"
 }
 
 impl TranscriptionCoordinator {
@@ -101,6 +107,9 @@ impl TranscriptionCoordinator {
                                 processing_started_at = None;
                             }
                         }
+
+                        let push_to_talk =
+                            transcribe_binding_push_to_talk(&binding_id, push_to_talk);
 
                         if push_to_talk {
                             if is_pressed && matches!(stage, Stage::Idle) {
@@ -224,4 +233,36 @@ fn stop(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &st
     };
     action.stop(app, binding_id, hotkey_string);
     *stage = Stage::Processing;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{is_transcribe_binding, transcribe_binding_push_to_talk};
+
+    #[test]
+    fn full_system_binding_routes_through_transcribe_coordinator() {
+        assert!(is_transcribe_binding("transcribe_full_system_audio"));
+    }
+
+    #[test]
+    fn full_system_binding_forces_toggle_mode() {
+        assert!(!transcribe_binding_push_to_talk(
+            "transcribe_full_system_audio",
+            true
+        ));
+        assert!(!transcribe_binding_push_to_talk(
+            "transcribe_full_system_audio",
+            false
+        ));
+    }
+
+    #[test]
+    fn existing_transcribe_bindings_preserve_push_to_talk_setting() {
+        assert!(transcribe_binding_push_to_talk("transcribe", true));
+        assert!(!transcribe_binding_push_to_talk("transcribe", false));
+        assert!(transcribe_binding_push_to_talk(
+            "transcribe_with_post_process",
+            true
+        ));
+    }
 }
