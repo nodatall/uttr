@@ -93,6 +93,10 @@
         "title": "Accessibility Access",
         "description": "Required to type transcribed text into your applications."
       },
+      "screenRecording": {
+        "title": "Screen Recording Access",
+        "description": "Only needed for full-system recording later. Microphone-only transcription works without it."
+      },
       "grant": "Grant Permission",
       "granted": "Granted",
       "waiting": "Waiting...",
