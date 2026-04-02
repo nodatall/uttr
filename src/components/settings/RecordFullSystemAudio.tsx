@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { SettingContainer } from "../ui/SettingContainer";
 import { useSettings } from "../../hooks/useSettings";
+import { ShortcutInput } from "./ShortcutInput";
 import {
   commands,
   type FullSystemAudioReadinessStatus,
@@ -174,32 +175,43 @@ export const RecordFullSystemAudio: React.FC<RecordFullSystemAudioProps> =
         descriptionMode={descriptionMode}
         grouped={grouped}
         disabled={isDisabled}
+        layout="stacked"
       >
-        <div className="flex flex-col items-end gap-2">
-          <div className="max-w-64 text-right text-xs leading-5 text-mid-gray">
-            {description}
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+            <div className="max-w-2xl text-sm leading-6 text-mid-gray">
+              {description}
+            </div>
+            <label
+              className={`inline-flex items-center self-end sm:self-start ${isDisabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+            >
+              <input
+                type="checkbox"
+                aria-label={t("settings.sound.fullSystemAudio.title")}
+                data-testid="record-full-system-audio-toggle"
+                value=""
+                className="sr-only peer"
+                checked={recordFullSystemAudio}
+                disabled={isDisabled}
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    void attemptEnable();
+                  } else {
+                    void disableFeature();
+                  }
+                }}
+              />
+              <div className="relative h-6 w-11 rounded-full bg-white/[0.09] transition-colors peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-logo-primary/25 peer-checked:bg-background-ui/90 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-disabled:opacity-50 after:absolute after:start-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-white/14 after:bg-white after:shadow-[0_2px_8px_rgba(15,23,42,0.35)] after:transition-all after:content-['']" />
+            </label>
           </div>
-          <label
-            className={`inline-flex items-center ${isDisabled ? "cursor-not-allowed" : "cursor-pointer"}`}
-          >
-            <input
-              type="checkbox"
-              aria-label={t("settings.sound.fullSystemAudio.title")}
-              data-testid="record-full-system-audio-toggle"
-              value=""
-              className="sr-only peer"
-              checked={recordFullSystemAudio}
-              disabled={isDisabled}
-              onChange={(e) => {
-                if (e.target.checked) {
-                  void attemptEnable();
-                } else {
-                  void disableFeature();
-                }
-              }}
+          {recordFullSystemAudio && (
+            <ShortcutInput
+              shortcutId="transcribe_full_system_audio"
+              variant="inline"
+              label={t("settings.sound.fullSystemAudio.shortcutLabel")}
+              disabled={isUpdating}
             />
-            <div className="relative h-6 w-11 rounded-full bg-white/[0.09] transition-colors peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-logo-primary/25 peer-checked:bg-background-ui/90 peer-checked:after:translate-x-full rtl:peer-checked:after:-translate-x-full peer-disabled:opacity-50 after:absolute after:start-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:border after:border-white/14 after:bg-white after:shadow-[0_2px_8px_rgba(15,23,42,0.35)] after:transition-all after:content-['']" />
-          </label>
+          )}
         </div>
       </SettingContainer>
     );

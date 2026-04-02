@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSettings } from "../../../hooks/useSettings";
 import { commands, type PostProcessProvider } from "@/bindings";
 import type { ModelOption } from "./types";
@@ -81,6 +81,7 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
   const isGroqProvider = selectedProvider?.id === GROQ_PROVIDER_ID;
   const [appleIntelligenceUnavailable, setAppleIntelligenceUnavailable] =
     useState(false);
+  const autoFetchedSignatures = useRef<Set<string>>(new Set());
 
   // Use settings directly as single source of truth
   const baseUrl = selectedProvider?.base_url ?? "";
@@ -230,7 +231,49 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
 
   const isCustomProvider = selectedProvider?.id === "custom";
 
-  // No automatic fetching - user must click refresh button
+  const autoFetchSignature = useMemo(() => {
+    if (!selectedProvider || isAppleProvider) {
+      return null;
+    }
+
+    const trimmedBaseUrl = baseUrl.trim();
+    const trimmedApiKey = apiKey.trim();
+
+    if (isCustomProvider && !trimmedBaseUrl) {
+      return null;
+    }
+
+    if (!isCustomProvider && !trimmedApiKey) {
+      return null;
+    }
+
+    return `${selectedProviderId}:${trimmedBaseUrl}:${trimmedApiKey}`;
+  }, [
+    apiKey,
+    baseUrl,
+    isAppleProvider,
+    isCustomProvider,
+    selectedProvider,
+    selectedProviderId,
+  ]);
+
+  useEffect(() => {
+    if (!autoFetchSignature || isFetchingModels) {
+      return;
+    }
+
+    if (autoFetchedSignatures.current.has(autoFetchSignature)) {
+      return;
+    }
+
+    autoFetchedSignatures.current.add(autoFetchSignature);
+    void fetchPostProcessModels(selectedProviderId);
+  }, [
+    autoFetchSignature,
+    fetchPostProcessModels,
+    isFetchingModels,
+    selectedProviderId,
+  ]);
 
   return {
     providerOptions,

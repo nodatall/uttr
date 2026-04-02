@@ -8,6 +8,8 @@ interface ShortcutInputProps {
   grouped?: boolean;
   shortcutId: string;
   disabled?: boolean;
+  variant?: "setting" | "inline";
+  label?: string;
 }
 
 /**
