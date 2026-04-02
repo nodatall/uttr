@@ -444,10 +444,20 @@ async fn transcribe_full_pass_with_timeout(
     }
 }
 
+fn should_use_incremental_transcription(settings: &AppSettings, tm: &TranscriptionManager) -> bool {
+    let active_model_id = if settings.selected_model.is_empty() {
+        tm.get_current_model().unwrap_or_default()
+    } else {
+        settings.selected_model.clone()
+    };
+
+    settings.incremental_transcription_enabled
+        && !settings.translate_to_english
+        && is_cloud_model_id(&active_model_id)
+}
+
 fn start_transcription_session(app: &AppHandle, binding_id: &str, started: bool) {
-    let tm = app.state::<Arc<TranscriptionManager>>();
     if started {
-        tm.cancel_incremental_session();
         shortcut::register_cancel_shortcut(app);
     } else {
         utils::hide_recording_overlay(app);
@@ -464,6 +474,7 @@ fn handle_transcription_stop(
     binding_id: &str,
     samples: Option<Vec<f32>>,
     post_process: bool,
+    use_incremental: bool,
     tm: Arc<TranscriptionManager>,
     hm: Arc<HistoryManager>,
 ) {
@@ -518,7 +529,40 @@ fn handle_transcription_stop(
 
         let transcription_time = Instant::now();
         let samples_clone = samples.clone();
-        let transcription_result = if samples.len() < SHORT_UTTERANCE_SAMPLES {
+        let transcription_result = if use_incremental && samples.len() >= SHORT_UTTERANCE_SAMPLES {
+            match timeout(
+                Duration::from_secs(6),
+                tm_for_worker.finish_incremental_session(&binding_id, &samples),
+            )
+            .await
+            {
+                Ok(Ok(text)) => {
+                    debug!(
+                        "Incremental transcription finalized in {:?}",
+                        transcription_time.elapsed()
+                    );
+                    Ok(text)
+                }
+                Ok(Err(incremental_err)) => {
+                    warn!(
+                        "Incremental path unavailable, falling back to full-pass transcription: {}",
+                        incremental_err
+                    );
+                    tm_for_worker.cancel_incremental_session();
+                    transcribe_full_pass_with_timeout(&tm_for_worker, samples).await
+                }
+                Err(_) => {
+                    warn!(
+                        "Incremental finalization timed out; falling back to full-pass transcription"
+                    );
+                    tm_for_worker.cancel_incremental_session();
+                    transcribe_full_pass_with_timeout(&tm_for_worker, samples).await
+                }
+            }
+        } else if samples.len() < SHORT_UTTERANCE_SAMPLES {
+            if use_incremental {
+                tm_for_worker.cancel_incremental_session();
+            }
             debug!(
                 "Using short-utterance fast path ({} samples)",
                 samples.len()
@@ -662,6 +706,7 @@ impl ShortcutAction for TranscribeAction {
         } else {
             settings.selected_model.clone()
         };
+        let use_incremental = should_use_incremental_transcription(&settings, &tm);
         // Cloud models do not load a local engine, so skip preload
         // to avoid adding loading-wait overhead on short recordings.
         if preload_model_id.is_empty() || !is_cloud_model_id(&preload_model_id) {
@@ -722,7 +767,13 @@ impl ShortcutAction for TranscribeAction {
             }
         }
 
+        tm.cancel_incremental_session();
         start_transcription_session(app, &binding_id, recording_started);
+        if recording_started && use_incremental {
+            if let Err(e) = tm.start_incremental_session(&binding_id, Arc::clone(&rm)) {
+                warn!("Failed to start incremental transcription session: {}", e);
+            }
+        }
 
         debug!(
             "TranscribeAction::start completed in {:?}",
@@ -754,8 +805,20 @@ impl ShortcutAction for TranscribeAction {
         // When post-processing is enabled in settings, apply it automatically for normal
         // transcription. The dedicated post-process hotkey still forces it on.
         let post_process = self.post_process || settings.post_process_enabled;
+        let use_incremental = should_use_incremental_transcription(&settings, &tm);
+        if use_incremental {
+            tm.signal_incremental_stop(binding_id);
+        }
         let samples = rm.stop_recording(binding_id);
-        handle_transcription_stop(app, binding_id, samples, post_process, tm, hm);
+        handle_transcription_stop(
+            app,
+            binding_id,
+            samples,
+            post_process,
+            use_incremental,
+            tm,
+            hm,
+        );
 
         debug!(
             "TranscribeAction::stop completed in {:?}",
@@ -789,6 +852,7 @@ impl ShortcutAction for FullSystemTranscribeAction {
             );
         }
 
+        tm.cancel_incremental_session();
         let binding_id = binding_id.to_string();
         change_tray_icon(app, TrayIconState::Recording);
         show_recording_overlay(app);
@@ -870,6 +934,7 @@ impl ShortcutAction for FullSystemTranscribeAction {
             binding_id,
             stop_result.transcription_samples,
             self.post_process || get_settings(app).post_process_enabled,
+            false,
             tm,
             hm,
         );
