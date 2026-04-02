@@ -1713,7 +1713,6 @@ impl TranscriptionManager {
         self.update_last_activity();
 
         let st = std::time::Instant::now();
-        let audio = sanitize_transcription_audio(audio);
 
         debug!("Audio vector length: {}", audio.len());
 
@@ -1869,6 +1868,21 @@ mod tests {
             supported_languages: vec![],
             is_custom: false,
         }
+    }
+
+    #[test]
+    fn sanitize_transcription_audio_replaces_non_finite_and_clamps() {
+        let sanitized = sanitize_transcription_audio(vec![
+            f32::NAN,
+            f32::INFINITY,
+            f32::NEG_INFINITY,
+            -1.5,
+            -0.25,
+            0.5,
+            2.0,
+        ]);
+
+        assert_eq!(sanitized, vec![0.0, 0.0, 0.0, -1.0, -0.25, 0.5, 1.0]);
     }
 
     #[test]
