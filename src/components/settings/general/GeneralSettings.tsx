@@ -24,19 +24,12 @@ export const GeneralSettings: React.FC = () => {
   const { t } = useTranslation();
   const { getSetting } = useSettings();
   const postProcessEnabled = getSetting("post_process_enabled") || false;
-  const recordFullSystemAudio = getSetting("record_full_system_audio") || false;
   const showModelOnboardingButton = import.meta.env.DEV;
 
   return (
     <div className="max-w-3xl w-full mx-auto space-y-6">
       <SettingsGroup title={t("settings.general.title")}>
         <ShortcutInput shortcutId="transcribe" grouped={true} />
-        {recordFullSystemAudio && (
-          <ShortcutInput
-            shortcutId="transcribe_full_system_audio"
-            grouped={true}
-          />
-        )}
         <PushToTalk descriptionMode="tooltip" grouped={true} />
         <AutostartToggle descriptionMode="tooltip" grouped={true} />
         <ShowTrayIcon descriptionMode="tooltip" grouped={true} />

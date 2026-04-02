@@ -164,7 +164,7 @@
             "description": "The keyboard shortcut to cancel the current recording."
           },
           "transcribe_with_post_process": {
-            "name": "Post-Processing Hotkey",
+            "name": "Post-Processing Shortcut",
             "description": "Optional: A dedicated hotkey that always applies AI post-processing to your transcription."
           }
         },
@@ -262,7 +262,8 @@
         "loading": "Loading..."
       },
       "fullSystemAudio": {
-        "title": "Record full system audio",
+        "title": "Enable system audio recording",
+        "shortcutLabel": "Shortcut",
         "description": "Capture system audio and microphone together for calls and meetings.",
         "loading": "Checking support and Screen Recording readiness...",
         "statusCheckFailed": "Uttr could not check full-system audio support right now.",
@@ -511,7 +512,7 @@
         "description": "Enable AI-powered text refinement after transcription"
       },
       "muteWhileRecording": {
-        "label": "Mute While Recording",
+        "label": "Mute speakers during recording",
         "description": "Mute system audio during recording"
       },
       "appendTrailingSpace": {

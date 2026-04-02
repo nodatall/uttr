@@ -17,6 +17,8 @@ interface GlobalShortcutInputProps {
   grouped?: boolean;
   shortcutId: string;
   disabled?: boolean;
+  variant?: "setting" | "inline";
+  label?: string;
 }
 
 export const GlobalShortcutInput: React.FC<GlobalShortcutInputProps> = ({
@@ -24,6 +26,8 @@ export const GlobalShortcutInput: React.FC<GlobalShortcutInputProps> = ({
   grouped = false,
   shortcutId,
   disabled = false,
+  variant = "setting",
+  label,
 }) => {
   const { t } = useTranslation();
   const { getSetting, updateBinding, resetBinding, isUpdating, isLoading } =
@@ -222,8 +226,24 @@ export const GlobalShortcutInput: React.FC<GlobalShortcutInputProps> = ({
     shortcutRefs.current.set(id, ref);
   };
 
-  // If still loading, show loading state
-  if (isLoading) {
+  const renderContent = (content: React.ReactNode) => {
+    if (variant === "inline") {
+      return (
+        <div
+          className={`flex w-full flex-col gap-3 rounded-xl border border-white/7 bg-white/[0.02] px-3 py-3 sm:flex-row sm:items-center sm:justify-between ${
+            disabled ? "opacity-50" : ""
+          }`}
+        >
+          <div className="min-w-0">
+            <div className="text-sm font-medium text-text/88">
+              {label ?? t("settings.general.shortcut.title")}
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center space-x-1">{content}</div>
+        </div>
+      );
+    }
+
     return (
       <SettingContainer
         title={t("settings.general.shortcut.title")}
@@ -231,42 +251,35 @@ export const GlobalShortcutInput: React.FC<GlobalShortcutInputProps> = ({
         descriptionMode={descriptionMode}
         grouped={grouped}
       >
-        <div className="text-sm text-mid-gray">
-          {t("settings.general.shortcut.loading")}
-        </div>
+        {content}
       </SettingContainer>
+    );
+  };
+
+  // If still loading, show loading state
+  if (isLoading) {
+    return renderContent(
+      <div className="text-sm text-mid-gray">
+        {t("settings.general.shortcut.loading")}
+      </div>,
     );
   }
 
   // If no bindings are loaded, show empty state
   if (Object.keys(bindings).length === 0) {
-    return (
-      <SettingContainer
-        title={t("settings.general.shortcut.title")}
-        description={t("settings.general.shortcut.description")}
-        descriptionMode={descriptionMode}
-        grouped={grouped}
-      >
-        <div className="text-sm text-mid-gray">
-          {t("settings.general.shortcut.none")}
-        </div>
-      </SettingContainer>
+    return renderContent(
+      <div className="text-sm text-mid-gray">
+        {t("settings.general.shortcut.none")}
+      </div>,
     );
   }
 
   const binding = bindings[shortcutId];
   if (!binding) {
-    return (
-      <SettingContainer
-        title={t("settings.general.shortcut.title")}
-        description={t("settings.general.shortcut.notFound")}
-        descriptionMode={descriptionMode}
-        grouped={grouped}
-      >
-        <div className="text-sm text-mid-gray">
-          {t("settings.general.shortcut.none")}
-        </div>
-      </SettingContainer>
+    return renderContent(
+      <div className="text-sm text-mid-gray">
+        {t("settings.general.shortcut.none")}
+      </div>,
     );
   }
 
@@ -280,6 +293,42 @@ export const GlobalShortcutInput: React.FC<GlobalShortcutInputProps> = ({
     binding.description,
   );
 
+  const controls = (
+    <div className="flex items-center space-x-1">
+      {editingShortcutId === shortcutId ? (
+        <div
+          ref={(ref) => setShortcutRef(shortcutId, ref)}
+          className="rounded-md border border-logo-primary bg-logo-primary/30 px-2 py-1 text-sm font-semibold"
+        >
+          {formatCurrentKeys()}
+        </div>
+      ) : (
+        <div
+          className={`rounded-md border px-2 py-1 text-sm font-semibold ${
+            disabled
+              ? "cursor-not-allowed border-mid-gray/40 bg-mid-gray/5 text-text/40"
+              : "cursor-pointer border-mid-gray/80 bg-mid-gray/10 hover:border-logo-primary hover:bg-logo-primary/10"
+          }`}
+          onClick={() => {
+            if (!disabled) {
+              void startRecording(shortcutId);
+            }
+          }}
+        >
+          {formatKeyCombination(binding.current_binding, osType)}
+        </div>
+      )}
+      <ResetButton
+        onClick={() => resetBinding(shortcutId)}
+        disabled={disabled || isUpdating(`binding_${shortcutId}`)}
+      />
+    </div>
+  );
+
+  if (variant === "inline") {
+    return renderContent(controls);
+  }
+
   return (
     <SettingContainer
       title={translatedName}
@@ -289,27 +338,7 @@ export const GlobalShortcutInput: React.FC<GlobalShortcutInputProps> = ({
       disabled={disabled}
       layout="horizontal"
     >
-      <div className="flex items-center space-x-1">
-        {editingShortcutId === shortcutId ? (
-          <div
-            ref={(ref) => setShortcutRef(shortcutId, ref)}
-            className="px-2 py-1 text-sm font-semibold border border-logo-primary bg-logo-primary/30 rounded-md"
-          >
-            {formatCurrentKeys()}
-          </div>
-        ) : (
-          <div
-            className="px-2 py-1 text-sm font-semibold bg-mid-gray/10 border border-mid-gray/80 hover:bg-logo-primary/10 rounded-md cursor-pointer hover:border-logo-primary"
-            onClick={() => startRecording(shortcutId)}
-          >
-            {formatKeyCombination(binding.current_binding, osType)}
-          </div>
-        )}
-        <ResetButton
-          onClick={() => resetBinding(shortcutId)}
-          disabled={isUpdating(`binding_${shortcutId}`)}
-        />
-      </div>
+      {controls}
     </SettingContainer>
   );
 };
