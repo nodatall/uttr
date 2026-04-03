@@ -156,6 +156,7 @@ pub struct AudioRecordingManager {
     recorder: Arc<Mutex<Option<AudioRecorder>>>,
     is_open: Arc<Mutex<bool>>,
     is_recording: Arc<Mutex<bool>>,
+    recording_started_at: Arc<Mutex<Option<Instant>>>,
     did_mute: Arc<Mutex<bool>>,
     idle_stop_generation: Arc<AtomicU64>,
 }
@@ -179,6 +180,7 @@ impl AudioRecordingManager {
             recorder: Arc::new(Mutex::new(None)),
             is_open: Arc::new(Mutex::new(false)),
             is_recording: Arc::new(Mutex::new(false)),
+            recording_started_at: Arc::new(Mutex::new(None)),
             did_mute: Arc::new(Mutex::new(false)),
             idle_stop_generation: Arc::new(AtomicU64::new(0)),
         };
@@ -434,6 +436,7 @@ impl AudioRecordingManager {
             }
 
             *self.is_recording.lock().unwrap() = true;
+            *self.recording_started_at.lock().unwrap() = Some(Instant::now());
             *self.state.lock().unwrap() = RecordingState::Recording {
                 binding_id: binding_id.to_string(),
             };
@@ -478,6 +481,7 @@ impl AudioRecordingManager {
                 };
 
                 *self.is_recording.lock().unwrap() = false;
+                *self.recording_started_at.lock().unwrap() = None;
 
                 if should_reset_stream {
                     self.stop_microphone_stream();
@@ -506,6 +510,27 @@ impl AudioRecordingManager {
             *self.state.lock().unwrap(),
             RecordingState::Recording { .. }
         )
+    }
+
+    pub fn current_recording_duration(&self, binding_id: &str) -> Option<Duration> {
+        let state = self.state.lock().unwrap();
+        let matches_binding = matches!(
+            *state,
+            RecordingState::Recording {
+                binding_id: ref active
+            } if active == binding_id
+        );
+        drop(state);
+
+        if !matches_binding {
+            return None;
+        }
+
+        self.recording_started_at
+            .lock()
+            .unwrap()
+            .as_ref()
+            .map(Instant::elapsed)
     }
 
     pub fn is_recording_binding(&self, binding_id: &str) -> bool {
@@ -567,6 +592,7 @@ impl AudioRecordingManager {
             }
 
             *self.is_recording.lock().unwrap() = false;
+            *self.recording_started_at.lock().unwrap() = None;
 
             // In on-demand mode keep mic warm briefly to avoid startup lag
             // for the next utterance.

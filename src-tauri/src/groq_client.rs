@@ -1,9 +1,10 @@
 use crate::access::backend_base_url;
 use crate::settings::{AccessState, EntitlementState, TrialState};
+use log::debug;
 use once_cell::sync::Lazy;
 use reqwest::{multipart, Client, StatusCode};
 use serde::Deserialize;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 const GROQ_BASE_URL: &str = "https://api.groq.com/openai/v1";
 const GROQ_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
@@ -157,7 +158,9 @@ pub async fn transcribe_samples_direct(
         );
     }
 
+    let encode_started = Instant::now();
     let wav = build_wav_bytes(samples)?;
+    let encode_elapsed = encode_started.elapsed();
 
     let endpoint = if translate_to_english {
         "audio/translations"
@@ -180,6 +183,7 @@ pub async fn transcribe_samples_direct(
         form = form.text("language", language.to_string());
     }
 
+    let request_started = Instant::now();
     let response = GROQ_HTTP_CLIENT
         .post(url)
         .bearer_auth(api_key.trim())
@@ -187,6 +191,7 @@ pub async fn transcribe_samples_direct(
         .send()
         .await
         .map_err(|e| format!("Groq request failed: {}", e))?;
+    let request_elapsed = request_started.elapsed();
 
     let status = response.status();
     if !status.is_success() {
@@ -197,10 +202,21 @@ pub async fn transcribe_samples_direct(
         return Err(format!("Groq API request failed ({}): {}", status, body));
     }
 
+    let parse_started = Instant::now();
     let parsed: GroqTranscriptionResponse = response
         .json()
         .await
         .map_err(|e| format!("Failed to parse Groq response: {}", e))?;
+    let parse_elapsed = parse_started.elapsed();
+
+    debug!(
+        "Groq direct transcription timing: model={}, samples={}, encode_ms={}, request_ms={}, parse_ms={}",
+        model,
+        samples.len(),
+        encode_elapsed.as_millis(),
+        request_elapsed.as_millis(),
+        parse_elapsed.as_millis()
+    );
 
     Ok(parsed.text)
 }
@@ -237,7 +253,9 @@ pub async fn transcribe_samples_with_metadata(
         ));
     }
 
+    let encode_started = Instant::now();
     let wav = build_wav_bytes(samples).map_err(ProxyTranscriptionError::Parse)?;
+    let encode_elapsed = encode_started.elapsed();
     let mut form = multipart::Form::new()
         .text("model", model.to_string())
         .part(
@@ -276,6 +294,7 @@ pub async fn transcribe_samples_with_metadata(
         form = form.text("language", language.to_string());
     }
 
+    let request_started = Instant::now();
     let response = PROXY_HTTP_CLIENT
         .post(format!("{}/api/transcribe/cloud", backend_base_url()))
         .header("install-token", install_token.trim())
@@ -288,6 +307,7 @@ pub async fn transcribe_samples_with_metadata(
                 error
             ))
         })?;
+    let request_elapsed = request_started.elapsed();
 
     if !response.status().is_success() {
         let status = response.status();
@@ -298,12 +318,27 @@ pub async fn transcribe_samples_with_metadata(
         return Err(ProxyTranscriptionError::Status { status, body });
     }
 
+    let parse_started = Instant::now();
     let parsed = response
         .json::<ProxyTranscriptionResponse>()
         .await
         .map_err(|error| {
             ProxyTranscriptionError::Parse(format!("Failed to parse backend response: {}", error))
         })?;
+    let parse_elapsed = parse_started.elapsed();
+
+    debug!(
+        "Groq proxy transcription timing: model={}, samples={}, source={:?}, chunk_index={:?}, chunk_count={:?}, audio_seconds={:?}, encode_ms={}, request_ms={}, parse_ms={}",
+        model,
+        samples.len(),
+        metadata.source,
+        metadata.chunk_index,
+        metadata.chunk_count,
+        metadata.audio_seconds,
+        encode_elapsed.as_millis(),
+        request_elapsed.as_millis(),
+        parse_elapsed.as_millis()
+    );
 
     Ok(ProxyTranscriptionResult {
         text: parsed.text,

@@ -16,14 +16,18 @@ mod tauri_impl;
 use log::{error, info, warn};
 use serde::Serialize;
 use specta::Type;
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_autostart::ManagerExt;
 
+use crate::managers::audio::AudioRecordingManager;
+use crate::managers::full_system_audio::FullSystemAudioSessionManager;
 use crate::settings::{
     self, get_settings, AutoSubmitKey, ByokValidationState, ClipboardHandling,
     KeyboardImplementation, OverlayPosition, PasteMethod, ShortcutBinding, SoundTheme, TypingTool,
     APPLE_INTELLIGENCE_DEFAULT_MODEL_ID, APPLE_INTELLIGENCE_PROVIDER_ID,
 };
+use crate::transcription_coordinator::transcription_session_is_active;
 use crate::tray;
 
 // Note: Commands are accessed via shortcut::handy_keys:: in lib.rs
@@ -57,6 +61,11 @@ pub fn init_shortcuts(app: &AppHandle) {
 /// Refresh shortcut registrations for the active implementation.
 /// This is used as a repair path when the OS or a backend drops registrations.
 pub fn refresh_shortcuts(app: &AppHandle) -> Result<(), String> {
+    if shortcut_refresh_blocked_by_active_session(app) {
+        warn!("Skipping shortcut refresh while a transcription recording/session is active");
+        return Ok(());
+    }
+
     let implementation = get_settings(app).keyboard_implementation;
 
     match implementation {
@@ -74,6 +83,17 @@ pub fn refresh_shortcuts(app: &AppHandle) -> Result<(), String> {
             Ok(())
         }
     }
+}
+
+pub fn shortcut_refresh_blocked_by_active_session(app: &AppHandle) -> bool {
+    let audio_recording_active = app
+        .try_state::<Arc<AudioRecordingManager>>()
+        .is_some_and(|manager| manager.is_recording());
+    let full_system_active = app
+        .try_state::<Arc<FullSystemAudioSessionManager>>()
+        .is_some_and(|manager| manager.is_active());
+
+    transcription_session_is_active(audio_recording_active, full_system_active)
 }
 
 /// Register the cancel shortcut (called when recording starts)

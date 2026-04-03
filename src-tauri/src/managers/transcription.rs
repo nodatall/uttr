@@ -1684,6 +1684,20 @@ impl TranscriptionManager {
             .unwrap_or(false)
     }
 
+    pub fn has_incremental_progress(&self, binding_id: &str) -> bool {
+        let guard = self.incremental_session.lock().unwrap();
+        let Some(session) = guard.as_ref() else {
+            return false;
+        };
+
+        if session.binding_id != binding_id {
+            return false;
+        }
+
+        session.runtime.chunk_count.load(Ordering::Relaxed) > 0
+            || session.runtime.next_chunk_start.load(Ordering::Relaxed) > 0
+    }
+
     pub fn cancel_incremental_session(&self) {
         let mut guard = self.incremental_session.lock().unwrap();
         if let Some(session) = guard.take() {

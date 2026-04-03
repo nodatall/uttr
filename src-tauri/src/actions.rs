@@ -47,11 +47,27 @@ impl Drop for FinishGuard {
 
 /// Drop guard that always restores overlay/tray UI state when the
 /// transcription task exits (success, error, or panic unwind).
-struct UiResetGuard(AppHandle);
+struct UiResetGuard {
+    app: AppHandle,
+    enabled: bool,
+}
+
+impl UiResetGuard {
+    fn new(app: AppHandle) -> Self {
+        Self { app, enabled: true }
+    }
+
+    fn suppress(&mut self) {
+        self.enabled = false;
+    }
+}
+
 impl Drop for UiResetGuard {
     fn drop(&mut self) {
-        utils::hide_recording_overlay(&self.0);
-        change_tray_icon(&self.0, TrayIconState::Idle);
+        if self.enabled {
+            utils::hide_recording_overlay(&self.app);
+            change_tray_icon(&self.app, TrayIconState::Idle);
+        }
     }
 }
 
@@ -444,6 +460,78 @@ async fn transcribe_full_pass_with_timeout(
     }
 }
 
+async fn show_no_input_overlay_feedback(
+    app: &AppHandle,
+    include_processing: bool,
+    overlay_epoch: u64,
+) {
+    const TRANSCRIBING_FEEDBACK_MS: u64 = 900;
+    const PROCESSING_FEEDBACK_MS: u64 = 900;
+    const ALERT_VISIBLE_MS: u64 = 5000;
+
+    tokio::time::sleep(Duration::from_millis(TRANSCRIBING_FEEDBACK_MS)).await;
+    if utils::current_overlay_session_epoch() != overlay_epoch {
+        return;
+    }
+
+    if include_processing {
+        show_processing_overlay(app);
+        tokio::time::sleep(Duration::from_millis(PROCESSING_FEEDBACK_MS)).await;
+        if utils::current_overlay_session_epoch() != overlay_epoch {
+            return;
+        }
+    }
+
+    utils::emit_overlay_alert(app, "no_input");
+    tokio::time::sleep(Duration::from_millis(ALERT_VISIBLE_MS)).await;
+    if utils::current_overlay_session_epoch() != overlay_epoch {
+        return;
+    }
+}
+
+fn spawn_no_input_overlay_feedback(app: &AppHandle, include_processing: bool) {
+    let ah = app.clone();
+    let overlay_epoch = utils::current_overlay_session_epoch();
+    tauri::async_runtime::spawn(async move {
+        show_no_input_overlay_feedback(&ah, include_processing, overlay_epoch).await;
+        if utils::current_overlay_session_epoch() == overlay_epoch {
+            utils::hide_recording_overlay(&ah);
+            change_tray_icon(&ah, TrayIconState::Idle);
+        }
+    });
+}
+
+fn silent_audio_levels(samples: &[f32]) -> Option<(f32, f32)> {
+    if samples.is_empty() {
+        return None;
+    }
+
+    let mut sum_squares = 0.0f32;
+    let mut peak = 0.0f32;
+
+    for sample in samples {
+        let amplitude = sample.abs();
+        sum_squares += sample * sample;
+        if amplitude > peak {
+            peak = amplitude;
+        }
+    }
+
+    let rms = (sum_squares / samples.len() as f32).sqrt();
+    Some((rms, peak))
+}
+
+fn is_effectively_silent_audio(samples: &[f32]) -> bool {
+    const MAX_SILENT_RMS: f32 = 0.0015;
+    const MAX_SILENT_PEAK: f32 = 0.01;
+
+    let Some((rms, peak)) = silent_audio_levels(samples) else {
+        return true;
+    };
+
+    rms <= MAX_SILENT_RMS && peak <= MAX_SILENT_PEAK
+}
+
 fn should_use_incremental_transcription(settings: &AppSettings, tm: &TranscriptionManager) -> bool {
     let active_model_id = if settings.selected_model.is_empty() {
         tm.get_current_model().unwrap_or_default()
@@ -473,6 +561,7 @@ fn handle_transcription_stop(
     app: &AppHandle,
     binding_id: &str,
     samples: Option<Vec<f32>>,
+    recording_duration: Option<Duration>,
     post_process: bool,
     use_incremental: bool,
     tm: Arc<TranscriptionManager>,
@@ -483,11 +572,12 @@ fn handle_transcription_stop(
     let task_completed = Arc::new(AtomicBool::new(false));
     let task_completed_for_worker = Arc::clone(&task_completed);
     let tm_for_worker = tm.clone();
+    let recording_duration = recording_duration.unwrap_or_default();
 
     let transcription_task = tauri::async_runtime::spawn(async move {
         let _guard = FinishGuard(ah.clone());
         let _completion_guard = CompletionGuard(task_completed_for_worker);
-        let _ui_guard = UiResetGuard(ah.clone());
+        let mut ui_guard = UiResetGuard::new(ah.clone());
         let binding_id = binding_id.clone();
         debug!(
             "Starting async transcription task for binding: {}",
@@ -496,8 +586,10 @@ fn handle_transcription_stop(
 
         let Some(samples) = samples else {
             warn!("No samples retrieved from recording stop");
-            utils::hide_recording_overlay(&ah);
-            change_tray_icon(&ah, TrayIconState::Idle);
+            if recording_duration >= Duration::from_secs(1) {
+                ui_guard.suppress();
+                spawn_no_input_overlay_feedback(&ah, post_process);
+            }
             return;
         };
 
@@ -509,27 +601,52 @@ fn handle_transcription_stop(
         );
 
         if samples.is_empty() {
-            let settings = get_settings(&ah);
-            let binding = settings
-                .bindings
-                .get(&binding_id)
-                .map(|b| b.current_binding.as_str())
-                .unwrap_or("");
-            let message = if binding == "fn" {
-                "No audio captured. The Fn-only shortcut can be unreliable. Use a shortcut like Option+Space."
+            if recording_duration >= Duration::from_secs(1) {
+                ui_guard.suppress();
+                spawn_no_input_overlay_feedback(&ah, post_process);
             } else {
-                "No audio captured. Hold the push-to-talk key a bit longer or choose a different shortcut."
-            };
-            warn!("{}", message);
-            let _ = ah.emit("transcription-error", message.to_string());
-            utils::hide_recording_overlay(&ah);
-            change_tray_icon(&ah, TrayIconState::Idle);
+                let settings = get_settings(&ah);
+                let binding = settings
+                    .bindings
+                    .get(&binding_id)
+                    .map(|b| b.current_binding.as_str())
+                    .unwrap_or("");
+                let message = if binding == "fn" {
+                    "No audio captured. The Fn-only shortcut can be unreliable. Use a shortcut like Option+Space."
+                } else {
+                    "No audio captured. Hold the push-to-talk key a bit longer or choose a different shortcut."
+                };
+                warn!("{}", message);
+                let _ = ah.emit("transcription-error", message.to_string());
+                utils::hide_recording_overlay(&ah);
+                change_tray_icon(&ah, TrayIconState::Idle);
+            }
             return;
         }
 
+        if recording_duration >= Duration::from_secs(1) {
+            if let Some((rms, peak)) = silent_audio_levels(&samples) {
+                debug!(
+                    "Recording audio levels for '{}': duration_ms={}, rms={:.6}, peak={:.6}",
+                    binding_id,
+                    recording_duration.as_millis(),
+                    rms,
+                    peak
+                );
+            }
+        }
+
+        let suspected_no_input =
+            recording_duration >= Duration::from_secs(1) && is_effectively_silent_audio(&samples);
+
         let transcription_time = Instant::now();
         let samples_clone = samples.clone();
-        let transcription_result = if use_incremental && samples.len() >= SHORT_UTTERANCE_SAMPLES {
+        let has_incremental_progress =
+            use_incremental && tm_for_worker.has_incremental_progress(&binding_id);
+        let transcription_result = if use_incremental
+            && samples.len() >= SHORT_UTTERANCE_SAMPLES
+            && has_incremental_progress
+        {
             match timeout(
                 Duration::from_secs(6),
                 tm_for_worker.finish_incremental_session(&binding_id, &samples),
@@ -569,10 +686,22 @@ fn handle_transcription_stop(
             );
             transcribe_full_pass_with_timeout(&tm_for_worker, samples).await
         } else {
+            if use_incremental && !has_incremental_progress {
+                debug!(
+                    "Skipping incremental finalization because no chunk completed for binding '{}'",
+                    binding_id
+                );
+                tm_for_worker.cancel_incremental_session();
+            }
             transcribe_full_pass_with_timeout(&tm_for_worker, samples).await
         };
         match transcription_result {
             Ok(transcription) => {
+                if suspected_no_input && transcription.trim().is_empty() {
+                    ui_guard.suppress();
+                    spawn_no_input_overlay_feedback(&ah, post_process);
+                    return;
+                }
                 if tm_for_worker.is_cancel_requested() {
                     debug!("Transcription was cancelled before output handling");
                     utils::hide_recording_overlay(&ah);
@@ -654,6 +783,11 @@ fn handle_transcription_stop(
                 }
             }
             Err(err) => {
+                if suspected_no_input {
+                    ui_guard.suppress();
+                    spawn_no_input_overlay_feedback(&ah, post_process);
+                    return;
+                }
                 if tm_for_worker.is_cancel_requested() {
                     debug!("Transcription task cancelled");
                     utils::hide_recording_overlay(&ah);
@@ -809,11 +943,13 @@ impl ShortcutAction for TranscribeAction {
         if use_incremental {
             tm.signal_incremental_stop(binding_id);
         }
+        let recording_duration = rm.current_recording_duration(binding_id);
         let samples = rm.stop_recording(binding_id);
         handle_transcription_stop(
             app,
             binding_id,
             samples,
+            recording_duration,
             post_process,
             use_incremental,
             tm,
@@ -933,6 +1069,7 @@ impl ShortcutAction for FullSystemTranscribeAction {
             app,
             binding_id,
             stop_result.transcription_samples,
+            None,
             self.post_process || get_settings(app).post_process_enabled,
             false,
             tm,

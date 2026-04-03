@@ -908,8 +908,7 @@ pub fn get_default_settings() -> AppSettings {
         ShortcutBinding {
             id: "transcribe_full_system_audio".to_string(),
             name: "Transcribe Full System Audio".to_string(),
-            description: "Converts your full-system and microphone audio into text."
-                .to_string(),
+            description: "Converts your full-system and microphone audio into text.".to_string(),
             default_binding: default_full_system_shortcut.to_string(),
             current_binding: default_full_system_shortcut.to_string(),
         },
