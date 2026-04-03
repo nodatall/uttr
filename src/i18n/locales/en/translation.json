@@ -616,6 +616,8 @@
     "description": "Change the language of the Uttr interface"
   },
   "overlay": {
+    "noInputTitle": "No input detected",
+    "noInputDescription": "Check your microphone settings.",
     "transcribing": "Transcribing...",
     "processing": "Processing..."
   }

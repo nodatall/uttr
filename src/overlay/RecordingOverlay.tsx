@@ -6,12 +6,15 @@ import { getLanguageDirection } from "@/lib/utils/rtl";
 import SiriWave from "siriwave";
 
 type OverlayState = "recording" | "transcribing" | "processing";
+type OverlayAlertKind = "no_input";
 
 const INPUT_SMOOTHING_KEEP = 0.58;
 const INPUT_SMOOTHING_NEW = 0.42;
 const WAVE_ENERGY_POWER = 0.72;
 const QUIET_SPEECH_GAIN = 2.85;
 const QUIET_FLOOR = 0.12;
+const SILENCE_ACTIVITY_START = 0.004;
+const SILENCE_ACTIVITY_RANGE = 0.018;
 const WAVE_ENERGY_MIN = 0;
 const WAVE_ENERGY_MAX = 1;
 const WAVE_AMPLITUDE_MIN = 0.9;
@@ -23,6 +26,8 @@ const WAVE_PEAK_GUARD = 0.72;
 const WAVE_SPEED_MIN = 0.1;
 const WAVE_SPEED_RANGE = 0.24;
 const WAVE_SPEED_CAP = 0.36;
+const WAVE_IDLE_AMPLITUDE = 0.58;
+const WAVE_IDLE_SPEED = 0.055;
 const IOS9_BASELINE_OFFSET_PX = 6;
 const RECORDING_CURVES = [
   { color: "255,255,255", supportLine: true },
@@ -33,6 +38,8 @@ const RECORDING_CURVES = [
 
 const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
+const lerp = (start: number, end: number, amount: number) =>
+  start + (end - start) * amount;
 
 const RecordingOverlay: React.FC = () => {
   const [waveHostWidth, setWaveHostWidth] = useState(0);
@@ -43,19 +50,29 @@ const RecordingOverlay: React.FC = () => {
   const [isVisible, setIsVisible] = useState(true);
   const [state, setState] = useState<OverlayState>("recording");
   const [levels, setLevels] = useState<number[]>(Array(16).fill(0));
+  const [overlayAlert, setOverlayAlert] = useState<OverlayAlertKind | null>(
+    null,
+  );
+  const [hasDetectedSpeech, setHasDetectedSpeech] = useState(false);
   const waveContainerRef = useRef<HTMLDivElement | null>(null);
   const siriWaveRef = useRef<SiriWave | null>(null);
   const smoothedLevelsRef = useRef<number[]>(Array(16).fill(0));
+  const hasDetectedSpeechRef = useRef(false);
   const isVisibleRef = useRef(true);
   const lastHideAtRef = useRef(0);
   const previousStateRef = useRef<OverlayState>("recording");
   const direction = getLanguageDirection(i18n.language);
   const isRecordingState = state === "recording";
   const isProcessingState = state === "transcribing" || state === "processing";
+  const shouldShowOverlayAlert = overlayAlert !== null;
 
   useEffect(() => {
     isVisibleRef.current = isVisible;
   }, [isVisible]);
+
+  useEffect(() => {
+    hasDetectedSpeechRef.current = hasDetectedSpeech;
+  }, [hasDetectedSpeech]);
 
   useEffect(() => {
     let isDisposed = false;
@@ -69,6 +86,10 @@ const RecordingOverlay: React.FC = () => {
         const overlayState = event.payload as OverlayState;
         isVisibleRef.current = true;
         setState(overlayState);
+        smoothedLevelsRef.current = Array(16).fill(0);
+        setLevels(Array(16).fill(0));
+        setOverlayAlert(null);
+        setHasDetectedSpeech(false);
         setIsVisible(true);
       });
 
@@ -76,8 +97,18 @@ const RecordingOverlay: React.FC = () => {
       const unlistenHide = await listen("hide-overlay", () => {
         isVisibleRef.current = false;
         lastHideAtRef.current = Date.now();
+        setOverlayAlert(null);
+        setHasDetectedSpeech(false);
         setIsVisible(false);
       });
+
+      const unlistenAlert = await listen<OverlayAlertKind>(
+        "overlay-alert",
+        (event) => {
+          setOverlayAlert(event.payload);
+          setIsVisible(true);
+        },
+      );
 
       // Listen for mic-level updates
       const unlistenLevel = await listen<number[]>("mic-level", (event) => {
@@ -103,16 +134,18 @@ const RecordingOverlay: React.FC = () => {
 
         smoothedLevelsRef.current = smoothed;
         setLevels(smoothed);
+
       });
 
       if (isDisposed) {
         unlistenShow();
         unlistenHide();
+        unlistenAlert();
         unlistenLevel();
         return;
       }
 
-      unlistenFns.push(unlistenShow, unlistenHide, unlistenLevel);
+      unlistenFns.push(unlistenShow, unlistenHide, unlistenAlert, unlistenLevel);
     };
 
     void setupEventListeners();
@@ -204,11 +237,38 @@ const RecordingOverlay: React.FC = () => {
     devicePixelRatio,
   ]);
 
+  const averageLevel = useMemo(
+    () => levels.reduce((sum, level) => sum + level, 0) / levels.length,
+    [levels],
+  );
+  const peakLevel = useMemo(() => Math.max(...levels, 0), [levels]);
+
   const waveEnergy = useMemo(() => {
-    const average = levels.reduce((sum, level) => sum + level, 0) / levels.length;
-    const boosted = Math.pow(average, WAVE_ENERGY_POWER) * QUIET_SPEECH_GAIN + QUIET_FLOOR;
+    const boosted =
+      Math.pow(averageLevel, WAVE_ENERGY_POWER) * QUIET_SPEECH_GAIN +
+      QUIET_FLOOR;
     return clamp(boosted, WAVE_ENERGY_MIN, WAVE_ENERGY_MAX);
-  }, [levels]);
+  }, [averageLevel]);
+  const waveMotionBlend = useMemo(() => {
+    const activityLevel = Math.max(averageLevel * 1.9, peakLevel * 0.95);
+    const activity = clamp(
+      (activityLevel - SILENCE_ACTIVITY_START) / SILENCE_ACTIVITY_RANGE,
+      0,
+      1,
+    );
+    return Math.pow(activity, 0.7);
+  }, [averageLevel, peakLevel]);
+  const showWave = isRecordingState;
+
+  useEffect(() => {
+    if (!showWave || hasDetectedSpeechRef.current) {
+      return;
+    }
+
+    if (waveMotionBlend >= 0.72) {
+      setHasDetectedSpeech(true);
+    }
+  }, [showWave, waveMotionBlend]);
 
   useEffect(() => {
     if (!isVisible) {
@@ -220,10 +280,20 @@ const RecordingOverlay: React.FC = () => {
       return;
     }
 
-    if (isProcessingState) {
+    if (isProcessingState || shouldShowOverlayAlert) {
       if (previousStateRef.current === "recording" && siriWave.run) {
         siriWave.stop();
       }
+      previousStateRef.current = state;
+      return;
+    }
+
+    if (!showWave) {
+      if (siriWave.run) {
+        siriWave.stop();
+      }
+      siriWave.setAmplitude(WAVE_AMPLITUDE_MIN * 0.45);
+      siriWave.setSpeed(WAVE_SPEED_MIN * 0.5);
       previousStateRef.current = state;
       return;
     }
@@ -232,7 +302,7 @@ const RecordingOverlay: React.FC = () => {
       siriWave.start();
     }
 
-    const amplitude = clamp(
+    const activeAmplitude = clamp(
       (WAVE_AMPLITUDE_MIN + waveEnergy * WAVE_AMPLITUDE_RANGE) *
         WAVE_AMPLITUDE_BOOST,
       WAVE_AMPLITUDE_MIN,
@@ -241,15 +311,45 @@ const RecordingOverlay: React.FC = () => {
         WAVE_MAX_AMPLITUDE_FACTOR *
         WAVE_PEAK_GUARD,
     );
-    const speed = clamp(
+    const activeSpeed = clamp(
       WAVE_SPEED_MIN + waveEnergy * WAVE_SPEED_RANGE,
       WAVE_SPEED_MIN,
       WAVE_SPEED_CAP,
     );
+    const amplitude = hasDetectedSpeech
+      ? activeAmplitude
+      : lerp(WAVE_IDLE_AMPLITUDE, activeAmplitude, waveMotionBlend);
+    const speed = hasDetectedSpeech
+      ? activeSpeed
+      : lerp(WAVE_IDLE_SPEED, activeSpeed, waveMotionBlend);
     siriWave.setAmplitude(amplitude);
     siriWave.setSpeed(speed);
     previousStateRef.current = state;
-  }, [isVisible, isProcessingState, state, waveEnergy]);
+  }, [
+    isVisible,
+    isProcessingState,
+    shouldShowOverlayAlert,
+    showWave,
+    hasDetectedSpeech,
+    state,
+    waveMotionBlend,
+    waveEnergy,
+  ]);
+
+  const noInputTitle =
+    overlayAlert === "no_input"
+      ? i18n.t("overlay.noInputTitle", {
+          defaultValue: "No input detected",
+        })
+      : "";
+  const noInputDescription =
+    overlayAlert === "no_input"
+      ? i18n.t("overlay.noInputDescription", {
+          defaultValue: "Check your microphone settings.",
+        })
+      : "";
+  const overlayAlertClassName =
+    overlayAlert === "no_input" ? "overlay-alert-pane-warning" : "";
 
   return (
     <div
@@ -261,11 +361,25 @@ const RecordingOverlay: React.FC = () => {
       >
         <div
           ref={waveContainerRef}
-          className={`siriwave-host ${isProcessingState ? "siriwave-host-processing" : ""}`}
+          className={`siriwave-host ${isProcessingState ? "siriwave-host-processing" : ""} ${
+            shouldShowOverlayAlert ? "siriwave-host-hidden" : ""
+          }`}
           role="presentation"
           aria-hidden
         />
-        {isProcessingState && (
+        {shouldShowOverlayAlert && (
+          <div
+            className={`overlay-alert-pane ${overlayAlertClassName}`}
+            role="status"
+            aria-live="polite"
+          >
+            <div className="overlay-alert-title">{noInputTitle}</div>
+            <div className="overlay-alert-description">
+              {noInputDescription}
+            </div>
+          </div>
+        )}
+        {isProcessingState && !shouldShowOverlayAlert && (
           <div className="overlay-spinner-pane" aria-hidden>
             <div className="overlay-spinner" />
           </div>

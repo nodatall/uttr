@@ -179,6 +179,7 @@ mod tests {
         settings
             .post_process_api_keys
             .insert("groq".to_string(), "   ".to_string());
+
         assert_eq!(legacy_groq_api_key(&settings), None);
     }
 }
