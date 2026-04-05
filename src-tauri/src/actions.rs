@@ -467,7 +467,7 @@ async fn show_no_input_overlay_feedback(
 ) {
     const TRANSCRIBING_FEEDBACK_MS: u64 = 900;
     const PROCESSING_FEEDBACK_MS: u64 = 900;
-    const ALERT_VISIBLE_MS: u64 = 5000;
+    const ALERT_VISIBLE_MS: u64 = 2000;
 
     tokio::time::sleep(Duration::from_millis(TRANSCRIBING_FEEDBACK_MS)).await;
     if utils::current_overlay_session_epoch() != overlay_epoch {

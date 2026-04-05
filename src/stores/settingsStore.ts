@@ -637,7 +637,6 @@ export const useSettingsStore = create<SettingsStore>()(
     initialize: async () => {
       const {
         refreshSettings,
-        refreshInstallAccess,
         checkCustomSounds,
         loadDefaultSettings,
       } = get();
@@ -649,7 +648,6 @@ export const useSettingsStore = create<SettingsStore>()(
       await Promise.all([
         loadDefaultSettings(),
         refreshSettings(),
-        refreshInstallAccess(),
         checkCustomSounds(),
       ]);
     },

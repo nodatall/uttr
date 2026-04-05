@@ -8,13 +8,16 @@ import SiriWave from "siriwave";
 type OverlayState = "recording" | "transcribing" | "processing";
 type OverlayAlertKind = "no_input";
 
-const INPUT_SMOOTHING_KEEP = 0.58;
-const INPUT_SMOOTHING_NEW = 0.42;
+const INPUT_ATTACK_SMOOTHING_KEEP = 0.18;
+const INPUT_ATTACK_SMOOTHING_NEW = 0.82;
+const INPUT_RELEASE_SMOOTHING_KEEP = 0.74;
+const INPUT_RELEASE_SMOOTHING_NEW = 0.26;
 const WAVE_ENERGY_POWER = 0.72;
 const QUIET_SPEECH_GAIN = 2.85;
 const QUIET_FLOOR = 0.12;
-const SILENCE_ACTIVITY_START = 0.004;
-const SILENCE_ACTIVITY_RANGE = 0.018;
+const SILENCE_ACTIVITY_START = 0.0025;
+const SILENCE_ACTIVITY_RANGE = 0.012;
+const SPEECH_WAKE_THRESHOLD = 0.42;
 const WAVE_ENERGY_MIN = 0;
 const WAVE_ENERGY_MAX = 1;
 const WAVE_AMPLITUDE_MIN = 0.9;
@@ -129,7 +132,21 @@ const RecordingOverlay: React.FC = () => {
         // Apply smoothing to reduce jitter
         const smoothed = smoothedLevelsRef.current.map((prev, i) => {
           const target = newLevels[i] || 0;
-          return prev * INPUT_SMOOTHING_KEEP + target * INPUT_SMOOTHING_NEW;
+          if (target > prev) {
+            if (prev < 0.015 && target > 0.05) {
+              return target;
+            }
+
+            return (
+              prev * INPUT_ATTACK_SMOOTHING_KEEP +
+              target * INPUT_ATTACK_SMOOTHING_NEW
+            );
+          }
+
+          return (
+            prev * INPUT_RELEASE_SMOOTHING_KEEP +
+            target * INPUT_RELEASE_SMOOTHING_NEW
+          );
         });
 
         smoothedLevelsRef.current = smoothed;
@@ -265,7 +282,7 @@ const RecordingOverlay: React.FC = () => {
       return;
     }
 
-    if (waveMotionBlend >= 0.72) {
+    if (waveMotionBlend >= SPEECH_WAKE_THRESHOLD) {
       setHasDetectedSpeech(true);
     }
   }, [showWave, waveMotionBlend]);

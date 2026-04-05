@@ -307,6 +307,7 @@ pub fn run() {
         commands::get_app_dir_path,
         commands::get_app_settings,
         commands::get_default_settings,
+        commands::complete_onboarding,
         commands::get_log_dir_path,
         commands::set_log_level,
         commands::open_recordings_folder,
