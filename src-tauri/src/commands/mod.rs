@@ -40,6 +40,17 @@ pub fn get_default_settings() -> Result<AppSettings, String> {
 
 #[tauri::command]
 #[specta::specta]
+pub fn complete_onboarding(app: AppHandle) -> Result<(), String> {
+    let mut settings = get_settings(&app);
+    if !settings.onboarding_completed {
+        settings.onboarding_completed = true;
+        write_settings(&app, settings);
+    }
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn change_byok_enabled_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
     let mut settings = get_settings(&app);
     if enabled {

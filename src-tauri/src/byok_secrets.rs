@@ -16,6 +16,19 @@ struct GroqVault {
     stronghold: Stronghold,
 }
 
+fn env_groq_api_key() -> Option<String> {
+    for key_name in ["UTTR_GROQ_API_KEY", "GROQ_API_KEY"] {
+        if let Ok(value) = std::env::var(key_name) {
+            let trimmed = value.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+
+    None
+}
+
 fn legacy_groq_api_key(settings: &AppSettings) -> Option<String> {
     settings
         .post_process_api_keys
@@ -118,25 +131,14 @@ pub fn store_groq_api_key(
 }
 
 pub fn load_groq_api_key(
-    app: &AppHandle,
+    _app: &AppHandle,
     settings: &AppSettings,
 ) -> Result<Option<String>, String> {
-    let fallback_key = legacy_groq_api_key(settings);
+    if let Some(env_key) = env_groq_api_key() {
+        return Ok(Some(env_key));
+    }
 
-    let vault = match vault(app, settings) {
-        Ok(vault) => vault,
-        Err(error) => {
-            if fallback_key.is_some() {
-                return Ok(fallback_key);
-            }
-            return Err(error);
-        }
-    };
-
-    let maybe_bytes = read_store_bytes(&vault)?;
-    Ok(maybe_bytes
-        .and_then(|bytes| String::from_utf8(bytes).ok())
-        .or(fallback_key))
+    Ok(legacy_groq_api_key(settings))
 }
 
 pub fn migrate_groq_api_key(app: &AppHandle, settings: &mut AppSettings) -> Result<bool, String> {
@@ -181,5 +183,20 @@ mod tests {
             .insert("groq".to_string(), "   ".to_string());
 
         assert_eq!(legacy_groq_api_key(&settings), None);
+    }
+
+    #[test]
+    fn env_groq_api_key_uses_uttr_specific_override_first() {
+        unsafe {
+            std::env::set_var("GROQ_API_KEY", "gsk_general");
+            std::env::set_var("UTTR_GROQ_API_KEY", "gsk_uttr");
+        }
+
+        assert_eq!(env_groq_api_key().as_deref(), Some("gsk_uttr"));
+
+        unsafe {
+            std::env::remove_var("UTTR_GROQ_API_KEY");
+            std::env::remove_var("GROQ_API_KEY");
+        }
     }
 }

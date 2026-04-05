@@ -182,10 +182,18 @@ fn ensure_identity(app: &AppHandle) -> AppSettings {
     settings
 }
 
+fn byok_access_snapshot(app: &AppHandle, settings: &AppSettings) -> InstallAccessSnapshot {
+    access_snapshot(settings, has_groq_secret(app, settings))
+}
+
 async fn bootstrap_install_state_internal(
     app: &AppHandle,
 ) -> Result<InstallAccessSnapshot, String> {
     let mut settings = ensure_identity(app);
+    if has_groq_secret(app, &settings) {
+        return Ok(byok_access_snapshot(app, &settings));
+    }
+
     let target_url = backend_url("/api/trial/bootstrap");
     let response = BACKEND_HTTP_CLIENT
         .post(&target_url)
@@ -230,6 +238,10 @@ async fn refresh_entitlement_state_internal(
     app: &AppHandle,
 ) -> Result<InstallAccessSnapshot, String> {
     let mut settings = ensure_identity(app);
+    if has_groq_secret(app, &settings) {
+        return Ok(byok_access_snapshot(app, &settings));
+    }
+
     if settings.install_token.trim().is_empty() {
         let _ = bootstrap_install_state_internal(app).await?;
         settings = get_settings(app);
@@ -276,6 +288,10 @@ async fn refresh_entitlement_state_internal(
 
 async fn request_claim_token_internal(app: &AppHandle) -> Result<ClaimTokenResult, String> {
     let mut settings = ensure_identity(app);
+    if has_groq_secret(app, &settings) {
+        return Err("Claim flow is not required when using a Groq BYOK key.".to_string());
+    }
+
     if settings.install_token.trim().is_empty() {
         let _ = bootstrap_install_state_internal(app).await?;
         settings = get_settings(app);

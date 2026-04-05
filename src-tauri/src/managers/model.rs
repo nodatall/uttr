@@ -45,6 +45,7 @@ pub fn groq_api_model_name(model_id: &str) -> Option<&'static str> {
     }
 }
 
+#[cfg(test)]
 fn choose_default_local_model_id(available_models: Vec<ModelInfo>) -> Option<String> {
     let mut local_models: Vec<_> = available_models
         .into_iter()
@@ -629,34 +630,6 @@ impl ModelManager {
                 );
                 settings.selected_model = String::new();
                 write_settings(&self.app_handle, settings.clone());
-            }
-        }
-
-        // If no model is selected, pick a default local model.
-        // Priority:
-        // 1) Parakeet V3 (if downloaded)
-        // 2) any other downloaded recommended model
-        // 3) first downloaded local model by id
-        if settings.selected_model.is_empty() {
-            let models = self.available_models.lock().unwrap();
-            let selected_model_id =
-                choose_default_local_model_id(models.values().cloned().collect());
-            if let Some(selected_model_id) = selected_model_id {
-                let available_model = match models.get(&selected_model_id) {
-                    Some(model) => model,
-                    None => return Ok(()),
-                };
-                info!(
-                    "Auto-selecting model: {} ({})",
-                    available_model.id, available_model.name
-                );
-
-                // Update settings with the selected model
-                let mut updated_settings = settings;
-                updated_settings.selected_model = selected_model_id.clone();
-                write_settings(&self.app_handle, updated_settings);
-
-                info!("Successfully auto-selected model: {}", selected_model_id);
             }
         }
 

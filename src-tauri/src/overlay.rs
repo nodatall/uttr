@@ -34,7 +34,6 @@ const OVERLAY_WIDTH: f64 = 172.0;
 const OVERLAY_HEIGHT: f64 = 42.0;
 const OVERLAY_ALERT_WIDTH: f64 = 260.0;
 const OVERLAY_ALERT_HEIGHT: f64 = 72.0;
-const OVERLAY_ALERT_Y_SHIFT: f64 = 14.0;
 const OVERLAY_LABEL_BASE: &str = "recording_overlay";
 static OVERLAY_SESSION_EPOCH: AtomicU64 = AtomicU64::new(1);
 
@@ -375,16 +374,11 @@ fn apply_overlay_dimensions(app_handle: &AppHandle, width: f64, height: f64) {
             };
             let (x, y, scale) =
                 calculate_overlay_position_for_monitor(app_handle, &monitor, width, height);
-            let y_adjusted = if height > OVERLAY_HEIGHT {
-                y / scale - OVERLAY_ALERT_Y_SHIFT
-            } else {
-                y / scale
-            };
             let _ =
                 overlay_window.set_size(tauri::Size::Logical(tauri::LogicalSize { width, height }));
             let _ = overlay_window.set_position(tauri::Position::Logical(tauri::LogicalPosition {
                 x: x / scale,
-                y: y_adjusted,
+                y: y / scale,
             }));
         }
         return;
@@ -402,15 +396,10 @@ fn apply_overlay_dimensions(app_handle: &AppHandle, width: f64, height: f64) {
             }
 
             if let Some((x, y)) = calculate_overlay_position(app_handle, width, height) {
-                let y_adjusted = if height > OVERLAY_HEIGHT {
-                    y - OVERLAY_ALERT_Y_SHIFT
-                } else {
-                    y
-                };
                 let _ =
                     overlay_window.set_position(tauri::Position::Logical(tauri::LogicalPosition {
                         x,
-                        y: y_adjusted,
+                        y,
                     }));
             }
         }

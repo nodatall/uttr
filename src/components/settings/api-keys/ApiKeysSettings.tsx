@@ -8,11 +8,18 @@ export const ApiKeysSettings: React.FC = () => {
   const { t } = useTranslation();
   const {
     installAccess,
+    refreshInstallAccess,
     updatePostProcessApiKey,
     isUpdating,
   } = useSettings();
 
   const [groqApiKeyDraft, setGroqApiKeyDraft] = useState("");
+
+  useEffect(() => {
+    if (installAccess === null) {
+      void refreshInstallAccess();
+    }
+  }, [installAccess, refreshInstallAccess]);
 
   useEffect(() => {
     setGroqApiKeyDraft("");

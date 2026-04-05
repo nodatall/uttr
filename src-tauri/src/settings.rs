@@ -397,6 +397,8 @@ pub struct AppSettings {
     pub update_checks_enabled: bool,
     #[serde(default = "default_model")]
     pub selected_model: String,
+    #[serde(default)]
+    pub onboarding_completed: bool,
     #[serde(default = "default_install_id")]
     pub install_id: String,
     #[serde(default = "default_device_fingerprint_hash")]
@@ -826,29 +828,23 @@ pub(crate) fn ensure_install_identity_defaults(
     changed
 }
 
+fn ensure_onboarding_defaults(settings: &mut AppSettings) -> bool {
+    if settings.onboarding_completed {
+        return false;
+    }
+
+    if settings.selected_model.trim().is_empty() {
+        return false;
+    }
+
+    settings.onboarding_completed = true;
+    true
+}
+
 fn ensure_groq_secret_is_migrated(app: &AppHandle, settings: &mut AppSettings) -> bool {
-    let Some(current_key) = settings.post_process_api_keys.get("groq") else {
-        return false;
-    };
-
-    if current_key.trim().is_empty() {
-        return false;
-    }
-
-    if GROQ_SECRET_MIGRATION_ATTEMPTED.set(()).is_err() {
-        return false;
-    }
-
-    match crate::byok_secrets::migrate_groq_api_key(app, settings) {
-        Ok(changed) => changed,
-        Err(error) => {
-            warn!(
-                "Failed to migrate Groq BYOK secret to Stronghold: {}",
-                error
-            );
-            false
-        }
-    }
+    let _ = app;
+    let _ = settings;
+    false
 }
 
 pub const SETTINGS_STORE_PATH: &str = "settings_store.json";
@@ -934,6 +930,7 @@ pub fn get_default_settings() -> AppSettings {
         autostart_enabled: default_autostart_enabled(),
         update_checks_enabled: default_update_checks_enabled(),
         selected_model: "".to_string(),
+        onboarding_completed: false,
         install_id: default_install_id(),
         device_fingerprint_hash: default_device_fingerprint_hash(),
         install_token: default_install_token(),
@@ -1069,6 +1066,10 @@ pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
         changed = true;
     }
 
+    if ensure_onboarding_defaults(&mut settings) {
+        changed = true;
+    }
+
     if ensure_groq_secret_is_migrated(app, &mut settings) {
         changed = true;
     }
@@ -1117,6 +1118,10 @@ pub fn get_settings(app: &AppHandle) -> AppSettings {
     }
 
     if ensure_install_identity_defaults(app, &mut settings) {
+        changed = true;
+    }
+
+    if ensure_onboarding_defaults(&mut settings) {
         changed = true;
     }
 

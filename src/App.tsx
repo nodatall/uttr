@@ -32,9 +32,6 @@ function App() {
   const [onboardingStep, setOnboardingStep] = useState<OnboardingStep | null>(
     null,
   );
-  // Track if this is a returning user who just needs to grant permissions
-  // (vs a new user who needs full onboarding including model selection)
-  const [isReturningUser, setIsReturningUser] = useState(false);
   const [currentSection, setCurrentSection] =
     useState<SidebarSection>("general");
   const { settings, updateSetting } = useSettings();
@@ -163,19 +160,14 @@ function App() {
 
   const checkOnboardingStatus = async () => {
     try {
-      const [currentModelResult, modelsResult] = await Promise.all([
-        commands.getCurrentModel(),
-        commands.hasAnyModelsAvailable(),
-      ]);
+      const settingsResult = await commands.getAppSettings();
 
-      const hasCurrentModel =
-        currentModelResult.status === "ok" &&
-        currentModelResult.data.trim().length > 0;
-      const hasModels = modelsResult.status === "ok" && modelsResult.data;
+      const onboardingCompleted =
+        settingsResult.status === "ok" &&
+        Boolean(settingsResult.data.onboarding_completed);
 
-      if (hasCurrentModel || hasModels) {
+      if (onboardingCompleted) {
         // Returning user - but check if they need to grant permissions on macOS
-        setIsReturningUser(true);
         if (platform() === "macos") {
           try {
             const [hasAccessibility, hasMicrophone] = await Promise.all([
@@ -194,8 +186,7 @@ function App() {
         }
         setOnboardingStep("done");
       } else {
-        // New user - start full onboarding
-        setIsReturningUser(false);
+        // New user - start permissions onboarding
         setOnboardingStep("accessibility");
       }
     } catch (error) {
@@ -205,14 +196,25 @@ function App() {
   };
 
   const handleAccessibilityComplete = () => {
-    // Returning users already have models, skip to main app
-    // New users need to select a model
-    setOnboardingStep(isReturningUser ? "done" : "model");
+    commands
+      .completeOnboarding()
+      .catch((error) => {
+        console.warn("Failed to mark onboarding complete:", error);
+      })
+      .finally(() => {
+        setOnboardingStep("done");
+      });
   };
 
   const handleModelSelected = () => {
-    // Transition to main app - user has started a download
-    setOnboardingStep("done");
+    commands
+      .completeOnboarding()
+      .catch((error) => {
+        console.warn("Failed to mark onboarding complete:", error);
+      })
+      .finally(() => {
+        setOnboardingStep("done");
+      });
   };
 
   // Still checking onboarding status

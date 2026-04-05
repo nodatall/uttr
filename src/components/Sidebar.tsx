@@ -88,9 +88,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSectionChange,
 }) => {
   const { t } = useTranslation();
-  const { settings, installAccess } = useSettings();
+  const { settings } = useSettings();
   const [version, setVersion] = useState("");
-  const [byokUnlocked, setByokUnlocked] = useState(false);
   const versionTapCountRef = useRef(0);
   const versionTapTimerRef = useRef<number | null>(null);
 
@@ -115,12 +114,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
     };
   }, []);
 
-  const hasVisibleByokAccess =
-    byokUnlocked ||
-    installAccess?.has_byok_secret === true ||
-    settings?.byok_enabled === true ||
-    settings?.byok_validation_state === "valid";
-
   const handleVersionTap = () => {
     versionTapCountRef.current += 1;
     if (versionTapTimerRef.current === null) {
@@ -136,25 +129,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
         versionTapTimerRef.current = null;
       }
       versionTapCountRef.current = 0;
-      setByokUnlocked(true);
       onSectionChange("apiKeys");
     }
   };
 
   const availableSections = Object.entries(SECTIONS_CONFIG)
-    .filter(([sectionId, config]) => {
-      if (sectionId === "apiKeys") {
-        return hasVisibleByokAccess;
-      }
-      return config.enabled(settings);
-    })
+    .filter(([, config]) => config.enabled(settings))
     .map(([id, config]) => ({ id: id as SidebarSection, ...config }));
-
-  useEffect(() => {
-    if (activeSection === "apiKeys" && !hasVisibleByokAccess) {
-      onSectionChange("general");
-    }
-  }, [activeSection, hasVisibleByokAccess, onSectionChange]);
 
   return (
     <div className="flex w-full min-w-0 flex-col rounded-[18px] border border-white/6 bg-[rgba(4,9,15,0.45)] px-3 py-4 md:h-full md:w-[214px] md:min-w-[214px]">
