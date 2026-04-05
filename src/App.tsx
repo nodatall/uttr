@@ -10,15 +10,14 @@ import {
 import "./App.css";
 import AccessibilityPermissions from "./components/AccessibilityPermissions";
 import Footer from "./components/footer";
-import Onboarding, { AccessibilityOnboarding } from "./components/onboarding";
+import { AccessibilityOnboarding } from "./components/onboarding";
 import { Sidebar, SidebarSection, SECTIONS_CONFIG } from "./components/Sidebar";
 import { useSettings } from "./hooks/useSettings";
 import { useSettingsStore } from "./stores/settingsStore";
 import { commands } from "@/bindings";
-import { SHOW_MODEL_ONBOARDING_EVENT } from "@/lib/events/onboarding";
 import { getLanguageDirection, initializeRTL } from "@/lib/utils/rtl";
 
-type OnboardingStep = "accessibility" | "model" | "done";
+type OnboardingStep = "accessibility" | "done";
 const SHORTCUT_REFRESH_INTERVAL_MS = 3 * 60 * 1000;
 
 const renderSettingsContent = (section: SidebarSection) => {
@@ -46,24 +45,6 @@ function App() {
 
   useEffect(() => {
     checkOnboardingStatus();
-  }, []);
-
-  useEffect(() => {
-    const handleShowModelOnboarding = () => {
-      setOnboardingStep("model");
-    };
-
-    window.addEventListener(
-      SHOW_MODEL_ONBOARDING_EVENT,
-      handleShowModelOnboarding,
-    );
-
-    return () => {
-      window.removeEventListener(
-        SHOW_MODEL_ONBOARDING_EVENT,
-        handleShowModelOnboarding,
-      );
-    };
   }, []);
 
   // Initialize RTL direction when language changes
@@ -206,17 +187,6 @@ function App() {
       });
   };
 
-  const handleModelSelected = () => {
-    commands
-      .completeOnboarding()
-      .catch((error) => {
-        console.warn("Failed to mark onboarding complete:", error);
-      })
-      .finally(() => {
-        setOnboardingStep("done");
-      });
-  };
-
   // Still checking onboarding status
   if (onboardingStep === null) {
     return null;
@@ -229,10 +199,6 @@ function App() {
         showScreenRecordingGuidance={platform() === "macos"}
       />
     );
-  }
-
-  if (onboardingStep === "model") {
-    return <Onboarding onModelSelected={handleModelSelected} />;
   }
 
   return (
