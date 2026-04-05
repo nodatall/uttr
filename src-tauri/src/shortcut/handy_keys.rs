@@ -39,6 +39,9 @@ use std::thread::{self, JoinHandle};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::settings::{self, get_settings, ShortcutBinding};
+use crate::transcription_coordinator::{
+    is_transcribe_binding, transcribe_binding_push_to_talk,
+};
 
 use super::handler::handle_shortcut_event;
 
@@ -85,6 +88,12 @@ pub struct FrontendKeyEvent {
     pub hotkey_string: String,
 }
 
+#[derive(Clone)]
+struct ActivePushToTalkGuard {
+    hotkey: Hotkey,
+    hotkey_string: String,
+}
+
 impl HandyKeysState {
     /// Create a new HandyKeysState
     pub fn new(app: AppHandle) -> Result<Self, String> {
@@ -119,11 +128,11 @@ impl HandyKeysState {
             }
         };
 
-        // Raw listener for modifier-only shortcuts like `fn`.
-        let modifier_listener = match KeyboardListener::new() {
+        // Raw listener covers modifier-only shortcuts and push-to-talk release recovery.
+        let raw_listener = match KeyboardListener::new() {
             Ok(listener) => Some(listener),
             Err(e) => {
-                error!("Failed to create handy-keys modifier listener: {}", e);
+                error!("Failed to create handy-keys raw listener: {}", e);
                 None
             }
         };
@@ -133,6 +142,7 @@ impl HandyKeysState {
         let mut hotkey_to_binding: HashMap<HotkeyId, (String, String)> = HashMap::new(); // (binding_id, hotkey_string)
         let mut modifier_only_bindings: HashMap<String, (Hotkey, String)> = HashMap::new();
         let mut pressed_modifier_only: HashSet<String> = HashSet::new();
+        let mut active_push_to_talk: HashMap<String, ActivePushToTalkGuard> = HashMap::new();
 
         loop {
             // Check for hotkey events (non-blocking)
@@ -143,16 +153,29 @@ impl HandyKeysState {
                         binding_id, hotkey_string, event.state
                     );
                     let is_pressed = event.state == HotkeyState::Pressed;
+                    Self::update_push_to_talk_guard(
+                        &app,
+                        &mut active_push_to_talk,
+                        binding_id,
+                        hotkey_string,
+                        is_pressed,
+                    );
                     handle_shortcut_event(&app, binding_id, hotkey_string, is_pressed);
                 }
             }
 
-            if let Some(listener) = modifier_listener.as_ref() {
+            if let Some(listener) = raw_listener.as_ref() {
                 while let Some(event) = listener.try_recv() {
                     Self::dispatch_modifier_only_events(
                         &app,
                         &modifier_only_bindings,
                         &mut pressed_modifier_only,
+                        &mut active_push_to_talk,
+                        &event,
+                    );
+                    Self::dispatch_push_to_talk_release_guards(
+                        &app,
+                        &mut active_push_to_talk,
                         &event,
                     );
                 }
@@ -172,6 +195,7 @@ impl HandyKeysState {
                             &mut hotkey_to_binding,
                             &mut modifier_only_bindings,
                             &mut pressed_modifier_only,
+                            &mut active_push_to_talk,
                             &binding_id,
                             &hotkey_string,
                         );
@@ -187,6 +211,7 @@ impl HandyKeysState {
                             &mut hotkey_to_binding,
                             &mut modifier_only_bindings,
                             &mut pressed_modifier_only,
+                            &mut active_push_to_talk,
                             &binding_id,
                         );
                         let _ = response.send(result);
@@ -216,6 +241,7 @@ impl HandyKeysState {
         hotkey_to_binding: &mut HashMap<HotkeyId, (String, String)>,
         modifier_only_bindings: &mut HashMap<String, (Hotkey, String)>,
         pressed_modifier_only: &mut HashSet<String>,
+        active_push_to_talk: &mut HashMap<String, ActivePushToTalkGuard>,
         binding_id: &str,
         hotkey_string: &str,
     ) -> Result<(), String> {
@@ -227,6 +253,7 @@ impl HandyKeysState {
             modifier_only_bindings
                 .insert(binding_id.to_string(), (hotkey, hotkey_string.to_string()));
             pressed_modifier_only.remove(binding_id);
+            active_push_to_talk.remove(binding_id);
             debug!(
                 "Registered handy-keys modifier-only shortcut: {} -> {}",
                 binding_id, hotkey_string
@@ -240,6 +267,7 @@ impl HandyKeysState {
 
         binding_to_hotkey.insert(binding_id.to_string(), id);
         hotkey_to_binding.insert(id, (binding_id.to_string(), hotkey_string.to_string()));
+        active_push_to_talk.remove(binding_id);
 
         debug!(
             "Registered handy-keys shortcut: {} -> {:?}",
@@ -255,10 +283,12 @@ impl HandyKeysState {
         hotkey_to_binding: &mut HashMap<HotkeyId, (String, String)>,
         modifier_only_bindings: &mut HashMap<String, (Hotkey, String)>,
         pressed_modifier_only: &mut HashSet<String>,
+        active_push_to_talk: &mut HashMap<String, ActivePushToTalkGuard>,
         binding_id: &str,
     ) -> Result<(), String> {
         if modifier_only_bindings.remove(binding_id).is_some() {
             pressed_modifier_only.remove(binding_id);
+            active_push_to_talk.remove(binding_id);
             debug!(
                 "Unregistered handy-keys modifier-only shortcut: {}",
                 binding_id
@@ -271,6 +301,7 @@ impl HandyKeysState {
                 .unregister(id)
                 .map_err(|e| format!("Failed to unregister hotkey: {}", e))?;
             hotkey_to_binding.remove(&id);
+            active_push_to_talk.remove(binding_id);
             debug!("Unregistered handy-keys shortcut: {}", binding_id);
         }
         Ok(())
@@ -280,6 +311,7 @@ impl HandyKeysState {
         app: &AppHandle,
         modifier_only_bindings: &HashMap<String, (Hotkey, String)>,
         pressed_modifier_only: &mut HashSet<String>,
+        active_push_to_talk: &mut HashMap<String, ActivePushToTalkGuard>,
         event: &KeyEvent,
     ) {
         if event.key.is_some() {
@@ -294,6 +326,13 @@ impl HandyKeysState {
             ) {
                 Some(true) => {
                     pressed_modifier_only.insert(binding_id.clone());
+                    Self::update_push_to_talk_guard(
+                        app,
+                        active_push_to_talk,
+                        binding_id,
+                        hotkey_string,
+                        true,
+                    );
                     debug!(
                         "handy-keys modifier-only event: binding={}, hotkey={}, state=Pressed",
                         binding_id, hotkey_string
@@ -302,6 +341,7 @@ impl HandyKeysState {
                 }
                 Some(false) => {
                     pressed_modifier_only.remove(binding_id);
+                    active_push_to_talk.remove(binding_id);
                     debug!(
                         "handy-keys modifier-only event: binding={}, hotkey={}, state=Released",
                         binding_id, hotkey_string
@@ -310,6 +350,64 @@ impl HandyKeysState {
                 }
                 None => {}
             }
+        }
+    }
+
+    fn update_push_to_talk_guard(
+        app: &AppHandle,
+        active_push_to_talk: &mut HashMap<String, ActivePushToTalkGuard>,
+        binding_id: &str,
+        hotkey_string: &str,
+        is_pressed: bool,
+    ) {
+        if !should_track_push_to_talk_guard(app, binding_id) {
+            active_push_to_talk.remove(binding_id);
+            return;
+        }
+
+        if !is_pressed {
+            active_push_to_talk.remove(binding_id);
+            return;
+        }
+
+        let Ok(hotkey) = hotkey_string.parse::<Hotkey>() else {
+            warn!(
+                "Failed to parse push-to-talk hotkey '{}' for release guard",
+                hotkey_string
+            );
+            active_push_to_talk.remove(binding_id);
+            return;
+        };
+
+        active_push_to_talk.insert(
+            binding_id.to_string(),
+            ActivePushToTalkGuard {
+                hotkey,
+                hotkey_string: hotkey_string.to_string(),
+            },
+        );
+    }
+
+    fn dispatch_push_to_talk_release_guards(
+        app: &AppHandle,
+        active_push_to_talk: &mut HashMap<String, ActivePushToTalkGuard>,
+        event: &KeyEvent,
+    ) {
+        let mut released_bindings = Vec::new();
+
+        for (binding_id, guard) in active_push_to_talk.iter() {
+            if push_to_talk_guard_should_release(guard.hotkey, event) {
+                released_bindings.push((binding_id.clone(), guard.hotkey_string.to_string()));
+            }
+        }
+
+        for (binding_id, hotkey_string) in released_bindings {
+            active_push_to_talk.remove(&binding_id);
+            debug!(
+                "handy-keys push-to-talk release guard fired: binding={}, hotkey={}",
+                binding_id, hotkey_string
+            );
+            handle_shortcut_event(app, &binding_id, &hotkey_string, false);
         }
     }
 
@@ -547,6 +645,15 @@ pub fn init_shortcuts(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+fn should_track_push_to_talk_guard(app: &AppHandle, binding_id: &str) -> bool {
+    if !is_transcribe_binding(binding_id) {
+        return false;
+    }
+
+    let settings = get_settings(app);
+    transcribe_binding_push_to_talk(binding_id, settings.push_to_talk)
+}
+
 fn modifier_only_transition(hotkey: Hotkey, event: &KeyEvent, was_active: bool) -> Option<bool> {
     if hotkey.key.is_some() || event.key.is_some() {
         return None;
@@ -560,6 +667,18 @@ fn modifier_only_transition(hotkey: Hotkey, event: &KeyEvent, was_active: bool) 
     } else {
         None
     }
+}
+
+fn push_to_talk_guard_should_release(hotkey: Hotkey, event: &KeyEvent) -> bool {
+    if hotkey.key.is_none() {
+        return !hotkey.modifiers.matches(event.modifiers);
+    }
+
+    if !hotkey.modifiers.matches(event.modifiers) {
+        return true;
+    }
+
+    hotkey.key == event.key && !event.is_key_down
 }
 
 #[cfg(test)]
@@ -603,6 +722,45 @@ mod tests {
         };
 
         assert_eq!(modifier_only_transition(hotkey, &event, false), None);
+    }
+
+    #[test]
+    fn push_to_talk_guard_releases_on_main_key_up() {
+        let hotkey: Hotkey = "ctrl+space".parse().unwrap();
+        let event = KeyEvent {
+            modifiers: handy_keys::Modifiers::CTRL,
+            key: hotkey.key,
+            is_key_down: false,
+            changed_modifier: None,
+        };
+
+        assert!(push_to_talk_guard_should_release(hotkey, &event));
+    }
+
+    #[test]
+    fn push_to_talk_guard_releases_when_required_modifier_is_lost() {
+        let hotkey: Hotkey = "ctrl+space".parse().unwrap();
+        let event = KeyEvent {
+            modifiers: handy_keys::Modifiers::empty(),
+            key: None,
+            is_key_down: false,
+            changed_modifier: Some(handy_keys::Modifiers::CTRL),
+        };
+
+        assert!(push_to_talk_guard_should_release(hotkey, &event));
+    }
+
+    #[test]
+    fn push_to_talk_guard_ignores_unrelated_key_activity_while_combo_is_held() {
+        let hotkey: Hotkey = "ctrl+space".parse().unwrap();
+        let event = KeyEvent {
+            modifiers: handy_keys::Modifiers::CTRL,
+            key: "a".parse().ok(),
+            is_key_down: true,
+            changed_modifier: None,
+        };
+
+        assert!(!push_to_talk_guard_should_release(hotkey, &event));
     }
 }
 

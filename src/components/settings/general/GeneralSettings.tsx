@@ -15,16 +15,12 @@ import { PostProcessingSettingsAdvanced } from "../post-processing/PostProcessin
 import { HistoryLimit } from "../HistoryLimit";
 import { RecordingRetentionPeriodSelector } from "../RecordingRetentionPeriod";
 import { AppLanguageSelector } from "../AppLanguageSelector";
-import { SettingContainer } from "../../ui/SettingContainer";
-import { Button } from "../../ui/Button";
-import { requestShowModelOnboarding } from "@/lib/events/onboarding";
 import { useSettings } from "../../../hooks/useSettings";
 
 export const GeneralSettings: React.FC = () => {
   const { t } = useTranslation();
   const { getSetting } = useSettings();
   const postProcessEnabled = getSetting("post_process_enabled") || false;
-  const showModelOnboardingButton = import.meta.env.DEV;
 
   return (
     <div className="max-w-3xl w-full mx-auto space-y-6">
@@ -33,24 +29,6 @@ export const GeneralSettings: React.FC = () => {
         <PushToTalk descriptionMode="tooltip" grouped={true} />
         <AutostartToggle descriptionMode="tooltip" grouped={true} />
         <ShowTrayIcon descriptionMode="tooltip" grouped={true} />
-        {showModelOnboardingButton && (
-          <SettingContainer
-            title={t("settings.advanced.onboarding.title", {
-              defaultValue: "Model onboarding",
-            })}
-            description={t("settings.advanced.onboarding.description", {
-              defaultValue:
-                "Open the model onboarding screen again to review or change the initial setup flow.",
-            })}
-            grouped={true}
-          >
-            <Button variant="secondary" onClick={requestShowModelOnboarding}>
-              {t("settings.advanced.onboarding.action", {
-                defaultValue: "Show onboarding",
-              })}
-            </Button>
-          </SettingContainer>
-        )}
         <AppLanguageSelector descriptionMode="tooltip" grouped={true} />
       </SettingsGroup>
       <SettingsGroup title={t("settings.sound.title")}>
