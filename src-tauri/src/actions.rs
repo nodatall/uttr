@@ -100,10 +100,16 @@ struct FullSystemTranscribeAction {
 
 const GROQ_PROVIDER_ID: &str = "groq";
 const GROQ_MODEL_PREFERENCES: &[&str] = &[
+    "openai/gpt-oss-20b",
+    "qwen/qwen3-32b",
+    "groq/compound-mini",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
     "llama-3.3-70b-versatile",
-    "llama-3.1-70b-versatile",
+    "openai/gpt-oss-120b",
+    "groq/compound",
+    "moonshotai/kimi-k2-instruct-0905",
+    "moonshotai/kimi-k2-instruct",
     "llama-3.1-8b-instant",
-    "mixtral-8x7b-32768",
 ];
 const FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT: Duration = Duration::from_secs(45);
 const FULL_PASS_TRANSCRIPTION_TIMEOUT_PER_TEN_MINUTES: Duration = Duration::from_secs(60);
@@ -133,15 +139,23 @@ fn select_preferred_groq_model(available_models: &[String]) -> Option<String> {
     // Skip clearly non-chat/text models when possible.
     available_models
         .iter()
-        .find(|model| {
-            let id = model.to_ascii_lowercase();
-            !id.contains("whisper")
-                && !id.contains("tts")
-                && !id.contains("transcribe")
-                && !id.contains("speech")
-        })
+        .find(|model| is_supported_post_process_model(model))
         .cloned()
         .or_else(|| available_models.first().cloned())
+}
+
+fn is_supported_post_process_model(model_id: &str) -> bool {
+    let id = model_id.to_ascii_lowercase();
+    !id.contains("whisper")
+        && !id.contains("tts")
+        && !id.contains("transcribe")
+        && !id.contains("speech")
+        && !id.contains("audio")
+        && !id.contains("orpheus")
+        && !id.contains("guard")
+        && !id.contains("safeguard")
+        && !id.contains("moderation")
+        && !id.contains("embed")
 }
 
 async fn resolve_post_process_model(
@@ -1239,6 +1253,7 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
+        is_supported_post_process_model, select_preferred_groq_model,
         transcription_timeout_for_samples, transcription_watchdog_delay, ACTION_MAP,
         FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT,
     };
@@ -1278,5 +1293,50 @@ mod tests {
         let long_timeout = transcription_timeout_for_samples(16_000 * 60 * 31);
         let long_watchdog = transcription_watchdog_delay(16_000 * 60 * 31);
         assert!(long_watchdog > long_timeout);
+    }
+
+    #[test]
+    fn groq_selector_prefers_current_models_over_legacy_ids() {
+        let available_models = vec![
+            "llama-3.3-70b-versatile".to_string(),
+            "llama-3.1-8b-instant".to_string(),
+            "openai/gpt-oss-20b".to_string(),
+            "mixtral-8x7b-32768".to_string(),
+        ];
+
+        assert_eq!(
+            select_preferred_groq_model(&available_models).as_deref(),
+            Some("openai/gpt-oss-20b")
+        );
+    }
+
+    #[test]
+    fn groq_selector_skips_guard_and_audio_models_in_fallback() {
+        let available_models = vec![
+            "whisper-large-v3-turbo".to_string(),
+            "meta-llama/llama-prompt-guard-2-86m".to_string(),
+            "canopylabs/orpheus-v1-english".to_string(),
+            "openai/gpt-oss-safeguard-20b".to_string(),
+            "qwen/qwen3-32b".to_string(),
+        ];
+
+        assert_eq!(
+            select_preferred_groq_model(&available_models).as_deref(),
+            Some("qwen/qwen3-32b")
+        );
+    }
+
+    #[test]
+    fn post_process_model_filter_rejects_guard_and_audio_ids() {
+        assert!(!is_supported_post_process_model(
+            "meta-llama/llama-prompt-guard-2-86m"
+        ));
+        assert!(!is_supported_post_process_model(
+            "openai/gpt-oss-safeguard-20b"
+        ));
+        assert!(!is_supported_post_process_model(
+            "canopylabs/orpheus-v1-english"
+        ));
+        assert!(is_supported_post_process_model("openai/gpt-oss-20b"));
     }
 }
