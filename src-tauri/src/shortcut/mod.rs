@@ -192,6 +192,7 @@ pub fn change_binding(
             b.current_binding = binding;
             settings.bindings.insert(id.clone(), b.clone());
             settings::write_settings(&app, settings);
+            tray::update_tray_menu(&app, &tray::TrayIconState::Idle, None);
             return Ok(BindingResponse {
                 success: true,
                 binding: Some(b.clone()),
@@ -233,6 +234,7 @@ pub fn change_binding(
 
     // Save the settings
     settings::write_settings(&app, settings);
+    tray::update_tray_menu(&app, &tray::TrayIconState::Idle, None);
 
     // Return the updated binding
     Ok(BindingResponse {

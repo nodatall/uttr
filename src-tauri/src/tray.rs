@@ -93,6 +93,10 @@ pub fn update_tray_menu(app: &AppHandle, state: &TrayIconState, locale: Option<&
     let (settings_accelerator, quit_accelerator) = (Some("Cmd+,"), Some("Cmd+Q"));
     #[cfg(not(target_os = "macos"))]
     let (settings_accelerator, quit_accelerator) = (Some("Ctrl+,"), Some("Ctrl+Q"));
+    let copy_last_transcript_shortcut = settings
+        .bindings
+        .get("copy_last_transcript")
+        .map(|binding| tray_shortcut_display(&binding.current_binding));
 
     // Create common menu items
     let version_label = if cfg!(debug_assertions) {
@@ -112,12 +116,24 @@ pub fn update_tray_menu(app: &AppHandle, state: &TrayIconState, locale: Option<&
         None::<&str>,
     )
     .expect("failed to create check updates item");
+    let copy_last_transcript_label = copy_last_transcript_shortcut.as_ref().map_or_else(
+        || strings.copy_last_transcript.clone(),
+        |shortcut| {
+            if shortcut.show_in_label {
+                format!("{} ({})", strings.copy_last_transcript, shortcut.display)
+            } else {
+                strings.copy_last_transcript.clone()
+            }
+        },
+    );
     let copy_last_transcript_i = MenuItem::with_id(
         app,
         "copy_last_transcript",
-        &strings.copy_last_transcript,
+        &copy_last_transcript_label,
         true,
-        None::<&str>,
+        copy_last_transcript_shortcut
+            .as_ref()
+            .and_then(|shortcut| shortcut.accelerator.as_deref()),
     )
     .expect("failed to create copy last transcript item");
     let quit_i = MenuItem::with_id(app, "quit", &strings.quit, true, quit_accelerator)
@@ -204,9 +220,71 @@ pub fn copy_last_transcript(app: &AppHandle) {
     info!("Copied last transcript to clipboard via tray.");
 }
 
+struct TrayShortcutDisplay {
+    display: String,
+    accelerator: Option<String>,
+    show_in_label: bool,
+}
+
+fn tray_shortcut_display(binding: &str) -> TrayShortcutDisplay {
+    let parts: Vec<String> = binding
+        .split('+')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+        .map(|part| match part.to_ascii_lowercase().as_str() {
+            "command" | "cmd" => "Cmd".to_string(),
+            "option" | "alt" => "Alt".to_string(),
+            "ctrl" | "control" => "Ctrl".to_string(),
+            "shift" => "Shift".to_string(),
+            "super" | "win" | "windows" | "meta" => "Super".to_string(),
+            "fn" => "Fn".to_string(),
+            "escape" | "esc" => "Esc".to_string(),
+            "space" => "Space".to_string(),
+            other if other.len() == 1 => other.to_ascii_uppercase(),
+            other => {
+                let mut chars = other.chars();
+                match chars.next() {
+                    Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+                    None => String::new(),
+                }
+            }
+        })
+        .collect();
+
+    let has_non_modifier = binding.split('+').map(str::trim).any(|part| {
+        !matches!(
+            part.to_ascii_lowercase().as_str(),
+            "command"
+                | "cmd"
+                | "option"
+                | "alt"
+                | "ctrl"
+                | "control"
+                | "shift"
+                | "super"
+                | "win"
+                | "windows"
+                | "meta"
+                | "fn"
+        )
+    });
+
+    let display = if parts.is_empty() {
+        binding.to_string()
+    } else {
+        parts.join("+")
+    };
+
+    TrayShortcutDisplay {
+        display: display.clone(),
+        accelerator: has_non_modifier.then_some(display),
+        show_in_label: !has_non_modifier,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::last_transcript_text;
+    use super::{last_transcript_text, tray_shortcut_display};
     use crate::managers::history::HistoryEntry;
 
     fn build_entry(transcription: &str, post_processed: Option<&str>) -> HistoryEntry {
@@ -232,5 +310,18 @@ mod tests {
     fn falls_back_to_raw_transcription() {
         let entry = build_entry("raw", None);
         assert_eq!(last_transcript_text(&entry), "raw");
+    }
+
+    #[test]
+    fn maps_copy_last_transcript_binding_to_tray_accelerator() {
+        let modifier_only = tray_shortcut_display("command+fn");
+        assert_eq!(modifier_only.display, "Cmd+Fn");
+        assert_eq!(modifier_only.accelerator, None);
+        assert!(modifier_only.show_in_label);
+
+        let normal = tray_shortcut_display("ctrl+alt+c");
+        assert_eq!(normal.display, "Ctrl+Alt+C");
+        assert_eq!(normal.accelerator, Some("Ctrl+Alt+C".to_string()));
+        assert!(!normal.show_in_label);
     }
 }

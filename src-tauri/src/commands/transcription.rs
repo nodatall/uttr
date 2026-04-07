@@ -1,4 +1,7 @@
-use crate::access::{bootstrap_install_state, refresh_entitlement_state};
+use crate::access::{
+    bootstrap_install_state, get_install_access_snapshot, install_access_allows_premium_features,
+    premium_feature_access_message, refresh_entitlement_state,
+};
 use crate::actions::finalize_transcription_output;
 use crate::audio_toolkit::import_audio_file;
 use crate::byok_secrets::load_groq_api_key;
@@ -336,6 +339,11 @@ pub async fn transcribe_audio_file(
     transcription_manager: State<'_, Arc<TranscriptionManager>>,
     path: String,
 ) -> Result<FileTranscriptionResult, String> {
+    let access = get_install_access_snapshot(&app);
+    if !install_access_allows_premium_features(&access) {
+        return Err(premium_feature_access_message().to_string());
+    }
+
     transcription_manager.clear_cancel_request();
     emit_file_transcription_progress(&app, 5, "Importing audio file", None, None);
 

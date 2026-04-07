@@ -8,6 +8,11 @@ import {
   type FullSystemAudioReadinessStatus,
   type FullSystemAudioSupportStatus,
 } from "@/bindings";
+import {
+  hasPremiumFeatureAccess,
+  isPremiumFeatureLocked,
+  PREMIUM_FEATURE_LOCK_MESSAGE,
+} from "@/lib/utils/premiumFeatures";
 import type { BrowserE2ETestState } from "@/types/browserE2E";
 
 interface RecordFullSystemAudioProps {
@@ -21,7 +26,8 @@ const getBrowserE2ETestState = () =>
 export const RecordFullSystemAudio: React.FC<RecordFullSystemAudioProps> =
   React.memo(({ descriptionMode = "tooltip", grouped = false }) => {
     const { t } = useTranslation();
-    const { getSetting, refreshSettings } = useSettings();
+    const { getSetting, installAccess, refreshInstallAccess, refreshSettings } =
+      useSettings();
     const [supportStatus, setSupportStatus] =
       useState<FullSystemAudioSupportStatus | null>(null);
     const [readinessStatus, setReadinessStatus] =
@@ -32,6 +38,9 @@ export const RecordFullSystemAudio: React.FC<RecordFullSystemAudioProps> =
 
     const recordFullSystemAudio =
       getSetting("record_full_system_audio") || false;
+    const accessLoaded = installAccess !== null;
+    const premiumLocked = isPremiumFeatureLocked(installAccess);
+    const premiumEnabled = hasPremiumFeatureAccess(installAccess);
 
     const refreshStatus = useCallback(async () => {
       const testState = getBrowserE2ETestState();
@@ -105,6 +114,12 @@ export const RecordFullSystemAudio: React.FC<RecordFullSystemAudioProps> =
     }, [refreshSettings, refreshStatus]);
 
     useEffect(() => {
+      if (!accessLoaded) {
+        void refreshInstallAccess();
+      }
+    }, [accessLoaded, refreshInstallAccess]);
+
+    useEffect(() => {
       void refreshStatus();
     }, [refreshStatus]);
 
@@ -113,6 +128,14 @@ export const RecordFullSystemAudio: React.FC<RecordFullSystemAudioProps> =
         setPendingRetry(false);
       }
     }, [recordFullSystemAudio]);
+
+    useEffect(() => {
+      if (!premiumLocked || !recordFullSystemAudio || isUpdating) {
+        return;
+      }
+
+      void disableFeature();
+    }, [disableFeature, isUpdating, premiumLocked, recordFullSystemAudio]);
 
     useEffect(() => {
       const handleFocus = async () => {
@@ -150,23 +173,37 @@ export const RecordFullSystemAudio: React.FC<RecordFullSystemAudioProps> =
     const supportReason =
       effectiveSupport?.reason ??
       t("settings.sound.fullSystemAudio.unsupportedDescription");
+    const lockedDescription = t("settings.sound.fullSystemAudio.locked", {
+      defaultValue: PREMIUM_FEATURE_LOCK_MESSAGE,
+    });
 
-    const description = !statusLoaded
-      ? t("settings.sound.fullSystemAudio.loading")
-      : !supportStatus && !readinessStatus
-        ? t("settings.sound.fullSystemAudio.statusCheckFailed")
-        : !isSupported
-          ? supportReason
-          : !readinessStatus
+    const description = !accessLoaded
+      ? t("settings.sound.fullSystemAudio.loadingAccess", {
+          defaultValue: "Checking access...",
+        })
+      : premiumLocked
+        ? lockedDescription
+        : !statusLoaded
+          ? t("settings.sound.fullSystemAudio.loading")
+          : !supportStatus && !readinessStatus
             ? t("settings.sound.fullSystemAudio.statusCheckFailed")
-            : isReady
-              ? t("settings.sound.fullSystemAudio.description")
-              : pendingRetry
-                ? t("settings.sound.fullSystemAudio.pendingDescription", {
-                    reason: permissionReason,
-                  })
-                : permissionReason;
-    const isDisabled = !statusLoaded || !isSupported || isUpdating;
+            : !isSupported
+              ? supportReason
+              : !readinessStatus
+                ? t("settings.sound.fullSystemAudio.statusCheckFailed")
+                : isReady
+                  ? t("settings.sound.fullSystemAudio.description")
+                  : pendingRetry
+                    ? t("settings.sound.fullSystemAudio.pendingDescription", {
+                        reason: permissionReason,
+                      })
+                    : permissionReason;
+    const isDisabled =
+      !accessLoaded ||
+      premiumLocked ||
+      !statusLoaded ||
+      !isSupported ||
+      isUpdating;
 
     return (
       <SettingContainer
@@ -178,6 +215,11 @@ export const RecordFullSystemAudio: React.FC<RecordFullSystemAudioProps> =
         layout="stacked"
       >
         <div className="flex flex-col gap-3">
+          {!premiumEnabled && accessLoaded && (
+            <div className="rounded-2xl border border-amber-400/20 bg-amber-300/8 px-3.5 py-3 text-sm leading-6 text-amber-100/88">
+              {lockedDescription}
+            </div>
+          )}
           <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
             <div className="max-w-2xl text-sm leading-6 text-mid-gray">
               {description}

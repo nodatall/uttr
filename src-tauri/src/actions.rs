@@ -1,3 +1,7 @@
+use crate::access::{
+    get_install_access_snapshot, install_access_allows_premium_features,
+    premium_feature_access_message,
+};
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use crate::apple_intelligence;
 use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, SoundType};
@@ -450,13 +454,26 @@ pub async fn finalize_transcription_output(
 async fn transcribe_full_pass_with_timeout(
     tm: &Arc<TranscriptionManager>,
     samples: Vec<f32>,
+    source: Option<&str>,
 ) -> Result<String, anyhow::Error> {
-    match timeout(FULL_PASS_TRANSCRIPTION_TIMEOUT, tm.transcribe(samples)).await {
+    match timeout(
+        FULL_PASS_TRANSCRIPTION_TIMEOUT,
+        tm.transcribe_with_source(samples, source),
+    )
+    .await
+    {
         Ok(result) => result,
         Err(_) => Err(anyhow::anyhow!(
             "Transcription timed out after {}s",
             FULL_PASS_TRANSCRIPTION_TIMEOUT.as_secs()
         )),
+    }
+}
+
+fn transcription_source_for_binding(binding_id: &str) -> Option<&'static str> {
+    match binding_id {
+        "transcribe_full_system_audio" => Some("full_system_audio"),
+        _ => None,
     }
 }
 
@@ -666,14 +683,24 @@ fn handle_transcription_stop(
                         incremental_err
                     );
                     tm_for_worker.cancel_incremental_session();
-                    transcribe_full_pass_with_timeout(&tm_for_worker, samples).await
+                    transcribe_full_pass_with_timeout(
+                        &tm_for_worker,
+                        samples,
+                        transcription_source_for_binding(&binding_id),
+                    )
+                    .await
                 }
                 Err(_) => {
                     warn!(
                         "Incremental finalization timed out; falling back to full-pass transcription"
                     );
                     tm_for_worker.cancel_incremental_session();
-                    transcribe_full_pass_with_timeout(&tm_for_worker, samples).await
+                    transcribe_full_pass_with_timeout(
+                        &tm_for_worker,
+                        samples,
+                        transcription_source_for_binding(&binding_id),
+                    )
+                    .await
                 }
             }
         } else if samples.len() < SHORT_UTTERANCE_SAMPLES {
@@ -684,7 +711,12 @@ fn handle_transcription_stop(
                 "Using short-utterance fast path ({} samples)",
                 samples.len()
             );
-            transcribe_full_pass_with_timeout(&tm_for_worker, samples).await
+            transcribe_full_pass_with_timeout(
+                &tm_for_worker,
+                samples,
+                transcription_source_for_binding(&binding_id),
+            )
+            .await
         } else {
             if use_incremental && !has_incremental_progress {
                 debug!(
@@ -693,7 +725,12 @@ fn handle_transcription_stop(
                 );
                 tm_for_worker.cancel_incremental_session();
             }
-            transcribe_full_pass_with_timeout(&tm_for_worker, samples).await
+            transcribe_full_pass_with_timeout(
+                &tm_for_worker,
+                samples,
+                transcription_source_for_binding(&binding_id),
+            )
+            .await
         };
         match transcription_result {
             Ok(transcription) => {
@@ -965,6 +1002,15 @@ impl ShortcutAction for TranscribeAction {
 
 impl ShortcutAction for FullSystemTranscribeAction {
     fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
+        let access = get_install_access_snapshot(app);
+        if !install_access_allows_premium_features(&access) {
+            let _ = app.emit(
+                "transcription-error",
+                premium_feature_access_message().to_string(),
+            );
+            return;
+        }
+
         let start_time = Instant::now();
         debug!(
             "FullSystemTranscribeAction::start called for binding: {}",
@@ -1096,6 +1142,19 @@ impl ShortcutAction for CancelAction {
     }
 }
 
+// Copy Last Transcript Action
+struct CopyLastTranscriptAction;
+
+impl ShortcutAction for CopyLastTranscriptAction {
+    fn start(&self, app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {
+        crate::tray::copy_last_transcript(app);
+    }
+
+    fn stop(&self, _app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {
+        // Nothing to do on stop for one-shot clipboard actions.
+    }
+}
+
 // Test Action
 struct TestAction;
 
@@ -1143,6 +1202,10 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
         Arc::new(CancelAction) as Arc<dyn ShortcutAction>,
     );
     map.insert(
+        "copy_last_transcript".to_string(),
+        Arc::new(CopyLastTranscriptAction) as Arc<dyn ShortcutAction>,
+    );
+    map.insert(
         "test".to_string(),
         Arc::new(TestAction) as Arc<dyn ShortcutAction>,
     );
@@ -1156,5 +1219,10 @@ mod tests {
     #[test]
     fn full_system_binding_is_registered_in_action_map() {
         assert!(ACTION_MAP.contains_key("transcribe_full_system_audio"));
+    }
+
+    #[test]
+    fn copy_last_transcript_binding_is_registered_in_action_map() {
+        assert!(ACTION_MAP.contains_key("copy_last_transcript"));
     }
 }

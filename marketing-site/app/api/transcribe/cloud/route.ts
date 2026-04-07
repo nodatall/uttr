@@ -18,6 +18,7 @@ import {
   type InstallTokenPayload,
   verifyInstallToken,
 } from "@/lib/access";
+import { accessAllowsCloudSource } from "@/lib/access/premium-features";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -87,7 +88,9 @@ export async function POST(request: Request) {
       );
     }
 
-    const trial = await fetchAnonymousTrialById(tokenPayload.anonymous_trial_id);
+    const trial = await fetchAnonymousTrialById(
+      tokenPayload.anonymous_trial_id,
+    );
     if (
       !trial ||
       trial.install_id !== tokenPayload.install_id ||
@@ -105,7 +108,10 @@ export async function POST(request: Request) {
       : null;
     const accessDecision = resolveAccessDecision(refreshedTrial, entitlement);
 
-    if (accessDecision.accessState === "blocked" && refreshedTrial.status !== "new") {
+    if (
+      accessDecision.accessState === "blocked" &&
+      refreshedTrial.status !== "new"
+    ) {
       return NextResponse.json(
         { error: "Transcription access is blocked." },
         { status: 403 },
@@ -145,6 +151,16 @@ export async function POST(request: Request) {
       requestedModel || "default",
     );
 
+    if (!accessAllowsCloudSource(accessDecision.accessState, source)) {
+      return NextResponse.json(
+        {
+          error:
+            "Please purchase a subscription to use this feature. You can also add your own Groq API key in API Keys.",
+        },
+        { status: 403 },
+      );
+    }
+
     const fileBytes = Buffer.from(await fileEntry.arrayBuffer());
     const groqStartMs = performance.now();
     const groqResult = await transcribeWithGroq({
@@ -160,7 +176,10 @@ export async function POST(request: Request) {
     const now = new Date().toISOString();
     let persistedTrial = refreshedTrial;
 
-    if (refreshedTrial.status === "new" && accessDecision.accessState !== "subscribed") {
+    if (
+      refreshedTrial.status === "new" &&
+      accessDecision.accessState !== "subscribed"
+    ) {
       const startedTrial = await patchAnonymousTrialById(refreshedTrial.id, {
         status: "trialing",
         trial_started_at: now,

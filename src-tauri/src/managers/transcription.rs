@@ -896,6 +896,7 @@ impl TranscriptionManager {
         audio: Vec<f32>,
         settings: &AppSettings,
         allow_local_fallback_on_cloud_error: bool,
+        metadata: groq_client::ProxyTranscriptionMetadata<'_>,
     ) -> Result<String> {
         let access = self.ensure_backend_access_state().await?;
 
@@ -926,12 +927,13 @@ impl TranscriptionManager {
             );
         }
 
-        match groq_client::transcribe_samples(
+        match groq_client::transcribe_samples_with_metadata(
             access.install_token.trim(),
             groq_model,
             &trimmed_audio,
             &settings.selected_language,
             settings.translate_to_english,
+            metadata,
         )
         .await
         {
@@ -1012,6 +1014,7 @@ impl TranscriptionManager {
         audio: Vec<f32>,
         settings: &AppSettings,
         allow_local_fallback_on_cloud_error: bool,
+        proxy_metadata: groq_client::ProxyTranscriptionMetadata<'_>,
     ) -> Result<String> {
         self.update_last_activity();
 
@@ -1075,6 +1078,7 @@ impl TranscriptionManager {
                 audio,
                 settings,
                 allow_local_fallback_on_cloud_error,
+                proxy_metadata,
             )
             .await
         }
@@ -1475,8 +1479,13 @@ impl TranscriptionManager {
                     .map(is_cloud_model_id)
                     .unwrap_or(false);
                 let chunk_result = if is_cloud_model {
-                    self.transcribe_raw_with_settings(chunk_samples, &settings, false)
-                        .await
+                    self.transcribe_raw_with_settings(
+                        chunk_samples,
+                        &settings,
+                        false,
+                        groq_client::ProxyTranscriptionMetadata::default(),
+                    )
+                    .await
                 } else {
                     let manager = self.clone();
                     let settings_for_chunk = settings.clone();
@@ -1616,7 +1625,12 @@ impl TranscriptionManager {
             let tail_st = Instant::now();
             let settings = get_settings(&self.app_handle);
             let tail_result = self
-                .transcribe_raw_with_settings(tail_audio, &settings, false)
+                .transcribe_raw_with_settings(
+                    tail_audio,
+                    &settings,
+                    false,
+                    groq_client::ProxyTranscriptionMetadata::default(),
+                )
                 .await;
             session.runtime.in_flight.store(false, Ordering::Relaxed);
 
@@ -1724,6 +1738,14 @@ impl TranscriptionManager {
     }
 
     pub async fn transcribe(&self, audio: Vec<f32>) -> Result<String> {
+        self.transcribe_with_source(audio, None).await
+    }
+
+    pub async fn transcribe_with_source(
+        &self,
+        audio: Vec<f32>,
+        source: Option<&str>,
+    ) -> Result<String> {
         self.update_last_activity();
 
         let st = std::time::Instant::now();
@@ -1749,7 +1771,15 @@ impl TranscriptionManager {
 
         let settings = get_settings(&self.app_handle);
         let raw_transcription = self
-            .transcribe_raw_with_settings(audio, &settings, true)
+            .transcribe_raw_with_settings(
+                audio,
+                &settings,
+                true,
+                groq_client::ProxyTranscriptionMetadata {
+                    source,
+                    ..Default::default()
+                },
+            )
             .await?;
         let mut filtered_result = self.apply_transcription_filters(raw_transcription, &settings);
         if should_suppress_silence_hallucination(levels, &filtered_result) {
