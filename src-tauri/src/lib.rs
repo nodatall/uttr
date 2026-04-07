@@ -40,7 +40,7 @@ use tauri::image::Image;
 pub use transcription_coordinator::TranscriptionCoordinator;
 
 use tauri::tray::TrayIconBuilder;
-use tauri::{AppHandle, Emitter, Listener, Manager};
+use tauri::{AppHandle, Emitter, Listener, Manager, RunEvent};
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt};
 use tauri_plugin_log::{Builder as LogBuilder, RotationStrategy, Target, TargetKind};
 
@@ -402,7 +402,7 @@ pub fn run() {
         builder = builder.plugin(tauri_nspanel::init());
     }
 
-    builder
+    let app = builder
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             show_main_window(app);
         }))
@@ -478,6 +478,17 @@ pub fn run() {
             _ => {}
         })
         .invoke_handler(specta_builder.invoke_handler())
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        if let RunEvent::Resumed = event {
+            if let Some(recording_manager) = app_handle.try_state::<Arc<AudioRecordingManager>>() {
+                let recording_manager = Arc::clone(&recording_manager);
+                tauri::async_runtime::spawn(async move {
+                    recording_manager.prewarm_for_quick_start("app resume");
+                });
+            }
+        }
+    });
 }
