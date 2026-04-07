@@ -105,7 +105,9 @@ const GROQ_MODEL_PREFERENCES: &[&str] = &[
     "llama-3.1-8b-instant",
     "mixtral-8x7b-32768",
 ];
-const FULL_PASS_TRANSCRIPTION_TIMEOUT: Duration = Duration::from_secs(20);
+const FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT: Duration = Duration::from_secs(45);
+const FULL_PASS_TRANSCRIPTION_TIMEOUT_PER_TEN_MINUTES: Duration = Duration::from_secs(60);
+const FULL_PASS_TRANSCRIPTION_WATCHDOG_GRACE: Duration = Duration::from_secs(15);
 const POST_PROCESS_TIMEOUT_DEFAULT: Duration = Duration::from_secs(60);
 const SHORT_UTTERANCE_SAMPLES: usize = 16_000 * 10;
 
@@ -455,19 +457,31 @@ async fn transcribe_full_pass_with_timeout(
     tm: &Arc<TranscriptionManager>,
     samples: Vec<f32>,
     source: Option<&str>,
+    timeout_duration: Duration,
 ) -> Result<String, anyhow::Error> {
-    match timeout(
-        FULL_PASS_TRANSCRIPTION_TIMEOUT,
-        tm.transcribe_with_source(samples, source),
-    )
-    .await
-    {
+    match timeout(timeout_duration, tm.transcribe_with_source(samples, source)).await {
         Ok(result) => result,
         Err(_) => Err(anyhow::anyhow!(
             "Transcription timed out after {}s",
-            FULL_PASS_TRANSCRIPTION_TIMEOUT.as_secs()
+            timeout_duration.as_secs()
         )),
     }
+}
+
+fn transcription_timeout_for_samples(sample_count: usize) -> Duration {
+    if sample_count == 0 {
+        return FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT;
+    }
+
+    let audio_seconds = (sample_count as u64).div_ceil(16_000);
+    let ten_minute_blocks = audio_seconds.div_ceil(600).max(1);
+    FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT
+        + FULL_PASS_TRANSCRIPTION_TIMEOUT_PER_TEN_MINUTES
+            .saturating_mul((ten_minute_blocks.saturating_sub(1)) as u32)
+}
+
+fn transcription_watchdog_delay(sample_count: usize) -> Duration {
+    transcription_timeout_for_samples(sample_count) + FULL_PASS_TRANSCRIPTION_WATCHDOG_GRACE
 }
 
 fn transcription_source_for_binding(binding_id: &str) -> Option<&'static str> {
@@ -590,6 +604,10 @@ fn handle_transcription_stop(
     let task_completed_for_worker = Arc::clone(&task_completed);
     let tm_for_worker = tm.clone();
     let recording_duration = recording_duration.unwrap_or_default();
+    let transcription_watchdog = samples
+        .as_ref()
+        .map(|samples| transcription_watchdog_delay(samples.len()))
+        .unwrap_or(FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT + FULL_PASS_TRANSCRIPTION_WATCHDOG_GRACE);
 
     let transcription_task = tauri::async_runtime::spawn(async move {
         let _guard = FinishGuard(ah.clone());
@@ -616,6 +634,7 @@ fn handle_transcription_stop(
             stop_recording_time.elapsed(),
             samples.len()
         );
+        let transcription_timeout = transcription_timeout_for_samples(samples.len());
 
         if samples.is_empty() {
             if recording_duration >= Duration::from_secs(1) {
@@ -687,6 +706,7 @@ fn handle_transcription_stop(
                         &tm_for_worker,
                         samples,
                         transcription_source_for_binding(&binding_id),
+                        transcription_timeout,
                     )
                     .await
                 }
@@ -699,6 +719,7 @@ fn handle_transcription_stop(
                         &tm_for_worker,
                         samples,
                         transcription_source_for_binding(&binding_id),
+                        transcription_timeout,
                     )
                     .await
                 }
@@ -715,6 +736,7 @@ fn handle_transcription_stop(
                 &tm_for_worker,
                 samples,
                 transcription_source_for_binding(&binding_id),
+                transcription_timeout,
             )
             .await
         } else {
@@ -729,6 +751,7 @@ fn handle_transcription_stop(
                 &tm_for_worker,
                 samples,
                 transcription_source_for_binding(&binding_id),
+                transcription_timeout,
             )
             .await
         };
@@ -844,13 +867,14 @@ fn handle_transcription_stop(
         let tm_for_watchdog = tm.clone();
         let task_completed = Arc::clone(&task_completed);
         tauri::async_runtime::spawn(async move {
-            tokio::time::sleep(Duration::from_secs(12)).await;
+            tokio::time::sleep(transcription_watchdog).await;
             if task_completed.load(Ordering::Relaxed) {
                 return;
             }
 
             warn!(
-                "Transcription watchdog fired after 12s; forcing cancellation and coordinator reset"
+                "Transcription watchdog fired after {}s; forcing cancellation and coordinator reset",
+                transcription_watchdog.as_secs()
             );
             tm_for_watchdog.request_cancel();
             transcription_task.abort();
@@ -1214,7 +1238,10 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 
 #[cfg(test)]
 mod tests {
-    use super::ACTION_MAP;
+    use super::{
+        transcription_timeout_for_samples, transcription_watchdog_delay, ACTION_MAP,
+        FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT,
+    };
 
     #[test]
     fn full_system_binding_is_registered_in_action_map() {
@@ -1224,5 +1251,32 @@ mod tests {
     #[test]
     fn copy_last_transcript_binding_is_registered_in_action_map() {
         assert!(ACTION_MAP.contains_key("copy_last_transcript"));
+    }
+
+    #[test]
+    fn transcription_timeout_grows_for_long_recordings() {
+        assert_eq!(
+            transcription_timeout_for_samples(16_000 * 60 * 5),
+            FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT
+        );
+        assert!(
+            transcription_timeout_for_samples(16_000 * 60 * 11)
+                > FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT
+        );
+        assert!(
+            transcription_timeout_for_samples(16_000 * 60 * 31)
+                > transcription_timeout_for_samples(16_000 * 60 * 11)
+        );
+    }
+
+    #[test]
+    fn transcription_watchdog_always_exceeds_timeout_budget() {
+        let short_timeout = transcription_timeout_for_samples(16_000 * 60);
+        let short_watchdog = transcription_watchdog_delay(16_000 * 60);
+        assert!(short_watchdog > short_timeout);
+
+        let long_timeout = transcription_timeout_for_samples(16_000 * 60 * 31);
+        let long_watchdog = transcription_watchdog_delay(16_000 * 60 * 31);
+        assert!(long_watchdog > long_timeout);
     }
 }

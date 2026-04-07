@@ -65,6 +65,21 @@ const CHUNK_WARMUP_DURATION: Duration = Duration::from_secs(10);
 const STOP_IN_FLIGHT_WAIT: Duration = Duration::from_secs(4);
 const MAX_TOKEN_OVERLAP: usize = 25;
 const MODEL_LOADING_WAIT_TIMEOUT: Duration = Duration::from_secs(12);
+const LIVE_TRANSCRIPTION_OVERLAP_SAMPLES: usize = SAMPLE_RATE * 10;
+const DIRECT_CHUNK_SAFETY_MARGIN_BYTES: usize = 1 * 1024 * 1024;
+const PROXY_CHUNK_SAFETY_MARGIN_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CloudTranscriptionRoute {
+    DirectGroq,
+    BackendProxy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ChunkRange {
+    start: usize,
+    end: usize,
+}
 
 struct IncrementalRuntime {
     stop_requested: AtomicBool,
@@ -287,6 +302,76 @@ fn append_stitched_text(existing: &mut String, incoming: &str) {
 
 pub(crate) fn stitch_transcription_text(existing: &mut String, incoming: &str) {
     append_stitched_text(existing, incoming);
+}
+
+fn safe_live_chunk_limit_bytes(route: CloudTranscriptionRoute) -> usize {
+    match route {
+        CloudTranscriptionRoute::DirectGroq => groq_client::DIRECT_GROQ_UPLOAD_LIMIT_BYTES
+            .saturating_sub(DIRECT_CHUNK_SAFETY_MARGIN_BYTES),
+        CloudTranscriptionRoute::BackendProxy => groq_client::PROXY_GROQ_UPLOAD_LIMIT_BYTES
+            .saturating_sub(PROXY_CHUNK_SAFETY_MARGIN_BYTES),
+    }
+}
+
+fn max_live_chunk_samples(limit_bytes: usize) -> Result<usize> {
+    if limit_bytes <= groq_client::WAV_HEADER_BYTES {
+        return Err(anyhow::anyhow!(
+            "Configured Groq upload limit is too small for live transcription chunks."
+        ));
+    }
+
+    let samples = (limit_bytes - groq_client::WAV_HEADER_BYTES) / groq_client::WAV_BYTES_PER_SAMPLE;
+    if samples <= LIVE_TRANSCRIPTION_OVERLAP_SAMPLES {
+        return Err(anyhow::anyhow!(
+            "Configured Groq upload limit leaves no room for live transcription chunks."
+        ));
+    }
+
+    Ok(samples)
+}
+
+fn plan_live_chunk_ranges(sample_count: usize, limit_bytes: usize) -> Result<Vec<ChunkRange>> {
+    if sample_count == 0 {
+        return Ok(Vec::new());
+    }
+
+    let chunk_samples = max_live_chunk_samples(limit_bytes)?;
+    let mut ranges = Vec::new();
+    let mut start = 0usize;
+
+    while start < sample_count {
+        let end = (start + chunk_samples).min(sample_count);
+        ranges.push(ChunkRange { start, end });
+        if end == sample_count {
+            break;
+        }
+
+        let next_start = end.saturating_sub(LIVE_TRANSCRIPTION_OVERLAP_SAMPLES);
+        if next_start <= start {
+            return Err(anyhow::anyhow!(
+                "Failed to plan live transcription chunks without overlap deadlock."
+            ));
+        }
+        start = next_start;
+    }
+
+    Ok(ranges)
+}
+
+fn live_chunk_unique_audio_seconds(chunk: ChunkRange, current_chunk: u32) -> u32 {
+    let unique_start = if current_chunk == 1 {
+        chunk.start
+    } else {
+        chunk
+            .start
+            .saturating_add(LIVE_TRANSCRIPTION_OVERLAP_SAMPLES)
+    };
+    let unique_samples = chunk.end.saturating_sub(unique_start);
+    if unique_samples == 0 {
+        0
+    } else {
+        unique_samples.div_ceil(SAMPLE_RATE) as u32
+    }
 }
 
 #[derive(Clone)]
@@ -1009,6 +1094,103 @@ impl TranscriptionManager {
         }
     }
 
+    async fn transcribe_cloud_with_settings(
+        &self,
+        model_id: &str,
+        audio: Vec<f32>,
+        settings: &AppSettings,
+        allow_local_fallback_on_cloud_error: bool,
+        proxy_metadata: groq_client::ProxyTranscriptionMetadata<'_>,
+        route: CloudTranscriptionRoute,
+    ) -> Result<String> {
+        let chunk_limit_bytes = safe_live_chunk_limit_bytes(route);
+        let chunks = plan_live_chunk_ranges(audio.len(), chunk_limit_bytes)?;
+
+        if chunks.len() <= 1 {
+            return match route {
+                CloudTranscriptionRoute::DirectGroq => {
+                    self.transcribe_with_direct_groq(
+                        model_id,
+                        audio,
+                        settings,
+                        allow_local_fallback_on_cloud_error,
+                    )
+                    .await
+                }
+                CloudTranscriptionRoute::BackendProxy => {
+                    self.transcribe_with_proxy_groq(
+                        model_id,
+                        audio,
+                        settings,
+                        allow_local_fallback_on_cloud_error,
+                        proxy_metadata,
+                    )
+                    .await
+                }
+            };
+        }
+
+        debug!(
+            "Chunking cloud transcription into {} request(s) for source {:?}",
+            chunks.len(),
+            proxy_metadata.source
+        );
+
+        let total_chunks = chunks.len() as u32;
+        let mut assembled = String::new();
+
+        for (index, chunk) in chunks.iter().enumerate() {
+            if self.cancel_requested.load(Ordering::Relaxed) {
+                return Err(anyhow::anyhow!("Transcription cancelled"));
+            }
+
+            let current_chunk = index as u32 + 1;
+            let chunk_audio = audio[chunk.start..chunk.end].to_vec();
+            debug!(
+                "Transcribing chunk {} of {} (samples={}, source={:?}, route={:?})",
+                current_chunk,
+                total_chunks,
+                chunk_audio.len(),
+                proxy_metadata.source,
+                route
+            );
+
+            let chunk_text = match route {
+                CloudTranscriptionRoute::DirectGroq => {
+                    self.transcribe_with_direct_groq(
+                        model_id,
+                        chunk_audio,
+                        settings,
+                        allow_local_fallback_on_cloud_error,
+                    )
+                    .await?
+                }
+                CloudTranscriptionRoute::BackendProxy => {
+                    self.transcribe_with_proxy_groq(
+                        model_id,
+                        chunk_audio,
+                        settings,
+                        allow_local_fallback_on_cloud_error,
+                        groq_client::ProxyTranscriptionMetadata {
+                            source: proxy_metadata.source,
+                            chunk_index: Some(current_chunk),
+                            chunk_count: Some(total_chunks),
+                            audio_seconds: Some(live_chunk_unique_audio_seconds(
+                                *chunk,
+                                current_chunk,
+                            )),
+                        },
+                    )
+                    .await?
+                }
+            };
+
+            append_stitched_text(&mut assembled, &chunk_text);
+        }
+
+        Ok(assembled)
+    }
+
     async fn transcribe_raw_with_settings(
         &self,
         audio: Vec<f32>,
@@ -1064,21 +1246,24 @@ impl TranscriptionManager {
                     "Using direct Groq routing for cloud transcription because a local Groq key is present"
                 );
                 return self
-                    .transcribe_with_direct_groq(
+                    .transcribe_cloud_with_settings(
                         model_id,
                         audio,
                         settings,
                         allow_local_fallback_on_cloud_error,
+                        proxy_metadata,
+                        CloudTranscriptionRoute::DirectGroq,
                     )
                     .await;
             }
 
-            self.transcribe_with_proxy_groq(
+            self.transcribe_cloud_with_settings(
                 model_id,
                 audio,
                 settings,
                 allow_local_fallback_on_cloud_error,
                 proxy_metadata,
+                CloudTranscriptionRoute::BackendProxy,
             )
             .await
         }
@@ -2008,6 +2193,48 @@ mod tests {
         let mut assembled = "alpha beta".to_string();
         append_stitched_text(&mut assembled, "gamma delta");
         assert_eq!(assembled, "alpha beta gamma delta");
+    }
+
+    #[test]
+    fn live_direct_chunk_plan_stays_under_limit() {
+        let limit = safe_live_chunk_limit_bytes(CloudTranscriptionRoute::DirectGroq);
+        let ranges = plan_live_chunk_ranges(SAMPLE_RATE * 60 * 31, limit).unwrap();
+        assert!(ranges.len() > 1);
+        for range in ranges {
+            let bytes = groq_client::estimate_wav_size_bytes(range.end - range.start).unwrap();
+            assert!(bytes <= limit);
+        }
+    }
+
+    #[test]
+    fn live_proxy_chunk_plan_uses_fewer_chunks_than_direct() {
+        let sample_count = SAMPLE_RATE * 60 * 80;
+        let direct_ranges = plan_live_chunk_ranges(
+            sample_count,
+            safe_live_chunk_limit_bytes(CloudTranscriptionRoute::DirectGroq),
+        )
+        .unwrap();
+        let proxy_ranges = plan_live_chunk_ranges(
+            sample_count,
+            safe_live_chunk_limit_bytes(CloudTranscriptionRoute::BackendProxy),
+        )
+        .unwrap();
+        assert!(proxy_ranges.len() < direct_ranges.len());
+    }
+
+    #[test]
+    fn live_chunk_overlap_only_counts_once_for_usage_seconds() {
+        let first = ChunkRange {
+            start: 0,
+            end: SAMPLE_RATE * 20,
+        };
+        let second = ChunkRange {
+            start: SAMPLE_RATE * 10,
+            end: SAMPLE_RATE * 30,
+        };
+
+        assert_eq!(live_chunk_unique_audio_seconds(first, 1), 20);
+        assert_eq!(live_chunk_unique_audio_seconds(second, 2), 10);
     }
 
     #[test]
