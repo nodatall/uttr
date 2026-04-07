@@ -396,11 +396,8 @@ fn apply_overlay_dimensions(app_handle: &AppHandle, width: f64, height: f64) {
             }
 
             if let Some((x, y)) = calculate_overlay_position(app_handle, width, height) {
-                let _ =
-                    overlay_window.set_position(tauri::Position::Logical(tauri::LogicalPosition {
-                        x,
-                        y,
-                    }));
+                let _ = overlay_window
+                    .set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
             }
         }
     }

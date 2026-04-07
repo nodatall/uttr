@@ -10,6 +10,8 @@ use std::time::Duration;
 use tauri::AppHandle;
 
 const BACKEND_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const PREMIUM_FEATURE_ACCESS_MESSAGE: &str =
+    "Please purchase a subscription to use this feature. You can also add your own Groq API key in API Keys.";
 
 static BACKEND_HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
     Client::builder()
@@ -345,6 +347,14 @@ pub async fn request_claim_token(app: &AppHandle) -> Result<ClaimTokenResult, St
     request_claim_token_internal(app).await
 }
 
+pub fn premium_feature_access_message() -> &'static str {
+    PREMIUM_FEATURE_ACCESS_MESSAGE
+}
+
+pub fn install_access_allows_premium_features(snapshot: &InstallAccessSnapshot) -> bool {
+    snapshot.has_byok_secret || matches!(snapshot.access_state, AccessState::Subscribed)
+}
+
 pub fn get_install_access_snapshot(app: &AppHandle) -> InstallAccessSnapshot {
     let settings = ensure_identity(app);
     access_snapshot(&settings, has_groq_secret(app, &settings))
@@ -382,5 +392,37 @@ mod tests {
         );
 
         assert!(hint.contains("Could not connect to"));
+    }
+
+    #[test]
+    fn premium_features_are_allowed_for_subscription_or_byok() {
+        let subscribed = InstallAccessSnapshot {
+            install_id: "install".to_string(),
+            device_fingerprint_hash: "fingerprint".to_string(),
+            trial_state: TrialState::Trialing,
+            access_state: AccessState::Subscribed,
+            entitlement_state: EntitlementState::Active,
+            byok_enabled: false,
+            byok_validation_state: ByokValidationState::Unknown,
+            has_byok_secret: false,
+            has_install_token: true,
+        };
+        assert!(install_access_allows_premium_features(&subscribed));
+
+        let byok = InstallAccessSnapshot {
+            access_state: AccessState::Trialing,
+            entitlement_state: EntitlementState::Inactive,
+            has_byok_secret: true,
+            ..subscribed.clone()
+        };
+        assert!(install_access_allows_premium_features(&byok));
+
+        let trial = InstallAccessSnapshot {
+            access_state: AccessState::Trialing,
+            entitlement_state: EntitlementState::Inactive,
+            has_byok_secret: false,
+            ..subscribed
+        };
+        assert!(!install_access_allows_premium_features(&trial));
     }
 }

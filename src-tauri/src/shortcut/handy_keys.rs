@@ -39,9 +39,7 @@ use std::thread::{self, JoinHandle};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::settings::{self, get_settings, ShortcutBinding};
-use crate::transcription_coordinator::{
-    is_transcribe_binding, transcribe_binding_push_to_talk,
-};
+use crate::transcription_coordinator::{is_transcribe_binding, transcribe_binding_push_to_talk};
 
 use super::handler::handle_shortcut_event;
 

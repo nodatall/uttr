@@ -909,6 +909,25 @@ pub fn get_default_settings() -> AppSettings {
             current_binding: default_full_system_shortcut.to_string(),
         },
     );
+    #[cfg(target_os = "windows")]
+    let default_copy_last_transcript_shortcut = "ctrl+alt+c";
+    #[cfg(target_os = "macos")]
+    let default_copy_last_transcript_shortcut = "command+fn";
+    #[cfg(target_os = "linux")]
+    let default_copy_last_transcript_shortcut = "ctrl+alt+c";
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    let default_copy_last_transcript_shortcut = "ctrl+alt+c";
+
+    bindings.insert(
+        "copy_last_transcript".to_string(),
+        ShortcutBinding {
+            id: "copy_last_transcript".to_string(),
+            name: "Copy Last Transcript".to_string(),
+            description: "Copies the newest transcript from history to your clipboard.".to_string(),
+            default_binding: default_copy_last_transcript_shortcut.to_string(),
+            current_binding: default_copy_last_transcript_shortcut.to_string(),
+        },
+    );
     bindings.insert(
         "cancel".to_string(),
         ShortcutBinding {
@@ -1113,6 +1132,15 @@ pub fn get_settings(app: &AppHandle) -> AppSettings {
 
     let mut changed = false;
 
+    let default_settings = get_default_settings();
+    for (key, value) in default_settings.bindings {
+        if !settings.bindings.contains_key(&key) {
+            debug!("Adding missing binding: {}", key);
+            settings.bindings.insert(key, value);
+            changed = true;
+        }
+    }
+
     if ensure_post_process_defaults(&mut settings) {
         changed = true;
     }
@@ -1277,6 +1305,25 @@ mod tests {
 
         #[cfg(not(target_os = "macos"))]
         assert_eq!(binding.default_binding, "ctrl+alt+space");
+
+        assert_eq!(binding.current_binding, binding.default_binding);
+    }
+
+    #[test]
+    fn default_copy_last_transcript_binding_is_registered() {
+        let settings = get_default_settings();
+        let binding = settings
+            .bindings
+            .get("copy_last_transcript")
+            .expect("missing copy-last-transcript binding");
+
+        assert_eq!(binding.id, "copy_last_transcript");
+
+        #[cfg(target_os = "macos")]
+        assert_eq!(binding.default_binding, "command+fn");
+
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(binding.default_binding, "ctrl+alt+c");
 
         assert_eq!(binding.current_binding, binding.default_binding);
     }

@@ -1,3 +1,7 @@
+use crate::access::{
+    get_install_access_snapshot, install_access_allows_premium_features,
+    premium_feature_access_message,
+};
 use crate::audio_feedback;
 use crate::audio_toolkit::audio::{list_input_devices, list_output_devices};
 use crate::full_system_audio_bridge::{self, FullSystemAudioPermissionState};
@@ -413,6 +417,23 @@ pub async fn set_record_full_system_audio_enabled(
         settings.record_full_system_audio = false;
         write_settings(&app, settings);
         return toggle;
+    }
+
+    let access = get_install_access_snapshot(&app);
+    if !install_access_allows_premium_features(&access) {
+        let message = premium_feature_access_message().to_string();
+        let mut readiness = full_system_audio_readiness_status().await;
+        readiness.ready = false;
+        readiness.reason = Some(message.clone());
+        settings.record_full_system_audio = false;
+        write_settings(&app, settings);
+        return FullSystemAudioToggleResult {
+            requested_enabled: true,
+            stored_enabled: false,
+            support,
+            readiness,
+            error: Some(message),
+        };
     }
 
     let requested_permission_state = match support.supported {

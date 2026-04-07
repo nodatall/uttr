@@ -20,6 +20,10 @@ import { Alert } from "@/components/ui/Alert";
 import { Button } from "@/components/ui/Button";
 import { Textarea } from "@/components/ui/Textarea";
 import { useSettings } from "@/hooks/useSettings";
+import {
+  isPremiumFeatureLocked,
+  PREMIUM_FEATURE_LOCK_MESSAGE,
+} from "@/lib/utils/premiumFeatures";
 
 const SUPPORTED_EXTENSIONS = ["wav", "mp3", "m4a", "aac", "ogg"] as const;
 
@@ -43,7 +47,8 @@ const fileNameFromPath = (path: string) => {
 
 export const FileTranscriptionSettings: React.FC = () => {
   const { t } = useTranslation();
-  const { settings, refreshSettings } = useSettings();
+  const { installAccess, refreshInstallAccess, settings, refreshSettings } =
+    useSettings();
   const [isDragActive, setIsDragActive] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
@@ -55,6 +60,17 @@ export const FileTranscriptionSettings: React.FC = () => {
 
   const history = settings?.file_transcription_history ?? [];
   const supportedFormatsText = SUPPORTED_EXTENSIONS.join(", ");
+  const accessLoaded = installAccess !== null;
+  const premiumLocked = isPremiumFeatureLocked(installAccess);
+  const lockedMessage = t("settings.fileTranscription.locked", {
+    defaultValue: PREMIUM_FEATURE_LOCK_MESSAGE,
+  });
+
+  useEffect(() => {
+    if (!accessLoaded) {
+      void refreshInstallAccess();
+    }
+  }, [accessLoaded, refreshInstallAccess]);
 
   const selectPath = useCallback(
     (path: string) => {
@@ -74,6 +90,12 @@ export const FileTranscriptionSettings: React.FC = () => {
 
   const handlePaths = useCallback(
     async (paths: string[]) => {
+      if (premiumLocked) {
+        setErrorMessage(lockedMessage);
+        toast.error(lockedMessage);
+        return;
+      }
+
       if (isProcessing) {
         toast.error(
           t("settings.fileTranscription.errors.inProgress", {
@@ -113,11 +135,24 @@ export const FileTranscriptionSettings: React.FC = () => {
 
       selectPath(path);
     },
-    [isProcessing, selectPath, supportedFormatsText, t],
+    [
+      isProcessing,
+      lockedMessage,
+      premiumLocked,
+      selectPath,
+      supportedFormatsText,
+      t,
+    ],
   );
 
   const chooseAudioFile = useCallback(async () => {
-    if (isProcessing) return;
+    if (isProcessing || premiumLocked) {
+      if (premiumLocked) {
+        setErrorMessage(lockedMessage);
+        toast.error(lockedMessage);
+      }
+      return;
+    }
 
     const selected = await open({
       multiple: false,
@@ -135,7 +170,7 @@ export const FileTranscriptionSettings: React.FC = () => {
     if (typeof selected === "string") {
       await handlePaths([selected]);
     }
-  }, [handlePaths, isProcessing, t]);
+  }, [handlePaths, isProcessing, lockedMessage, premiumLocked, t]);
 
   const clearResult = useCallback(() => {
     setIsDragActive(false);
@@ -148,6 +183,11 @@ export const FileTranscriptionSettings: React.FC = () => {
   }, []);
 
   const startTranscription = useCallback(async () => {
+    if (premiumLocked) {
+      setErrorMessage(lockedMessage);
+      return;
+    }
+
     if (!selectedFilePath || isProcessing) return;
 
     setIsProcessing(true);
@@ -203,7 +243,14 @@ export const FileTranscriptionSettings: React.FC = () => {
     } finally {
       setIsProcessing(false);
     }
-  }, [isProcessing, refreshSettings, selectedFilePath, t]);
+  }, [
+    isProcessing,
+    lockedMessage,
+    premiumLocked,
+    refreshSettings,
+    selectedFilePath,
+    t,
+  ]);
 
   const cancelTranscription = useCallback(async () => {
     if (!isProcessing) return;
@@ -260,12 +307,12 @@ export const FileTranscriptionSettings: React.FC = () => {
         }
 
         if (event.payload.type === "enter" || event.payload.type === "over") {
-          setIsDragActive(!isProcessing);
+          setIsDragActive(!isProcessing && !premiumLocked);
           return;
         }
 
         setIsDragActive(false);
-        if (event.payload.type === "drop") {
+        if (event.payload.type === "drop" && !premiumLocked) {
           await handlePaths(event.payload.paths);
         }
       })
@@ -281,7 +328,7 @@ export const FileTranscriptionSettings: React.FC = () => {
         unlisten();
       }
     };
-  }, [handlePaths, isProcessing]);
+  }, [handlePaths, isProcessing, premiumLocked]);
 
   useEffect(() => {
     let unlisten: (() => void) | undefined;
@@ -324,10 +371,12 @@ export const FileTranscriptionSettings: React.FC = () => {
             })}
           </h1>
           <p className="max-w-2xl text-sm text-text/50">
-            {t("settings.fileTranscription.description", {
-              defaultValue:
-                "Drop in one audio file or choose one from disk. Uttr will transcribe it using your current language and post-processing settings.",
-            })}
+            {premiumLocked
+              ? lockedMessage
+              : t("settings.fileTranscription.description", {
+                  defaultValue:
+                    "Drop in one audio file or choose one from disk. Uttr will transcribe it using your current language and post-processing settings.",
+                })}
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
@@ -360,7 +409,7 @@ export const FileTranscriptionSettings: React.FC = () => {
             onClick={() => {
               void chooseAudioFile();
             }}
-            disabled={isProcessing}
+            disabled={isProcessing || premiumLocked || !accessLoaded}
             className="flex items-center gap-2 rounded-full"
           >
             <Upload className="h-4 w-4" />
@@ -393,7 +442,7 @@ export const FileTranscriptionSettings: React.FC = () => {
               onClick={() => {
                 void startTranscription();
               }}
-              disabled={!selectedFilePath}
+              disabled={!selectedFilePath || premiumLocked || !accessLoaded}
               className="flex items-center gap-2 rounded-full"
             >
               <Play className="h-4 w-4" />
@@ -407,12 +456,21 @@ export const FileTranscriptionSettings: React.FC = () => {
         </div>
       </div>
 
+      {premiumLocked && (
+        <Alert
+          variant="info"
+          className="rounded-[18px] border border-blue-400/15"
+        >
+          {lockedMessage}
+        </Alert>
+      )}
+
       <div
         className={`rounded-[22px] border px-6 py-7 transition-all ${
           isDragActive
             ? "border-logo-primary/60 bg-logo-primary/10 shadow-[0_0_0_1px_rgba(103,215,163,0.2)]"
             : "border-white/8 bg-white/[0.02]"
-        }`}
+        } ${premiumLocked ? "pointer-events-none opacity-55 saturate-50" : ""}`}
       >
         <div className="flex flex-col items-center gap-4 text-center">
           <div className="rounded-full border border-white/10 bg-white/[0.03] p-4">
@@ -431,13 +489,17 @@ export const FileTranscriptionSettings: React.FC = () => {
                   t("settings.fileTranscription.processing", {
                     defaultValue: "Transcribing audio file...",
                   })
-                : selectedFileName
-                  ? t("settings.fileTranscription.readyTitle", {
-                      defaultValue: "File selected and ready to transcribe",
+                : premiumLocked
+                  ? t("settings.fileTranscription.lockedTitle", {
+                      defaultValue: "File transcription is locked on trial",
                     })
-                  : t("settings.fileTranscription.dropzoneTitle", {
-                      defaultValue: "Drag and drop one audio file here",
-                    })}
+                  : selectedFileName
+                    ? t("settings.fileTranscription.readyTitle", {
+                        defaultValue: "File selected and ready to transcribe",
+                      })
+                    : t("settings.fileTranscription.dropzoneTitle", {
+                        defaultValue: "Drag and drop one audio file here",
+                      })}
             </p>
             <p className="text-sm text-text/50">
               {selectedFileName && !isProcessing
@@ -445,10 +507,12 @@ export const FileTranscriptionSettings: React.FC = () => {
                     defaultValue:
                       "Selecting a file does not start transcription. Click Transcribe when you want to begin.",
                   })
-                : t("settings.fileTranscription.dropzoneDescription", {
-                    defaultValue: "Supported formats: {{formats}}",
-                    formats: supportedFormatsText,
-                  })}
+                : premiumLocked
+                  ? lockedMessage
+                  : t("settings.fileTranscription.dropzoneDescription", {
+                      defaultValue: "Supported formats: {{formats}}",
+                      formats: supportedFormatsText,
+                    })}
             </p>
           </div>
           <Button
@@ -457,7 +521,7 @@ export const FileTranscriptionSettings: React.FC = () => {
             onClick={() => {
               void chooseAudioFile();
             }}
-            disabled={isProcessing}
+            disabled={isProcessing || premiumLocked || !accessLoaded}
             className="flex items-center gap-2 rounded-full"
           >
             <AudioLines className="h-4 w-4" />
@@ -538,17 +602,14 @@ export const FileTranscriptionSettings: React.FC = () => {
 
       {errorMessage && <Alert variant="error">{errorMessage}</Alert>}
 
-      {!infoMessage &&
-        !errorMessage &&
-        !isProcessing &&
-        selectedFilePath && (
-          <Alert variant="info">
-            {t("settings.fileTranscription.readyState", {
-              defaultValue:
-                "File selected. Review it, then click Transcribe when you're ready.",
-            })}
-          </Alert>
-        )}
+      {!infoMessage && !errorMessage && !isProcessing && selectedFilePath && (
+        <Alert variant="info">
+          {t("settings.fileTranscription.readyState", {
+            defaultValue:
+              "File selected. Review it, then click Transcribe when you're ready.",
+          })}
+        </Alert>
+      )}
 
       {!errorMessage &&
         !isProcessing &&

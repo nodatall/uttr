@@ -635,11 +635,7 @@ export const useSettingsStore = create<SettingsStore>()(
 
     // Initialize everything
     initialize: async () => {
-      const {
-        refreshSettings,
-        checkCustomSounds,
-        loadDefaultSettings,
-      } = get();
+      const { refreshSettings, checkCustomSounds, loadDefaultSettings } = get();
 
       // Note: Audio devices are NOT refreshed here. The frontend (App.tsx)
       // is responsible for calling refreshAudioDevices/refreshOutputDevices
@@ -648,6 +644,7 @@ export const useSettingsStore = create<SettingsStore>()(
       await Promise.all([
         loadDefaultSettings(),
         refreshSettings(),
+        get().refreshInstallAccess(),
         checkCustomSounds(),
       ]);
     },
