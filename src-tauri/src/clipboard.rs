@@ -15,7 +15,8 @@ use std::process::Command;
 
 const CLIPBOARD_SYNC_ATTEMPTS: usize = 8;
 const CLIPBOARD_SYNC_RETRY_DELAY_MS: u64 = 8;
-const CLIPBOARD_RESTORE_DELAY_MS: u64 = 250;
+const CLIPBOARD_MIN_PASTE_DELAY_MS: u64 = 120;
+const CLIPBOARD_RESTORE_DELAY_MS: u64 = 1500;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClipboardWriteSyncStatus {
@@ -27,6 +28,7 @@ enum ClipboardWriteSyncStatus {
 #[derive(Debug)]
 struct ClipboardRestoreState {
     original_text: Option<String>,
+    restore_delay_ms: u64,
     use_wl_copy: bool,
 }
 
@@ -86,6 +88,10 @@ fn wait_for_clipboard_sync(app_handle: &AppHandle, expected: &str) -> ClipboardW
     }
 }
 
+fn effective_clipboard_paste_delay_ms(configured_delay_ms: u64) -> u64 {
+    configured_delay_ms.max(CLIPBOARD_MIN_PASTE_DELAY_MS)
+}
+
 fn restore_clipboard_after_paste(app_handle: AppHandle, state: ClipboardRestoreState) {
     let Some(original_text) = state.original_text else {
         // Preserve non-text clipboard content by not forcing an empty string restore.
@@ -93,7 +99,7 @@ fn restore_clipboard_after_paste(app_handle: AppHandle, state: ClipboardRestoreS
     };
 
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(CLIPBOARD_RESTORE_DELAY_MS));
+        std::thread::sleep(Duration::from_millis(state.restore_delay_ms));
         if let Err(err) = write_clipboard_text(&app_handle, &original_text, state.use_wl_copy) {
             warn!("Failed to restore original clipboard text: {}", err);
         }
@@ -143,10 +149,7 @@ fn paste_via_clipboard(
         }
     }
 
-    let effective_paste_delay_ms = match sync_status {
-        ClipboardWriteSyncStatus::Synced => paste_delay_ms.min(20),
-        _ => paste_delay_ms,
-    };
+    let effective_paste_delay_ms = effective_clipboard_paste_delay_ms(paste_delay_ms);
     if effective_paste_delay_ms > 0 {
         std::thread::sleep(Duration::from_millis(effective_paste_delay_ms));
     }
@@ -170,6 +173,7 @@ fn paste_via_clipboard(
 
     Ok(ClipboardRestoreState {
         original_text,
+        restore_delay_ms: CLIPBOARD_RESTORE_DELAY_MS,
         use_wl_copy,
     })
 }
@@ -773,5 +777,17 @@ mod tests {
     #[test]
     fn clipboard_text_match_tolerates_crlf() {
         assert!(clipboard_text_matches("hello\r\nworld", "hello\nworld"));
+    }
+
+    #[test]
+    fn clipboard_paste_delay_has_a_safety_floor() {
+        assert_eq!(effective_clipboard_paste_delay_ms(0), 120);
+        assert_eq!(effective_clipboard_paste_delay_ms(60), 120);
+        assert_eq!(effective_clipboard_paste_delay_ms(250), 250);
+    }
+
+    #[test]
+    fn clipboard_restore_delay_is_conservative() {
+        assert!(CLIPBOARD_RESTORE_DELAY_MS >= 1000);
     }
 }
