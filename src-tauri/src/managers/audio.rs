@@ -102,7 +102,9 @@ fn set_mute(mute: bool) {
 }
 
 const WHISPER_SAMPLE_RATE: usize = 16000;
-const ON_DEMAND_IDLE_KEEPALIVE: Duration = Duration::from_secs(45);
+// Keep the on-demand microphone warm long enough to cover common short idle gaps
+// without forcing users into always-on mode.
+const ON_DEMAND_IDLE_KEEPALIVE: Duration = Duration::from_secs(120);
 
 /* ──────────────────────────────────────────────────────────────── */
 
@@ -193,11 +195,7 @@ impl AudioRecordingManager {
             // If this fails (e.g. no device yet), we retry on actual recording start.
             let manager_clone = manager.clone();
             tauri::async_runtime::spawn(async move {
-                if let Err(e) = manager_clone.start_microphone_stream() {
-                    debug!("On-demand microphone prewarm failed: {}", e);
-                    return;
-                }
-                manager_clone.schedule_idle_stop();
+                manager_clone.prewarm_for_quick_start("startup");
             });
         }
 
@@ -371,6 +369,31 @@ impl AudioRecordingManager {
                 manager.stop_microphone_stream();
             }
         });
+    }
+
+    fn prewarm_on_demand_stream(&self) -> Result<bool, anyhow::Error> {
+        if !matches!(*self.mode.lock().unwrap(), MicrophoneMode::OnDemand) || self.is_recording() {
+            return Ok(false);
+        }
+
+        self.cancel_idle_stop_timer();
+        self.start_microphone_stream()?;
+        self.schedule_idle_stop();
+        Ok(true)
+    }
+
+    pub fn prewarm_for_quick_start(&self, reason: &str) {
+        match self.prewarm_on_demand_stream() {
+            Ok(true) => debug!(
+                "On-demand microphone prewarmed for quicker startup after {}",
+                reason
+            ),
+            Ok(false) => {}
+            Err(e) => debug!(
+                "On-demand microphone prewarm failed after {}: {}",
+                reason, e
+            ),
+        }
     }
 
     /* ---------- mode switching --------------------------------------------- */
