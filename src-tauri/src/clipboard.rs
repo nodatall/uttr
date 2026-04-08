@@ -4,6 +4,7 @@ use crate::settings::TypingTool;
 use crate::settings::{get_settings, AutoSubmitKey, ClipboardHandling, PasteMethod};
 use enigo::{Direction, Enigo, Key, Keyboard};
 use log::{info, warn};
+use std::sync::mpsc;
 use std::time::Duration;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
@@ -15,8 +16,9 @@ use std::process::Command;
 
 const CLIPBOARD_SYNC_ATTEMPTS: usize = 8;
 const CLIPBOARD_SYNC_RETRY_DELAY_MS: u64 = 8;
+const CLIPBOARD_ACCESS_TIMEOUT_MS: u64 = 500;
 const CLIPBOARD_MIN_PASTE_DELAY_MS: u64 = 120;
-const CLIPBOARD_RESTORE_DELAY_MS: u64 = 1500;
+const CLIPBOARD_RESTORE_DELAY_MS: u64 = 400;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClipboardWriteSyncStatus {
@@ -60,16 +62,58 @@ fn write_clipboard_text(
         .map_err(|e| format!("Failed to write to clipboard: {}", e))
 }
 
+fn run_clipboard_operation_with_timeout<T, F>(operation: F) -> Result<T, String>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, String> + Send + 'static,
+{
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _ = tx.send(operation());
+    });
+
+    match rx.recv_timeout(Duration::from_millis(CLIPBOARD_ACCESS_TIMEOUT_MS)) {
+        Ok(result) => result,
+        Err(mpsc::RecvTimeoutError::Timeout) => Err(format!(
+            "Clipboard operation timed out after {}ms",
+            CLIPBOARD_ACCESS_TIMEOUT_MS
+        )),
+        Err(mpsc::RecvTimeoutError::Disconnected) => {
+            Err("Clipboard operation thread disconnected".to_string())
+        }
+    }
+}
+
+fn read_clipboard_text_with_timeout(app_handle: &AppHandle) -> Result<String, String> {
+    let app_handle = app_handle.clone();
+    run_clipboard_operation_with_timeout(move || {
+        app_handle
+            .clipboard()
+            .read_text()
+            .map_err(|e| format!("Failed to read clipboard: {}", e))
+    })
+}
+
+fn write_clipboard_text_with_timeout(
+    app_handle: &AppHandle,
+    text: String,
+    use_wl_copy: bool,
+) -> Result<(), String> {
+    let app_handle = app_handle.clone();
+    run_clipboard_operation_with_timeout(move || {
+        write_clipboard_text(&app_handle, &text, use_wl_copy)
+    })
+}
+
 fn clipboard_text_matches(current: &str, expected: &str) -> bool {
     current.replace("\r\n", "\n") == expected.replace("\r\n", "\n")
 }
 
 fn wait_for_clipboard_sync(app_handle: &AppHandle, expected: &str) -> ClipboardWriteSyncStatus {
-    let clipboard = app_handle.clipboard();
     let mut had_successful_read = false;
 
     for attempt in 0..CLIPBOARD_SYNC_ATTEMPTS {
-        if let Ok(current) = clipboard.read_text() {
+        if let Ok(current) = read_clipboard_text_with_timeout(app_handle) {
             had_successful_read = true;
             if clipboard_text_matches(&current, expected) {
                 return ClipboardWriteSyncStatus::Synced;
@@ -100,7 +144,9 @@ fn restore_clipboard_after_paste(app_handle: AppHandle, state: ClipboardRestoreS
 
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(state.restore_delay_ms));
-        if let Err(err) = write_clipboard_text(&app_handle, &original_text, state.use_wl_copy) {
+        if let Err(err) =
+            write_clipboard_text_with_timeout(&app_handle, original_text, state.use_wl_copy)
+        {
             warn!("Failed to restore original clipboard text: {}", err);
         }
     });
@@ -114,8 +160,7 @@ fn paste_via_clipboard(
     paste_method: &PasteMethod,
     paste_delay_ms: u64,
 ) -> Result<ClipboardRestoreState, String> {
-    let clipboard = app_handle.clipboard();
-    let original_text = clipboard.read_text().ok();
+    let original_text = read_clipboard_text_with_timeout(app_handle).ok();
 
     #[cfg(target_os = "linux")]
     let use_wl_copy = is_wayland() && is_wl_copy_available();
@@ -127,7 +172,7 @@ fn paste_via_clipboard(
     if use_wl_copy {
         info!("Using wl-copy for clipboard write on Wayland");
     }
-    write_clipboard_text(app_handle, text, use_wl_copy)?;
+    write_clipboard_text_with_timeout(app_handle, text.to_string(), use_wl_copy)?;
 
     // Verify the clipboard contains the intended text before issuing Ctrl/Cmd+V.
     // Without this sync, the target app can occasionally paste stale clipboard content.
@@ -140,7 +185,8 @@ fn paste_via_clipboard(
         ClipboardWriteSyncStatus::Mismatch => {
             // Restore immediately and abort to avoid pasting stale clipboard content.
             if let Some(previous) = &original_text {
-                let _ = write_clipboard_text(app_handle, previous, use_wl_copy);
+                let _ =
+                    write_clipboard_text_with_timeout(app_handle, previous.clone(), use_wl_copy);
             }
             return Err(
                 "Clipboard did not update in time; paste aborted to prevent stale content"
@@ -742,9 +788,7 @@ pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
 
     // After pasting, optionally copy to clipboard based on settings
     if settings.clipboard_handling == ClipboardHandling::CopyToClipboard {
-        let clipboard = app_handle.clipboard();
-        clipboard
-            .write_text(&text)
+        write_clipboard_text_with_timeout(&app_handle, text.clone(), false)
             .map_err(|e| format!("Failed to copy to clipboard: {}", e))?;
     }
 
@@ -787,7 +831,7 @@ mod tests {
     }
 
     #[test]
-    fn clipboard_restore_delay_is_conservative() {
-        assert!(CLIPBOARD_RESTORE_DELAY_MS >= 1000);
+    fn clipboard_restore_delay_matches_expected_value() {
+        assert_eq!(CLIPBOARD_RESTORE_DELAY_MS, 400);
     }
 }

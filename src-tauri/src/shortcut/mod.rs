@@ -702,20 +702,37 @@ pub fn change_word_correction_threshold_setting(
 #[specta::specta]
 pub fn change_paste_method_setting(app: AppHandle, method: String) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
-    let parsed = match method.as_str() {
-        "ctrl_v" => PasteMethod::CtrlV,
-        "direct" => PasteMethod::Direct,
-        "none" => PasteMethod::None,
-        "shift_insert" => PasteMethod::ShiftInsert,
-        "ctrl_shift_v" => PasteMethod::CtrlShiftV,
-        other => {
-            warn!("Invalid paste method '{}', defaulting to ctrl_v", other);
-            PasteMethod::CtrlV
+
+    #[cfg(target_os = "macos")]
+    {
+        if method != "direct" {
+            warn!(
+                "Ignoring paste method '{}' on macOS; paste method is fixed to direct",
+                method
+            );
         }
-    };
-    settings.paste_method = parsed;
-    settings::write_settings(&app, settings);
-    Ok(())
+        settings.paste_method = PasteMethod::Direct;
+        settings::write_settings(&app, settings);
+        return Ok(());
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let parsed = match method.as_str() {
+            "ctrl_v" => PasteMethod::CtrlV,
+            "direct" => PasteMethod::Direct,
+            "none" => PasteMethod::None,
+            "shift_insert" => PasteMethod::ShiftInsert,
+            "ctrl_shift_v" => PasteMethod::CtrlShiftV,
+            other => {
+                warn!("Invalid paste method '{}', defaulting to ctrl_v", other);
+                PasteMethod::CtrlV
+            }
+        };
+        settings.paste_method = parsed;
+        settings::write_settings(&app, settings);
+        Ok(())
+    }
 }
 
 #[tauri::command]
