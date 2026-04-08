@@ -290,10 +290,10 @@ impl Default for ModelUnloadTimeout {
 
 impl Default for PasteMethod {
     fn default() -> Self {
-        // Default to CtrlV for macOS and Windows, Direct for Linux
-        #[cfg(target_os = "linux")]
+        // Default to Direct on macOS/Linux to avoid clipboard restore races.
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
         return PasteMethod::Direct;
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(not(any(target_os = "macos", target_os = "linux")))]
         return PasteMethod::CtrlV;
     }
 }
@@ -613,6 +613,18 @@ fn default_app_language() -> String {
 
 fn default_show_tray_icon() -> bool {
     true
+}
+
+fn enforce_platform_paste_method(settings: &mut AppSettings) -> bool {
+    #[cfg(target_os = "macos")]
+    {
+        if settings.paste_method != PasteMethod::Direct {
+            settings.paste_method = PasteMethod::Direct;
+            return true;
+        }
+    }
+
+    false
 }
 
 fn default_post_process_provider_id() -> String {
@@ -1097,6 +1109,10 @@ pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
         changed = true;
     }
 
+    if enforce_platform_paste_method(&mut settings) {
+        changed = true;
+    }
+
     if changed {
         store.set("settings", serde_json::to_value(&settings).unwrap());
         if let Err(e) = store.save() {
@@ -1158,6 +1174,10 @@ pub fn get_settings(app: &AppHandle) -> AppSettings {
     }
 
     if ensure_file_transcription_history_defaults(&mut settings) {
+        changed = true;
+    }
+
+    if enforce_platform_paste_method(&mut settings) {
         changed = true;
     }
 

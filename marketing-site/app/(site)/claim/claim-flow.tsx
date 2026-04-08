@@ -12,6 +12,13 @@ type ClaimFlowProps = {
   initialSource: string;
 };
 
+const DEV_ACCOUNT = {
+  email: "dev@dev.com",
+  password: "123456",
+} as const;
+
+const SHOW_DEV_ACCOUNT_SHORTCUT = process.env.NODE_ENV !== "production";
+
 async function readJsonError(response: Response) {
   const payload = (await response.json().catch(() => ({}))) as {
     error?: string;
@@ -106,6 +113,43 @@ export function ClaimFlow({
   const [error, setError] = useState<string | null>(null);
   const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
 
+  const finishAuthenticatedSession = async (
+    session: Session,
+    fallbackEmail: string,
+  ) => {
+    setSignedInEmail(session.user.email ?? fallbackEmail);
+    setStatus(initialClaimToken ? "link" : "checkout");
+    await continueCheckoutFlow({
+      session,
+      initialClaimToken,
+      initialSource,
+    });
+  };
+
+  const signInOrCreateDevAccount = async () => {
+    const signInResult = await supabase.auth.signInWithPassword(DEV_ACCOUNT);
+    if (signInResult.data.session) {
+      return signInResult.data.session;
+    }
+
+    const signUpResult = await supabase.auth.signUp(DEV_ACCOUNT);
+    if (signUpResult.data.session) {
+      return signUpResult.data.session;
+    }
+
+    const retrySignInResult = await supabase.auth.signInWithPassword(DEV_ACCOUNT);
+    if (retrySignInResult.data.session) {
+      return retrySignInResult.data.session;
+    }
+
+    throw new Error(
+      signInResult.error?.message ||
+        signUpResult.error?.message ||
+        retrySignInResult.error?.message ||
+        "Unable to create the development account.",
+    );
+  };
+
   useEffect(() => {
     let cancelled = false;
 
@@ -164,15 +208,27 @@ export function ClaimFlow({
         );
       }
 
-      setSignedInEmail(session.user.email ?? email);
-      setStatus(initialClaimToken ? "link" : "checkout");
-      await continueCheckoutFlow({
-        session,
-        initialClaimToken,
-        initialSource,
-      });
+      await finishAuthenticatedSession(session, email);
     } catch (err) {
       const message = err instanceof Error ? err.message : "Authentication failed.";
+      setError(message);
+      setStatus("idle");
+    }
+  };
+
+  const handleDevAccount = async () => {
+    setEmail(DEV_ACCOUNT.email);
+    setPassword(DEV_ACCOUNT.password);
+    setAuthMode("signin");
+    setStatus("auth");
+    setError(null);
+
+    try {
+      const session = await signInOrCreateDevAccount();
+      await finishAuthenticatedSession(session, DEV_ACCOUNT.email);
+    } catch (err) {
+      const message =
+        err instanceof Error ? err.message : "Development login failed.";
       setError(message);
       setStatus("idle");
     }
@@ -226,7 +282,25 @@ export function ClaimFlow({
               ? "Signing in..."
               : "Sign in"}
           </button>
+          {SHOW_DEV_ACCOUNT_SHORTCUT ? (
+            <button
+              type="button"
+              onClick={() => void handleDevAccount()}
+              disabled={status !== "idle"}
+              className="rounded-full border border-galaxy-blue/40 bg-galaxy-blue/10 px-6 py-3 text-sm text-galaxy-blue transition hover:border-galaxy-blue/70 hover:bg-galaxy-blue/20 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {status === "auth" && authMode === "signin" && email === DEV_ACCOUNT.email
+                ? "Opening dev account..."
+                : "Use dev account"}
+            </button>
+          ) : null}
         </div>
+        {SHOW_DEV_ACCOUNT_SHORTCUT ? (
+          <p className="text-xs text-cosmic-300">
+            Local dev shortcut: <strong>{DEV_ACCOUNT.email}</strong> /{" "}
+            <strong>{DEV_ACCOUNT.password}</strong>. The account is created on first use.
+          </p>
+        ) : null}
 
         {error ? <p className="text-sm text-rose-200">{error}</p> : null}
       </div>
