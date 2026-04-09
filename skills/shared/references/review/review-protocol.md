@@ -8,12 +8,15 @@ Mandatory review behavior for task execution and explicit review commands.
 
 ```text
 Please fetch the latest `origin/main` from github.
-We are going to work on task <task-id> in [tasks/tasks-plan-<plan-key>.md], using [tasks/prd-<plan-key>.md] and [tasks/tdd-<plan-key>.md] as planning context. Please create and switch to a new branch from `origin/main`. If the only uncommitted changes are those required planning artifacts for this plan, carry them onto the new branch and commit them there before implementation starts.
+We are going to work on task <task-id> in [tasks/tasks-plan-<plan-key>.md], using [tasks/prd-<plan-key>.md] and [tasks/tdd-<plan-key>.md] as planning context. If local `main` and `origin/main` differ in either direction, stop and ask before creating the feature branch. Otherwise, please create and switch to a new branch from `origin/main`. If the only uncommitted changes are those required planning artifacts for this plan, carry them onto the new branch and commit them there before implementation starts.
 ```
 
 Operational translation:
 
 - `git fetch origin main`
+- Compare local `main` and `origin/main` after fetch.
+- If local `main` is missing, continue from `origin/main`.
+- If local `main` and `origin/main` differ in either direction, stop and ask before creating branch.
 - If the working tree is clean, create/switch the feature branch from `origin/main`.
 - If the only dirty files are `tasks/prd-<plan-key>.md`, `tasks/tdd-<plan-key>.md`, and `tasks/tasks-plan-<plan-key>.md` for the current plan, create/switch the feature branch from `origin/main`, carry those files onto the branch, and commit them before implementation starts.
 - If the working tree contains unrelated changes, stop and ask before creating branch.
@@ -30,6 +33,7 @@ For task-based execution or task-scoped review, evaluate changes against:
 - `tasks/tmp/plan-task-<task-id>.md` when it exists for the reviewed sub-task
 
 Use those artifacts to judge scope alignment, missing work, and regression risk.
+Also verify, when `tasks/tmp/plan-task-<task-id>.md` exists, that the implementation followed the recorded local reference pattern, used a failing-test-first loop when practical, and justified any exception or trust-boundary handling recorded there.
 
 ## Review scopes
 
@@ -44,6 +48,28 @@ Default scope rules:
 - One-shot per-sub-task automatic review: `sub-task`
 - End-of-one-shot final review: `full-branch`
 - Explicit `begin review` and `begin review <task-id>`: `full-branch`
+
+## Review agent topology
+
+When subagents are available, execute each review round in one fresh dedicated review subagent/thread.
+
+- The fresh review subagent owns the prompt sequence for that review round.
+- The review round is the unit of isolation. Do not split Prompt A, Prompt B, Prompt C, and so on into separate threads.
+- During one-shot execution, the main agent must spawn the review subagent after the implementation worker returns.
+- Review subagents are siblings of implementation workers. Do not have a worker spawn, direct, or review itself through its own child agent.
+- For task-based `sub-task` review rounds, pass the review subagent:
+  - `tasks/prd-<plan-key>.md`
+  - `tasks/tdd-<plan-key>.md`
+  - `tasks/tasks-plan-<plan-key>.md`
+  - `tasks/tmp/plan-task-<task-id>.md` when it exists
+  - the exact sub-task ID and the current `sub-task` review scope
+- For task-based `full-branch` review rounds, pass the review subagent:
+  - `tasks/prd-<plan-key>.md`
+  - `tasks/tdd-<plan-key>.md`
+  - `tasks/tasks-plan-<plan-key>.md`
+  - any still-relevant `tasks/tmp/plan-task-<task-id>.md` file that remains available and materially informs branch-wide review
+  - the current `full-branch` review scope
+- The main agent still owns review orchestration, review-log updates, decisions about findings, fixes, tests, task-list updates, and commits.
 
 ## Artifact preservation flag
 
@@ -73,6 +99,16 @@ Rationale:
 
 - Codex review runs tend to produce most useful findings in the first broad review plus the closing audit, with Prompt G still valuable for frontend evidence and Prompt H still valuable for deploy-bound changes.
 - Non-Codex agents should continue to use the full redundant multi-pass chain.
+
+## Required review checks
+
+Every applicable review round must explicitly verify:
+
+- whether the slice was driven by a failing targeted test first when the work was practically testable
+- whether any skipped red/green loop has a recorded and justified exception in the sub-task contract
+- whether an existing repo-local implementation or test pattern was followed when one existed
+- whether any newly introduced pattern or deliberate deviation is justified by the actual slice constraints
+- whether any recorded `trust_boundary_notes` are still true in the implemented change
 
 ## Prompts A-I
 
@@ -181,7 +217,10 @@ Rollback, migration, or backfill safety where relevant.
 Performance under expected usage where relevant.
 Dependency and security hygiene.
 Monitoring and alerting visibility where relevant.
-Action: Report concrete evidence for each applicable item, flag gaps explicitly, and fix any production-readiness issues that are in scope for this change.
+Whether the change can access private data.
+Whether the change accepts or is exposed to untrusted input.
+Whether the change can send data externally or invoke outbound tools/actions.
+Action: Report concrete evidence for each applicable item, flag gaps explicitly, and fix any production-readiness issues that are in scope for this change. Fail this prompt when the change combines access to private data, exposure to untrusted input, and outbound capability without a hard separation boundary or a human approval gate.
 ```
 
 ### Prompt I
@@ -216,10 +255,11 @@ Rules:
 - Do not mark prompts complete retroactively from one combined pass.
 - If a prompt is outside the active prompt profile, mark it `not applicable` with a short reason rather than leaving it incomplete.
 - Compare the implementation against the task contract when `tasks/tmp/plan-task-<task-id>.md` exists; treat unexplained contract drift as a finding.
+- When the task contract exists, verify `reference_patterns`, `test_first_plan`, and any `trust_boundary_notes` against the actual implementation and recorded verification evidence.
 - Prompt G is required only for frontend-facing work or changes that affect rendered content, interaction flows, layout, styling, or responsive behavior.
 - Exception: during one-shot automatic `sub-task` review rounds, mark Prompt G `not applicable` with a note that visual verification is deferred to the final `full-branch` review.
 - Otherwise mark Prompt G `not applicable` with a reason.
-- Prompt H is required only for deploy-bound work or changes that materially affect operations, infrastructure, migrations, security posture, or runtime observability. Otherwise mark it `not applicable` with a reason.
+- Prompt H is required for deploy-bound work, for changes that materially affect operations, infrastructure, migrations, security posture, or runtime observability, and for any change touching agents, private data, secrets, untrusted input, or outbound actions/tools. Otherwise mark it `not applicable` with a reason.
 
 ## Review log protocol (required)
 
@@ -301,6 +341,7 @@ For `begin review` and `begin review <task-id>`:
 For standard task execution and one-shot execution:
 
 - After each completed sub-task and before its commit, run one review round in `sub-task` scope.
+- When subagents are available, execute that `sub-task` review round in one fresh review subagent spawned by the main agent after the worker returns.
 - Review only the current sub-task delta against `HEAD`, not the entire branch history.
 - In one-shot execution, do not run Prompt G browser/visual verification during these per-sub-task rounds; record Prompt G as deferred to the final `full-branch` review.
 - Apply fixes and rerun relevant tests before creating the sub-task commit.
@@ -309,6 +350,7 @@ For standard task execution and one-shot execution:
 For one-shot execution only:
 
 - After all sub-tasks are complete and before finalization, run one additional review round in `full-branch` scope.
+- When subagents are available, execute that final `full-branch` review round in one fresh review subagent spawned by the main agent.
 - This final round must review the entire branch diff vs `origin/main`, including all committed sub-task work.
 - If the branch includes frontend-facing work, Prompt G must be executed in this final round before completion.
 - Keep the final full-branch review log when `--preserve-review-artifacts` is active.
@@ -327,6 +369,9 @@ Operational translation:
 - Resolve conflicts and rerun relevant tests.
 - For task-based work, update checklist and relevant files.
 - For one-shot task-based work, re-open `tasks/tasks-plan-<plan-key>.md` immediately before terminal handoff and confirm no unchecked sub-tasks remain anywhere in the file.
+- Treat this re-opened task-file check as a hard liveness gate, not as an invitation to summarize partial progress. If unchecked sub-tasks remain, return to execution immediately.
+- Treat user-visible recap patterns such as completed-item lists, passing-verify lists, "already started X", or "remaining unchecked work is Y" as terminal-style handoff attempts when they would be the last message before more execution. If unchecked sub-tasks remain, do not emit that recap; continue execution instead.
+- Treat any user-visible one-shot message before this Step 9 finalization completes as potentially terminal or stall-inducing. Do not emit mid-run progress updates; only interrupt the run early for a real blocker that requires explicit user action.
 - If all checkboxes in task list are complete, archive:
   - Create `tasks/archive/<yyyy-mm-dd>-<plan-key>/` using the local current date in ISO format (`YYYY-MM-DD`)
   - `tasks/prd-<plan-key>.md`
