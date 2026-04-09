@@ -591,17 +591,67 @@ fn modifiers_to_strings(modifiers: handy_keys::Modifiers) -> Vec<String> {
     result
 }
 
+fn modifier_family_signature(modifiers: handy_keys::Modifiers) -> [bool; 5] {
+    [
+        modifiers.intersects(
+            handy_keys::Modifiers::CTRL
+                | handy_keys::Modifiers::CTRL_LEFT
+                | handy_keys::Modifiers::CTRL_RIGHT,
+        ),
+        modifiers.intersects(
+            handy_keys::Modifiers::OPT
+                | handy_keys::Modifiers::OPT_LEFT
+                | handy_keys::Modifiers::OPT_RIGHT,
+        ),
+        modifiers.intersects(
+            handy_keys::Modifiers::SHIFT
+                | handy_keys::Modifiers::SHIFT_LEFT
+                | handy_keys::Modifiers::SHIFT_RIGHT,
+        ),
+        modifiers.intersects(
+            handy_keys::Modifiers::CMD
+                | handy_keys::Modifiers::CMD_LEFT
+                | handy_keys::Modifiers::CMD_RIGHT,
+        ),
+        modifiers.contains(handy_keys::Modifiers::FN),
+    ]
+}
+
+fn modifier_family_count(modifiers: handy_keys::Modifiers) -> usize {
+    modifier_family_signature(modifiers)
+        .into_iter()
+        .filter(|present| *present)
+        .count()
+}
+
+fn modifier_families_match_exact(
+    expected: handy_keys::Modifiers,
+    actual: handy_keys::Modifiers,
+) -> bool {
+    modifier_family_signature(expected) == modifier_family_signature(actual)
+}
+
 /// Validate a shortcut string for the HandyKeys implementation.
 /// HandyKeys is more permissive: allows modifier-only combos and the fn key.
 pub fn validate_shortcut(raw: &str) -> Result<(), String> {
     if raw.trim().is_empty() {
         return Err("Shortcut cannot be empty".into());
     }
-    // HandyKeys accepts modifier-only, key-only, and modifier+key combos
-    // Just verify the string is parseable
-    raw.parse::<Hotkey>()
-        .map(|_| ())
-        .map_err(|e| format!("Invalid shortcut for HandyKeys: {}", e))
+
+    let hotkey = raw
+        .parse::<Hotkey>()
+        .map_err(|e| format!("Invalid shortcut for HandyKeys: {}", e))?;
+
+    if hotkey.key.is_none()
+        && modifier_family_count(hotkey.modifiers) == 1
+        && !hotkey.modifiers.contains(handy_keys::Modifiers::FN)
+    {
+        return Err(
+            "Modifier-only shortcuts must include Fn or at least two modifiers".into(),
+        );
+    }
+
+    Ok(())
 }
 
 /// Initialize handy-keys shortcuts
@@ -609,25 +659,30 @@ pub fn init_shortcuts(app: &AppHandle) -> Result<(), String> {
     let state = HandyKeysState::new(app.clone())?;
 
     let default_bindings = settings::get_default_settings().bindings;
-    let user_settings = settings::load_or_create_app_settings(app);
+    let mut user_settings = settings::load_or_create_app_settings(app);
+    let mut repaired_bindings = false;
 
     // Register all bindings except cancel (which is dynamic)
     for (id, default_binding) in default_bindings {
         if id == "cancel" {
             continue;
         }
-        let binding = user_settings
+        let mut binding = user_settings
             .bindings
             .get(&id)
             .cloned()
-            .unwrap_or(default_binding);
+            .unwrap_or(default_binding.clone());
 
         if let Err(e) = validate_shortcut(&binding.current_binding) {
             warn!(
-                "Shortcut '{}' ('{}') is invalid for handy-keys: {}. Skipping registration.",
+                "Shortcut '{}' ('{}') is invalid for handy-keys: {}. Resetting to default.",
                 id, binding.current_binding, e
             );
-            continue;
+            binding = default_binding.clone();
+            user_settings
+                .bindings
+                .insert(id.clone(), binding.clone());
+            repaired_bindings = true;
         }
 
         if let Err(e) = state.register(&binding) {
@@ -636,6 +691,10 @@ pub fn init_shortcuts(app: &AppHandle) -> Result<(), String> {
                 id, e
             );
         }
+    }
+
+    if repaired_bindings {
+        settings::write_settings(app, user_settings);
     }
 
     app.manage(state);
@@ -657,7 +716,7 @@ fn modifier_only_transition(hotkey: Hotkey, event: &KeyEvent, was_active: bool) 
         return None;
     }
 
-    let is_active = hotkey.modifiers.matches(event.modifiers);
+    let is_active = modifier_families_match_exact(hotkey.modifiers, event.modifiers);
     if !was_active && event.is_key_down && is_active {
         Some(true)
     } else if was_active && !event.is_key_down && !is_active {
@@ -720,6 +779,42 @@ mod tests {
         };
 
         assert_eq!(modifier_only_transition(hotkey, &event, false), None);
+    }
+
+    #[test]
+    fn modifier_only_transition_requires_exact_modifier_match() {
+        let hotkey: Hotkey = "fn".parse().unwrap();
+        let event = KeyEvent {
+            modifiers: handy_keys::Modifiers::CMD_LEFT | handy_keys::Modifiers::FN,
+            key: None,
+            is_key_down: true,
+            changed_modifier: Some(handy_keys::Modifiers::FN),
+        };
+
+        assert_eq!(modifier_only_transition(hotkey, &event, false), None);
+    }
+
+    #[test]
+    fn modifier_only_transition_accepts_exact_multi_modifier_combo() {
+        let hotkey: Hotkey = "command+fn".parse().unwrap();
+        let event = KeyEvent {
+            modifiers: handy_keys::Modifiers::CMD_LEFT | handy_keys::Modifiers::FN,
+            key: None,
+            is_key_down: true,
+            changed_modifier: Some(handy_keys::Modifiers::FN),
+        };
+
+        assert_eq!(modifier_only_transition(hotkey, &event, false), Some(true));
+    }
+
+    #[test]
+    fn validate_shortcut_rejects_single_non_fn_modifier() {
+        assert!(validate_shortcut("ctrl").is_err());
+    }
+
+    #[test]
+    fn validate_shortcut_allows_fn_only_shortcut() {
+        assert!(validate_shortcut("fn").is_ok());
     }
 
     #[test]
