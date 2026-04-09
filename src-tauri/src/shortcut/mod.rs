@@ -201,12 +201,6 @@ pub fn change_binding(
         }
     }
 
-    // Unregister the existing binding
-    if let Err(e) = unregister_shortcut(&app, binding_to_modify.clone()) {
-        let error_msg = format!("Failed to unregister shortcut: {}", e);
-        error!("change_binding error: {}", error_msg);
-    }
-
     // Validate the new shortcut for the current keyboard implementation
     if let Err(e) = validate_shortcut_for_implementation(&binding, settings.keyboard_implementation)
     {
@@ -214,14 +208,26 @@ pub fn change_binding(
         return Err(e);
     }
 
+    // Unregister the existing binding only after the new binding validates.
+    if let Err(e) = unregister_shortcut(&app, binding_to_modify.clone()) {
+        let error_msg = format!("Failed to unregister shortcut: {}", e);
+        error!("change_binding error: {}", error_msg);
+    }
+
     // Create an updated binding
-    let mut updated_binding = binding_to_modify;
+    let mut updated_binding = binding_to_modify.clone();
     updated_binding.current_binding = binding;
 
     // Register the new binding
     if let Err(e) = register_shortcut(&app, updated_binding.clone()) {
         let error_msg = format!("Failed to register shortcut: {}", e);
         error!("change_binding error: {}", error_msg);
+        if let Err(restore_err) = register_shortcut(&app, binding_to_modify.clone()) {
+            error!(
+                "change_binding failed to restore original shortcut '{}': {}",
+                binding_to_modify.current_binding, restore_err
+            );
+        }
         return Ok(BindingResponse {
             success: false,
             binding: None,

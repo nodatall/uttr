@@ -7,7 +7,6 @@ use tauri::image::Image;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIcon;
 use tauri::{AppHandle, Manager, Theme};
-use tauri_plugin_clipboard_manager::ClipboardExt;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TrayIconState {
@@ -211,13 +210,33 @@ pub fn copy_last_transcript(app: &AppHandle) {
             return;
         }
     };
+    let text = last_transcript_text(&entry).to_string();
+    let text_for_paste = text.clone();
+    let app_handle = app.clone();
 
-    if let Err(err) = app.clipboard().write_text(last_transcript_text(&entry)) {
-        error!("Failed to copy last transcript to clipboard: {}", err);
-        return;
+    if let Err(err) = app.run_on_main_thread(move || {
+        if let Err(paste_err) = crate::utils::paste(text_for_paste.clone(), app_handle.clone()) {
+            error!("Failed to paste last transcript: {}", paste_err);
+            if let Err(copy_err) =
+                crate::clipboard::copy_text_for_manual_paste(&text_for_paste, &app_handle)
+            {
+                error!(
+                    "Failed to copy last transcript to clipboard after paste error: {}",
+                    copy_err
+                );
+            }
+        } else {
+            info!("Pasted last transcript.");
+        }
+    }) {
+        error!("Failed to schedule last transcript paste on main thread: {:?}", err);
+        if let Err(copy_err) = crate::clipboard::copy_text_for_manual_paste(&text, app) {
+            error!(
+                "Failed to copy last transcript to clipboard after scheduling error: {}",
+                copy_err
+            );
+        }
     }
-
-    info!("Copied last transcript to clipboard via tray.");
 }
 
 struct TrayShortcutDisplay {

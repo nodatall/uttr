@@ -1189,7 +1189,7 @@ impl ShortcutAction for CopyLastTranscriptAction {
     }
 
     fn stop(&self, _app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {
-        // Nothing to do on stop for one-shot clipboard actions.
+        // Nothing to do on stop for one-shot actions.
     }
 }
 

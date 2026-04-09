@@ -709,17 +709,26 @@ fn should_send_auto_submit(auto_submit: bool, paste_method: PasteMethod) -> bool
     auto_submit && paste_method != PasteMethod::None
 }
 
+pub fn format_text_for_paste(text: &str, append_trailing_space: bool) -> String {
+    if append_trailing_space {
+        format!("{text} ")
+    } else {
+        text.to_string()
+    }
+}
+
+pub fn copy_text_for_manual_paste(text: &str, app_handle: &AppHandle) -> Result<(), String> {
+    let settings = get_settings(app_handle);
+    let formatted = format_text_for_paste(text, settings.append_trailing_space);
+    write_clipboard_text_with_timeout(app_handle, formatted, false)
+}
+
 pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
     let settings = get_settings(&app_handle);
     let paste_method = settings.paste_method;
     let paste_delay_ms = settings.paste_delay_ms;
 
-    // Append trailing space if setting is enabled
-    let text = if settings.append_trailing_space {
-        format!("{} ", text)
-    } else {
-        text
-    };
+    let text = format_text_for_paste(&text, settings.append_trailing_space);
 
     info!(
         "Using paste method: {:?}, delay: {}ms",
@@ -816,6 +825,16 @@ mod tests {
         assert!(should_send_auto_submit(true, PasteMethod::Direct));
         assert!(should_send_auto_submit(true, PasteMethod::CtrlShiftV));
         assert!(should_send_auto_submit(true, PasteMethod::ShiftInsert));
+    }
+
+    #[test]
+    fn format_text_for_paste_appends_trailing_space_when_enabled() {
+        assert_eq!(format_text_for_paste("hello", true), "hello ");
+    }
+
+    #[test]
+    fn format_text_for_paste_leaves_text_unchanged_when_disabled() {
+        assert_eq!(format_text_for_paste("hello", false), "hello");
     }
 
     #[test]
