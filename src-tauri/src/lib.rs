@@ -141,10 +141,19 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     // This matches the pattern used for Enigo initialization.
 
     #[cfg(unix)]
-    let signals = Signals::new(&[SIGUSR2]).unwrap();
-    // Set up SIGUSR2 signal handler for toggling transcription
-    #[cfg(unix)]
-    signal_handle::setup_signal_handler(app_handle.clone(), signals);
+    if signal_handle::signal_toggle_enabled() {
+        let signals = Signals::new(&[SIGUSR2]).unwrap();
+        signal_handle::setup_signal_handler(app_handle.clone(), signals);
+        log::info!(
+            "SIGUSR2 transcription toggle enabled via {}",
+            signal_handle::SIGUSR2_TRANSCRIPTION_ENV
+        );
+    } else {
+        log::debug!(
+            "SIGUSR2 transcription toggle disabled; set {}=1 to enable",
+            signal_handle::SIGUSR2_TRANSCRIPTION_ENV
+        );
+    }
 
     // Apply macOS Accessory policy if starting hidden
     #[cfg(target_os = "macos")]
