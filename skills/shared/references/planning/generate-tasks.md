@@ -67,12 +67,18 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 5. Preserve meaningful implementation detail from the source plan by expressing it as actionable tasks.
 6. Ensure every meaningful `FR-*` and `TDR-*` is covered by at least one task or sub-task.
 7. Ensure every sub-task has `covers_prd`, `covers_tdd`, `output`, `verify`, and `done_when`.
-8. Make every sub-task small enough that implementation and review can agree on a concrete contract before coding starts.
-9. For frontend-facing sub-tasks, make `verify` and `done_when` describe the actual screens, states, interactions, and visible quality bar to be checked in the browser. Avoid generic wording such as `UI looks good`.
-10. Sequence frontend work so shared layout/theming primitives land before high-polish states, unless the risk profile clearly favors a spike first.
-11. Save `tasks/tasks-plan-<plan-key>.md`.
-12. Stop and wait for build trigger.
-13. If `--deep-research` is active, fold research-discovered rollout, migration, verification, and cleanup work into the task ordering and sub-task details.
+8. When repo-local implementation or test patterns are a good fit, name them in `Relevant Files`, `Task Ordering Notes`, or the relevant task text so execution knows what local convention to follow without adding new required task fields.
+9. For code-bearing, practically testable sub-tasks, make `verify` identify the targeted test command that execution should run red first and then green after implementation; for slices where a failing-first loop is not practical, make that exception visible in the task wording or ordering notes without introducing a new required field.
+10. Make every sub-task small enough that implementation and review can agree on a concrete contract before coding starts.
+11. For frontend-facing sub-tasks, make `verify` and `done_when` describe the actual screens, states, interactions, and visible quality bar to be checked in the browser. Avoid generic wording such as `UI looks good`.
+12. Sequence frontend work so shared layout/theming primitives land before high-polish states, unless the risk profile clearly favors a spike first.
+13. If the finalized PRD or TDD show missing validation tooling that the plan depends on, add explicit early tasks for that bootstrap work: config files, scripts or task-runner entries, CI wiring, and hook integration where appropriate.
+14. When validation tooling bootstrap is in scope, make later feature tasks depend on the new commands instead of pretending those commands already existed.
+15. Prefer repo-native enforcement in `verify` steps. Use the repo's real lint, format-check, typecheck, test, or build commands when they exist; if they do not exist yet, make the bootstrap task introduce them first.
+16. When that bootstrap is first-time repo setup, call out that the bootstrap task is executable via `bootstrap repo rules [--with-hooks]`.
+17. Save `tasks/tasks-plan-<plan-key>.md`.
+18. Stop and wait for build trigger.
+19. If `--deep-research` is active, fold research-discovered rollout, migration, verification, and cleanup work into the task ordering and sub-task details.
 
 ## Coverage rule
 

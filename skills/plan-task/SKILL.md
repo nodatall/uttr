@@ -29,10 +29,6 @@ Load these files before running:
 - `skills/shared/references/planning/improve-plan.md`
 - `skills/shared/references/execution/task-file-contract.md`
 
-For frontend-heavy or design-sensitive work, also load:
-
-- `skills/frontend-design-improve/SKILL.md`
-
 ## Workflow
 
 1. Run planning preflight from `socratic-planning.md`.
@@ -61,6 +57,12 @@ For frontend-heavy or design-sensitive work, also load:
 - Do not use lean-mode branching. Simpler work produces shorter docs naturally.
 - Do not leave `Open questions` or `Open technical questions` in final artifacts.
 - Preserve substantive source-plan sections; normalize them without dropping content.
+- Make repo-local implementation or test patterns explicit in the generated artifacts when relevant examples already exist; record what should be followed instead of inventing a new pattern by default.
+- Inspect the target repo's existing validation/tooling surface during planning: manifests, scripts or task runners, CI workflows, lint or format configs, typecheck or build configs, and git hook setup.
+- If the target repo lacks meaningful validation or formatting enforcement for its stack, make that gap explicit in PRD, TDD, and tasks-plan instead of assuming those checks exist.
+- When planned work would materially benefit from missing validation tooling, add explicit bootstrap work for the config files, scripts, CI wiring, and hook integration needed for that repo before downstream feature tasks rely on them.
+- When the missing validation/tooling should be installed as first-time repo setup, make the earliest bootstrap task executable via `bootstrap repo rules [--with-hooks]`.
+- Make expected red/green ownership explicit in the generated artifacts: identify which planned sub-tasks should begin with a failing targeted test first, and note only the slices that are expected to need a justified exception.
 - With `--deep-research`, research defaults to `Tech + Delivery`: technical design, migration/rollout/rollback, security/ops, and verification strategy.
 - With `--deep-research`, live web research is mandatory and the working memo must include at least 5 substantive external primary web sources.
 - With `--deep-research`, the research framing must include the exact current date and the plan-specific stack, constraints, and quality priorities before web research begins.
