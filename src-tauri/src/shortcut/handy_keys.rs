@@ -36,12 +36,15 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter, Manager};
 
 use crate::settings::{self, get_settings, ShortcutBinding};
 use crate::transcription_coordinator::{is_transcribe_binding, transcribe_binding_push_to_talk};
 
 use super::handler::handle_shortcut_event;
+
+const MODIFIER_ONLY_STALE_TIMEOUT: Duration = Duration::from_millis(750);
 
 /// Commands that can be sent to the hotkey manager thread
 enum ManagerCommand {
@@ -92,6 +95,75 @@ struct ActivePushToTalkGuard {
     hotkey_string: String,
 }
 
+#[derive(Default)]
+struct ModifierOnlyTracker {
+    active: [bool; 5],
+    last_pressed_at: [Option<Instant>; 5],
+}
+
+impl ModifierOnlyTracker {
+    fn clear_stale_before_modifier_press(
+        &mut self,
+        event: &KeyEvent,
+        now: Instant,
+        allow_stale_recovery: bool,
+    ) {
+        if !allow_stale_recovery || !event.is_key_down {
+            return;
+        }
+
+        let Some(changed_family) = modifier_family_index(event.changed_modifier) else {
+            return;
+        };
+
+        for family in 0..self.active.len() {
+            if family == changed_family || !self.active[family] {
+                continue;
+            }
+
+            let is_stale = self.last_pressed_at[family].is_some_and(|pressed_at| {
+                now.duration_since(pressed_at) > MODIFIER_ONLY_STALE_TIMEOUT
+            });
+            if is_stale {
+                self.active[family] = false;
+            }
+        }
+    }
+
+    fn apply(&mut self, event: &KeyEvent, now: Instant) {
+        let Some(family) = modifier_family_index(event.changed_modifier) else {
+            return;
+        };
+
+        self.active[family] = event.is_key_down;
+        if event.is_key_down {
+            self.last_pressed_at[family] = Some(now);
+        }
+    }
+
+    fn modifiers(&self) -> handy_keys::Modifiers {
+        let mut modifiers = handy_keys::Modifiers::empty();
+
+        if self.active[0] {
+            modifiers |= handy_keys::Modifiers::CTRL;
+        }
+        if self.active[1] {
+            modifiers |= handy_keys::Modifiers::OPT;
+        }
+        if self.active[2] {
+            modifiers |= handy_keys::Modifiers::SHIFT;
+        }
+        if self.active[3] {
+            modifiers |= handy_keys::Modifiers::CMD;
+        }
+        if self.active[4] {
+            modifiers |= handy_keys::Modifiers::FN;
+        }
+
+        modifiers
+    }
+}
+
 impl HandyKeysState {
     /// Create a new HandyKeysState
     pub fn new(app: AppHandle) -> Result<Self, String> {
@@ -140,6 +212,7 @@ impl HandyKeysState {
         let mut hotkey_to_binding: HashMap<HotkeyId, (String, String)> = HashMap::new(); // (binding_id, hotkey_string)
         let mut modifier_only_bindings: HashMap<String, (Hotkey, String)> = HashMap::new();
         let mut pressed_modifier_only: HashSet<String> = HashSet::new();
+        let mut modifier_only_tracker = ModifierOnlyTracker::default();
         let mut active_push_to_talk: HashMap<String, ActivePushToTalkGuard> = HashMap::new();
 
         loop {
@@ -168,6 +241,7 @@ impl HandyKeysState {
                         &app,
                         &modifier_only_bindings,
                         &mut pressed_modifier_only,
+                        &mut modifier_only_tracker,
                         &mut active_push_to_talk,
                         &event,
                     );
@@ -309,6 +383,7 @@ impl HandyKeysState {
         app: &AppHandle,
         modifier_only_bindings: &HashMap<String, (Hotkey, String)>,
         pressed_modifier_only: &mut HashSet<String>,
+        modifier_only_tracker: &mut ModifierOnlyTracker,
         active_push_to_talk: &mut HashMap<String, ActivePushToTalkGuard>,
         event: &KeyEvent,
     ) {
@@ -316,10 +391,20 @@ impl HandyKeysState {
             return;
         }
 
+        let now = Instant::now();
+        modifier_only_tracker.clear_stale_before_modifier_press(
+            event,
+            now,
+            pressed_modifier_only.is_empty(),
+        );
+        modifier_only_tracker.apply(event, now);
+        let tracked_modifiers = modifier_only_tracker.modifiers();
+
         for (binding_id, (hotkey, hotkey_string)) in modifier_only_bindings {
             match modifier_only_transition(
                 *hotkey,
                 event,
+                tracked_modifiers,
                 pressed_modifier_only.contains(binding_id),
             ) {
                 Some(true) => {
@@ -624,6 +709,40 @@ fn modifier_family_count(modifiers: handy_keys::Modifiers) -> usize {
         .count()
 }
 
+fn modifier_family_index(modifiers: Option<handy_keys::Modifiers>) -> Option<usize> {
+    let modifiers = modifiers?;
+
+    if modifiers.intersects(
+        handy_keys::Modifiers::CTRL
+            | handy_keys::Modifiers::CTRL_LEFT
+            | handy_keys::Modifiers::CTRL_RIGHT,
+    ) {
+        Some(0)
+    } else if modifiers.intersects(
+        handy_keys::Modifiers::OPT
+            | handy_keys::Modifiers::OPT_LEFT
+            | handy_keys::Modifiers::OPT_RIGHT,
+    ) {
+        Some(1)
+    } else if modifiers.intersects(
+        handy_keys::Modifiers::SHIFT
+            | handy_keys::Modifiers::SHIFT_LEFT
+            | handy_keys::Modifiers::SHIFT_RIGHT,
+    ) {
+        Some(2)
+    } else if modifiers.intersects(
+        handy_keys::Modifiers::CMD
+            | handy_keys::Modifiers::CMD_LEFT
+            | handy_keys::Modifiers::CMD_RIGHT,
+    ) {
+        Some(3)
+    } else if modifiers.contains(handy_keys::Modifiers::FN) {
+        Some(4)
+    } else {
+        None
+    }
+}
+
 fn modifier_families_match_exact(
     expected: handy_keys::Modifiers,
     actual: handy_keys::Modifiers,
@@ -646,9 +765,7 @@ pub fn validate_shortcut(raw: &str) -> Result<(), String> {
         && modifier_family_count(hotkey.modifiers) == 1
         && !hotkey.modifiers.contains(handy_keys::Modifiers::FN)
     {
-        return Err(
-            "Modifier-only shortcuts must include Fn or at least two modifiers".into(),
-        );
+        return Err("Modifier-only shortcuts must include Fn or at least two modifiers".into());
     }
 
     Ok(())
@@ -679,9 +796,7 @@ pub fn init_shortcuts(app: &AppHandle) -> Result<(), String> {
                 id, binding.current_binding, e
             );
             binding = default_binding.clone();
-            user_settings
-                .bindings
-                .insert(id.clone(), binding.clone());
+            user_settings.bindings.insert(id.clone(), binding.clone());
             repaired_bindings = true;
         }
 
@@ -711,12 +826,17 @@ fn should_track_push_to_talk_guard(app: &AppHandle, binding_id: &str) -> bool {
     transcribe_binding_push_to_talk(binding_id, settings.push_to_talk)
 }
 
-fn modifier_only_transition(hotkey: Hotkey, event: &KeyEvent, was_active: bool) -> Option<bool> {
+fn modifier_only_transition(
+    hotkey: Hotkey,
+    event: &KeyEvent,
+    active_modifiers: handy_keys::Modifiers,
+    was_active: bool,
+) -> Option<bool> {
     if hotkey.key.is_some() || event.key.is_some() {
         return None;
     }
 
-    let is_active = modifier_families_match_exact(hotkey.modifiers, event.modifiers);
+    let is_active = modifier_families_match_exact(hotkey.modifiers, active_modifiers);
     if !was_active && event.is_key_down && is_active {
         Some(true)
     } else if was_active && !event.is_key_down && !is_active {
@@ -752,7 +872,10 @@ mod tests {
             changed_modifier: Some(handy_keys::Modifiers::FN),
         };
 
-        assert_eq!(modifier_only_transition(hotkey, &event, false), Some(true));
+        assert_eq!(
+            modifier_only_transition(hotkey, &event, event.modifiers, false),
+            Some(true)
+        );
     }
 
     #[test]
@@ -765,7 +888,10 @@ mod tests {
             changed_modifier: Some(handy_keys::Modifiers::FN),
         };
 
-        assert_eq!(modifier_only_transition(hotkey, &event, true), Some(false));
+        assert_eq!(
+            modifier_only_transition(hotkey, &event, event.modifiers, true),
+            Some(false)
+        );
     }
 
     #[test]
@@ -778,7 +904,10 @@ mod tests {
             changed_modifier: Some(handy_keys::Modifiers::SHIFT_LEFT),
         };
 
-        assert_eq!(modifier_only_transition(hotkey, &event, false), None);
+        assert_eq!(
+            modifier_only_transition(hotkey, &event, event.modifiers, false),
+            None
+        );
     }
 
     #[test]
@@ -791,7 +920,10 @@ mod tests {
             changed_modifier: Some(handy_keys::Modifiers::FN),
         };
 
-        assert_eq!(modifier_only_transition(hotkey, &event, false), None);
+        assert_eq!(
+            modifier_only_transition(hotkey, &event, event.modifiers, false),
+            None
+        );
     }
 
     #[test]
@@ -804,7 +936,54 @@ mod tests {
             changed_modifier: Some(handy_keys::Modifiers::FN),
         };
 
-        assert_eq!(modifier_only_transition(hotkey, &event, false), Some(true));
+        assert_eq!(
+            modifier_only_transition(hotkey, &event, event.modifiers, false),
+            Some(true)
+        );
+    }
+
+    #[test]
+    fn modifier_only_tracker_recovers_stale_command_before_fn_press() {
+        let mut tracker = ModifierOnlyTracker::default();
+        let now = Instant::now();
+        tracker.active[3] = true;
+        tracker.last_pressed_at[3] =
+            Some(now - MODIFIER_ONLY_STALE_TIMEOUT - Duration::from_millis(1));
+
+        let event = KeyEvent {
+            modifiers: handy_keys::Modifiers::CMD_LEFT | handy_keys::Modifiers::FN,
+            key: None,
+            is_key_down: true,
+            changed_modifier: Some(handy_keys::Modifiers::FN),
+        };
+
+        tracker.clear_stale_before_modifier_press(&event, now, true);
+        tracker.apply(&event, now);
+
+        assert_eq!(tracker.modifiers(), handy_keys::Modifiers::FN);
+    }
+
+    #[test]
+    fn modifier_only_tracker_keeps_recent_command_for_command_fn_chord() {
+        let mut tracker = ModifierOnlyTracker::default();
+        let now = Instant::now();
+        tracker.active[3] = true;
+        tracker.last_pressed_at[3] = Some(now - Duration::from_millis(100));
+
+        let event = KeyEvent {
+            modifiers: handy_keys::Modifiers::CMD_LEFT | handy_keys::Modifiers::FN,
+            key: None,
+            is_key_down: true,
+            changed_modifier: Some(handy_keys::Modifiers::FN),
+        };
+
+        tracker.clear_stale_before_modifier_press(&event, now, true);
+        tracker.apply(&event, now);
+
+        assert_eq!(
+            tracker.modifiers(),
+            handy_keys::Modifiers::CMD | handy_keys::Modifiers::FN
+        );
     }
 
     #[test]

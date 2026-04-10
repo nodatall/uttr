@@ -36,6 +36,7 @@ use signal_hook::consts::SIGUSR2;
 use signal_hook::iterator::Signals;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::image::Image;
 pub use transcription_coordinator::TranscriptionCoordinator;
 
@@ -49,6 +50,7 @@ use crate::settings::get_settings;
 // Global atomic to store the file log level filter
 // We use u8 to store the log::LevelFilter as a number
 pub static FILE_LOG_LEVEL: AtomicU8 = AtomicU8::new(log::LevelFilter::Debug as u8);
+const BACKEND_SHORTCUT_REFRESH_INTERVAL: Duration = Duration::from_secs(3 * 60);
 
 fn level_filter_from_u8(value: u8) -> log::LevelFilter {
     match value {
@@ -252,6 +254,28 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     utils::create_recording_overlay(app_handle);
 }
 
+fn spawn_shortcut_refresh_heartbeat(app_handle: AppHandle) {
+    tauri::async_runtime::spawn(async move {
+        loop {
+            tokio::time::sleep(BACKEND_SHORTCUT_REFRESH_INTERVAL).await;
+
+            if app_handle
+                .try_state::<crate::commands::ShortcutsInitialized>()
+                .is_none()
+            {
+                continue;
+            }
+
+            if let Err(err) = shortcut::refresh_shortcuts(&app_handle) {
+                log::warn!(
+                    "Failed to refresh shortcuts from backend heartbeat: {}",
+                    err
+                );
+            }
+        }
+    });
+}
+
 #[tauri::command]
 #[specta::specta]
 fn trigger_update_check(app: AppHandle) -> Result<(), String> {
@@ -448,6 +472,7 @@ pub fn run() {
             app.manage(TranscriptionCoordinator::new(app_handle.clone()));
 
             initialize_core_logic(&app_handle);
+            spawn_shortcut_refresh_heartbeat(app_handle.clone());
 
             // Show main window only if not starting hidden
             if !settings.start_hidden {
@@ -492,6 +517,15 @@ pub fn run() {
 
     app.run(|app_handle, event| {
         if let RunEvent::Resumed = event {
+            if app_handle
+                .try_state::<crate::commands::ShortcutsInitialized>()
+                .is_some()
+            {
+                if let Err(err) = shortcut::refresh_shortcuts(app_handle) {
+                    log::warn!("Failed to refresh shortcuts on app resume: {}", err);
+                }
+            }
+
             if let Some(recording_manager) = app_handle.try_state::<Arc<AudioRecordingManager>>() {
                 let recording_manager = Arc::clone(&recording_manager);
                 tauri::async_runtime::spawn(async move {
