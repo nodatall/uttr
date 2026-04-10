@@ -229,7 +229,10 @@ pub fn copy_last_transcript(app: &AppHandle) {
             info!("Pasted last transcript.");
         }
     }) {
-        error!("Failed to schedule last transcript paste on main thread: {:?}", err);
+        error!(
+            "Failed to schedule last transcript paste on main thread: {:?}",
+            err
+        );
         if let Err(copy_err) = crate::clipboard::copy_text_for_manual_paste(&text, app) {
             error!(
                 "Failed to copy last transcript to clipboard after scheduling error: {}",
