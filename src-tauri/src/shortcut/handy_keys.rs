@@ -237,17 +237,31 @@ impl HandyKeysState {
 
             if let Some(listener) = raw_listener.as_ref() {
                 while let Some(event) = listener.try_recv() {
+                    let modifier_only_modifiers = if event.key.is_none() {
+                        let now = Instant::now();
+                        modifier_only_tracker.clear_stale_before_modifier_press(
+                            &event,
+                            now,
+                            pressed_modifier_only.is_empty(),
+                        );
+                        modifier_only_tracker.apply(&event, now);
+                        modifier_only_tracker.modifiers()
+                    } else {
+                        modifier_only_tracker.modifiers()
+                    };
+
                     Self::dispatch_modifier_only_events(
                         &app,
                         &modifier_only_bindings,
                         &mut pressed_modifier_only,
-                        &mut modifier_only_tracker,
                         &mut active_push_to_talk,
+                        modifier_only_modifiers,
                         &event,
                     );
                     Self::dispatch_push_to_talk_release_guards(
                         &app,
                         &mut active_push_to_talk,
+                        modifier_only_modifiers,
                         &event,
                     );
                 }
@@ -383,28 +397,19 @@ impl HandyKeysState {
         app: &AppHandle,
         modifier_only_bindings: &HashMap<String, (Hotkey, String)>,
         pressed_modifier_only: &mut HashSet<String>,
-        modifier_only_tracker: &mut ModifierOnlyTracker,
         active_push_to_talk: &mut HashMap<String, ActivePushToTalkGuard>,
+        modifier_only_modifiers: handy_keys::Modifiers,
         event: &KeyEvent,
     ) {
         if event.key.is_some() {
             return;
         }
 
-        let now = Instant::now();
-        modifier_only_tracker.clear_stale_before_modifier_press(
-            event,
-            now,
-            pressed_modifier_only.is_empty(),
-        );
-        modifier_only_tracker.apply(event, now);
-        let tracked_modifiers = modifier_only_tracker.modifiers();
-
         for (binding_id, (hotkey, hotkey_string)) in modifier_only_bindings {
             match modifier_only_transition(
                 *hotkey,
                 event,
-                tracked_modifiers,
+                modifier_only_modifiers,
                 pressed_modifier_only.contains(binding_id),
             ) {
                 Some(true) => {
@@ -474,12 +479,13 @@ impl HandyKeysState {
     fn dispatch_push_to_talk_release_guards(
         app: &AppHandle,
         active_push_to_talk: &mut HashMap<String, ActivePushToTalkGuard>,
+        modifier_only_modifiers: handy_keys::Modifiers,
         event: &KeyEvent,
     ) {
         let mut released_bindings = Vec::new();
 
         for (binding_id, guard) in active_push_to_talk.iter() {
-            if push_to_talk_guard_should_release(guard.hotkey, event) {
+            if push_to_talk_guard_should_release(guard.hotkey, modifier_only_modifiers, event) {
                 released_bindings.push((binding_id.clone(), guard.hotkey_string.to_string()));
             }
         }
@@ -846,9 +852,13 @@ fn modifier_only_transition(
     }
 }
 
-fn push_to_talk_guard_should_release(hotkey: Hotkey, event: &KeyEvent) -> bool {
+fn push_to_talk_guard_should_release(
+    hotkey: Hotkey,
+    modifier_only_modifiers: handy_keys::Modifiers,
+    event: &KeyEvent,
+) -> bool {
     if hotkey.key.is_none() {
-        return !hotkey.modifiers.matches(event.modifiers);
+        return !modifier_families_match_exact(hotkey.modifiers, modifier_only_modifiers);
     }
 
     if !hotkey.modifiers.matches(event.modifiers) {
@@ -1006,7 +1016,11 @@ mod tests {
             changed_modifier: None,
         };
 
-        assert!(push_to_talk_guard_should_release(hotkey, &event));
+        assert!(push_to_talk_guard_should_release(
+            hotkey,
+            handy_keys::Modifiers::empty(),
+            &event
+        ));
     }
 
     #[test]
@@ -1019,7 +1033,11 @@ mod tests {
             changed_modifier: Some(handy_keys::Modifiers::CTRL),
         };
 
-        assert!(push_to_talk_guard_should_release(hotkey, &event));
+        assert!(push_to_talk_guard_should_release(
+            hotkey,
+            handy_keys::Modifiers::empty(),
+            &event
+        ));
     }
 
     #[test]
@@ -1032,7 +1050,45 @@ mod tests {
             changed_modifier: None,
         };
 
-        assert!(!push_to_talk_guard_should_release(hotkey, &event));
+        assert!(!push_to_talk_guard_should_release(
+            hotkey,
+            handy_keys::Modifiers::empty(),
+            &event
+        ));
+    }
+
+    #[test]
+    fn modifier_only_push_to_talk_guard_uses_tracked_modifier_state() {
+        let hotkey: Hotkey = "fn".parse().unwrap();
+        let event = KeyEvent {
+            modifiers: handy_keys::Modifiers::empty(),
+            key: None,
+            is_key_down: false,
+            changed_modifier: None,
+        };
+
+        assert!(!push_to_talk_guard_should_release(
+            hotkey,
+            handy_keys::Modifiers::FN,
+            &event
+        ));
+    }
+
+    #[test]
+    fn modifier_only_push_to_talk_guard_releases_when_tracked_state_clears() {
+        let hotkey: Hotkey = "fn".parse().unwrap();
+        let event = KeyEvent {
+            modifiers: handy_keys::Modifiers::empty(),
+            key: None,
+            is_key_down: false,
+            changed_modifier: Some(handy_keys::Modifiers::FN),
+        };
+
+        assert!(push_to_talk_guard_should_release(
+            hotkey,
+            handy_keys::Modifiers::empty(),
+            &event
+        ));
     }
 }
 
