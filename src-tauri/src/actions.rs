@@ -21,6 +21,7 @@ use crate::shortcut;
 use crate::tray::{change_tray_icon, TrayIconState};
 use crate::utils::{
     self, show_processing_overlay, show_recording_overlay, show_transcribing_overlay,
+    show_warming_overlay,
 };
 use crate::TranscriptionCoordinator;
 use ferrous_opencc::{config::BuiltinConfig, OpenCC};
@@ -928,14 +929,19 @@ impl ShortcutAction for TranscribeAction {
         }
 
         let binding_id = binding_id.to_string();
-        change_tray_icon(app, TrayIconState::Recording);
-        show_recording_overlay(app);
-
         let rm = app.state::<Arc<AudioRecordingManager>>();
 
         // Get the microphone mode to determine audio feedback timing
         let is_always_on = settings.always_on_microphone;
+        let should_show_warming = !is_always_on && !rm.is_microphone_open();
         debug!("Microphone mode - always_on: {}", is_always_on);
+
+        change_tray_icon(app, TrayIconState::Recording);
+        if should_show_warming {
+            show_warming_overlay(app);
+        } else {
+            show_recording_overlay(app);
+        }
 
         let mut recording_started = false;
         if is_always_on {
@@ -959,6 +965,9 @@ impl ShortcutAction for TranscribeAction {
             let recording_start_time = Instant::now();
             if rm.try_start_recording(&binding_id) {
                 recording_started = true;
+                if should_show_warming {
+                    show_recording_overlay(app);
+                }
                 debug!("Recording started in {:?}", recording_start_time.elapsed());
                 // Small delay to ensure microphone stream is active
                 let app_clone = app.clone();
@@ -1074,14 +1083,19 @@ impl ShortcutAction for FullSystemTranscribeAction {
 
         tm.cancel_incremental_session();
         let binding_id = binding_id.to_string();
-        change_tray_icon(app, TrayIconState::Recording);
-        show_recording_overlay(app);
-
         let full_system_audio = app.state::<Arc<FullSystemAudioSessionManager>>();
         let rm = app.state::<Arc<AudioRecordingManager>>();
 
         let is_always_on = settings.always_on_microphone;
+        let should_show_warming = !is_always_on && !rm.is_microphone_open();
         debug!("Full-system mode - always_on: {}", is_always_on);
+
+        change_tray_icon(app, TrayIconState::Recording);
+        if should_show_warming {
+            show_warming_overlay(app);
+        } else {
+            show_recording_overlay(app);
+        }
 
         let mut recording_started = false;
         let start_config = crate::full_system_audio_bridge::FullSystemAudioCaptureConfig::default();
@@ -1104,6 +1118,9 @@ impl ShortcutAction for FullSystemTranscribeAction {
                 .started
             {
                 recording_started = true;
+                if should_show_warming {
+                    show_recording_overlay(app);
+                }
                 debug!(
                     "Full-system recording started in {:?}",
                     recording_start_time.elapsed()

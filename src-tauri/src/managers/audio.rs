@@ -344,6 +344,10 @@ impl AudioRecordingManager {
         debug!("Microphone stream stopped");
     }
 
+    pub fn is_microphone_open(&self) -> bool {
+        *self.is_open.lock().unwrap()
+    }
+
     fn cancel_idle_stop_timer(&self) {
         self.idle_stop_generation.fetch_add(1, Ordering::Relaxed);
     }

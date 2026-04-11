@@ -466,6 +466,11 @@ pub fn show_recording_overlay(app_handle: &AppHandle) {
     show_overlay_state(app_handle, "recording");
 }
 
+pub fn show_warming_overlay(app_handle: &AppHandle) {
+    OVERLAY_SESSION_EPOCH.fetch_add(1, Ordering::Relaxed);
+    show_overlay_state(app_handle, "warming");
+}
+
 /// Shows the transcribing overlay window
 pub fn show_transcribing_overlay(app_handle: &AppHandle) {
     show_overlay_state(app_handle, "transcribing");

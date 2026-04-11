@@ -2,8 +2,11 @@ use std::{
     collections::VecDeque,
     io::Error,
     panic::{catch_unwind, AssertUnwindSafe},
-    sync::{mpsc, Arc, Mutex},
-    time::Duration,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, Mutex,
+    },
+    time::{Duration, Instant},
 };
 
 use anyhow::{anyhow, Result as AnyResult};
@@ -185,6 +188,7 @@ impl AudioRecorder {
         let (sample_tx, sample_rx) = mpsc::channel::<Vec<f32>>();
         let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
         let (ready_tx, ready_rx) = mpsc::channel::<WorkerReady>();
+        let first_frame_seen = Arc::new(AtomicBool::new(false));
 
         let host = crate::audio_toolkit::get_cpal_host();
         let device = match device {
@@ -198,6 +202,7 @@ impl AudioRecorder {
         let vad = self.vad.clone();
         // Move the optional level callback into the worker thread
         let level_cb = self.level_cb.clone();
+        let worker_first_frame_seen = Arc::clone(&first_frame_seen);
 
         let worker = std::thread::spawn(move || {
             let mut ready_tx = Some(ready_tx);
@@ -223,30 +228,35 @@ impl AudioRecorder {
                             &config,
                             sample_tx,
                             channels,
+                            Arc::clone(&worker_first_frame_seen),
                         ),
                         cpal::SampleFormat::I8 => AudioRecorder::build_stream::<i8>(
                             &thread_device,
                             &config,
                             sample_tx,
                             channels,
+                            Arc::clone(&worker_first_frame_seen),
                         ),
                         cpal::SampleFormat::I16 => AudioRecorder::build_stream::<i16>(
                             &thread_device,
                             &config,
                             sample_tx,
                             channels,
+                            Arc::clone(&worker_first_frame_seen),
                         ),
                         cpal::SampleFormat::I32 => AudioRecorder::build_stream::<i32>(
                             &thread_device,
                             &config,
                             sample_tx,
                             channels,
+                            Arc::clone(&worker_first_frame_seen),
                         ),
                         cpal::SampleFormat::F32 => AudioRecorder::build_stream::<f32>(
                             &thread_device,
                             &config,
                             sample_tx,
                             channels,
+                            Arc::clone(&worker_first_frame_seen),
                         ),
                         _ => return Err("unsupported sample format".to_string()),
                     }
@@ -313,6 +323,20 @@ impl AudioRecorder {
                     "Recorder worker exited before reporting readiness",
                 )));
             }
+        }
+
+        let first_frame_deadline = Instant::now() + Duration::from_millis(1500);
+        while !first_frame_seen.load(Ordering::Relaxed) {
+            if Instant::now() >= first_frame_deadline {
+                let _ = cmd_tx.send(Cmd::Shutdown);
+                let _ = worker.join();
+                return Err(Box::new(Error::new(
+                    std::io::ErrorKind::TimedOut,
+                    "Timed out waiting for live microphone audio",
+                )));
+            }
+
+            std::thread::sleep(Duration::from_millis(10));
         }
 
         self.device = Some(device);
@@ -395,6 +419,7 @@ impl AudioRecorder {
         config: &cpal::SupportedStreamConfig,
         sample_tx: mpsc::Sender<Vec<f32>>,
         channels: usize,
+        first_frame_seen: Arc<AtomicBool>,
     ) -> Result<cpal::Stream, cpal::BuildStreamError>
     where
         T: Sample + SizedSample + Send + 'static,
@@ -421,6 +446,10 @@ impl AudioRecorder {
                         / channels as f32;
                     output_buffer.push(mono_sample);
                 }
+            }
+
+            if !output_buffer.is_empty() {
+                first_frame_seen.store(true, Ordering::Relaxed);
             }
 
             if sample_tx.send(output_buffer.clone()).is_err() {
