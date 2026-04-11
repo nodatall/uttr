@@ -76,11 +76,7 @@ pub fn refresh_shortcuts(app: &AppHandle) -> Result<(), String> {
             Ok(())
         }
         KeyboardImplementation::HandyKeys => {
-            let initialized_during_refresh = initialize_handy_keys_with_rollback(app)?;
-            if !initialized_during_refresh {
-                unregister_all_shortcuts(app, implementation);
-                let _ = register_all_shortcuts_for_implementation(app, implementation);
-            }
+            restart_handy_keys_with_rollback(app)?;
             Ok(())
         }
     }
@@ -509,6 +505,31 @@ fn initialize_handy_keys_with_rollback(app: &AppHandle) -> Result<bool, String> 
 
     // init_shortcuts already registered shortcuts
     Ok(true)
+}
+
+fn restart_handy_keys_with_rollback(app: &AppHandle) -> Result<(), String> {
+    if app.try_state::<handy_keys::HandyKeysState>().is_some() {
+        info!("Restarting handy-keys state during shortcut refresh");
+        #[allow(deprecated)]
+        {
+            let old_state = app.unmanage::<handy_keys::HandyKeysState>();
+            drop(old_state);
+        }
+    }
+
+    if let Err(e) = handy_keys::init_shortcuts(app) {
+        error!("Failed to restart HandyKeys: {}", e);
+        let mut settings = settings::get_settings(app);
+        settings.keyboard_implementation = KeyboardImplementation::Tauri;
+        settings::write_settings(app, settings);
+        tauri_impl::init_shortcuts(app);
+        return Err(format!(
+            "Failed to restart HandyKeys: {}. Reverted to Tauri.",
+            e
+        ));
+    }
+
+    Ok(())
 }
 
 // ============================================================================
