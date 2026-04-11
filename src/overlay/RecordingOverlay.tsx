@@ -5,7 +5,7 @@ import i18n, { syncLanguageFromSettings } from "@/i18n";
 import { getLanguageDirection } from "@/lib/utils/rtl";
 import SiriWave from "siriwave";
 
-type OverlayState = "recording" | "transcribing" | "processing";
+type OverlayState = "warming" | "recording" | "transcribing" | "processing";
 type OverlayAlertKind = "no_input";
 
 const INPUT_ATTACK_SMOOTHING_KEEP = 0.18;
@@ -66,8 +66,10 @@ const RecordingOverlay: React.FC = () => {
   const previousStateRef = useRef<OverlayState>("recording");
   const direction = getLanguageDirection(i18n.language);
   const isRecordingState = state === "recording";
+  const isWarmingState = state === "warming";
   const isProcessingState = state === "transcribing" || state === "processing";
   const shouldShowOverlayAlert = overlayAlert !== null;
+  const shouldShowWarmingPane = isWarmingState && !shouldShowOverlayAlert;
 
   useEffect(() => {
     isVisibleRef.current = isVisible;
@@ -367,6 +369,9 @@ const RecordingOverlay: React.FC = () => {
       : "";
   const overlayAlertClassName =
     overlayAlert === "no_input" ? "overlay-alert-pane-warning" : "";
+  const warmingTitle = i18n.t("overlay.warmingMic", {
+    defaultValue: "Warming mic...",
+  });
 
   return (
     <div
@@ -379,11 +384,18 @@ const RecordingOverlay: React.FC = () => {
         <div
           ref={waveContainerRef}
           className={`siriwave-host ${isProcessingState ? "siriwave-host-processing" : ""} ${
-            shouldShowOverlayAlert ? "siriwave-host-hidden" : ""
+            shouldShowOverlayAlert || shouldShowWarmingPane
+              ? "siriwave-host-hidden"
+              : ""
           }`}
           role="presentation"
           aria-hidden
         />
+        {shouldShowWarmingPane && (
+          <div className="overlay-status-pane" role="status" aria-live="polite">
+            <div className="overlay-status-title">{warmingTitle}</div>
+          </div>
+        )}
         {shouldShowOverlayAlert && (
           <div
             className={`overlay-alert-pane ${overlayAlertClassName}`}
