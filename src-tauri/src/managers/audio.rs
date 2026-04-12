@@ -105,7 +105,7 @@ const WHISPER_SAMPLE_RATE: usize = 16000;
 // Keep the on-demand microphone warm long enough to cover longer natural pauses
 // between dictation bursts. Recorder-side pre-roll only helps while the stream
 // is already open, so a warmer stream materially improves first-word capture.
-const ON_DEMAND_IDLE_KEEPALIVE: Duration = Duration::from_secs(10 * 60);
+const ON_DEMAND_IDLE_KEEPALIVE: Duration = Duration::from_secs(30 * 60);
 
 /* ──────────────────────────────────────────────────────────────── */
 

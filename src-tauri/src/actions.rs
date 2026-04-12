@@ -39,6 +39,8 @@ use tauri::Manager;
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tokio::time::timeout;
 
+const NO_INPUT_OVERLAY_MIN_DURATION: Duration = Duration::from_secs(4);
+
 /// Drop guard that notifies the [`TranscriptionCoordinator`] when the
 /// transcription pipeline finishes — whether it completes normally or panics.
 struct FinishGuard(AppHandle);
@@ -636,7 +638,7 @@ fn handle_transcription_stop(
 
         let Some(samples) = samples else {
             warn!("No samples retrieved from recording stop");
-            if recording_duration >= Duration::from_secs(1) {
+            if recording_duration >= NO_INPUT_OVERLAY_MIN_DURATION {
                 ui_guard.suppress();
                 spawn_no_input_overlay_feedback(&ah, post_process);
             }
@@ -652,7 +654,7 @@ fn handle_transcription_stop(
         let transcription_timeout = transcription_timeout_for_samples(samples.len());
 
         if samples.is_empty() {
-            if recording_duration >= Duration::from_secs(1) {
+            if recording_duration >= NO_INPUT_OVERLAY_MIN_DURATION {
                 ui_guard.suppress();
                 spawn_no_input_overlay_feedback(&ah, post_process);
             } else {
