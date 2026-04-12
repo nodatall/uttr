@@ -45,6 +45,7 @@ use crate::transcription_coordinator::{is_transcribe_binding, transcribe_binding
 use super::handler::handle_shortcut_event;
 
 const MODIFIER_ONLY_STALE_TIMEOUT: Duration = Duration::from_millis(750);
+const MODIFIER_ONLY_CHORD_WINDOW: Duration = Duration::from_millis(500);
 
 /// Commands that can be sent to the hotkey manager thread
 enum ManagerCommand {
@@ -162,6 +163,18 @@ impl ModifierOnlyTracker {
 
         modifiers
     }
+
+    fn modifier_only_press_is_fresh(&self, hotkey: Hotkey, now: Instant) -> bool {
+        modifier_family_signature(hotkey.modifiers)
+            .into_iter()
+            .enumerate()
+            .all(|(family, required)| {
+                !required
+                    || self.last_pressed_at[family].is_some_and(|pressed_at| {
+                        now.duration_since(pressed_at) <= MODIFIER_ONLY_CHORD_WINDOW
+                    })
+            })
+    }
 }
 
 impl HandyKeysState {
@@ -254,6 +267,7 @@ impl HandyKeysState {
                         &app,
                         &modifier_only_bindings,
                         &mut pressed_modifier_only,
+                        &modifier_only_tracker,
                         &mut active_push_to_talk,
                         modifier_only_modifiers,
                         &event,
@@ -397,6 +411,7 @@ impl HandyKeysState {
         app: &AppHandle,
         modifier_only_bindings: &HashMap<String, (Hotkey, String)>,
         pressed_modifier_only: &mut HashSet<String>,
+        modifier_only_tracker: &ModifierOnlyTracker,
         active_push_to_talk: &mut HashMap<String, ActivePushToTalkGuard>,
         modifier_only_modifiers: handy_keys::Modifiers,
         event: &KeyEvent,
@@ -413,6 +428,14 @@ impl HandyKeysState {
                 pressed_modifier_only.contains(binding_id),
             ) {
                 Some(true) => {
+                    if !modifier_only_tracker.modifier_only_press_is_fresh(*hotkey, Instant::now())
+                    {
+                        debug!(
+                            "Suppressing handy-keys modifier-only press for '{}' because another modifier appears stale",
+                            hotkey_string
+                        );
+                        continue;
+                    }
                     pressed_modifier_only.insert(binding_id.clone());
                     Self::update_push_to_talk_guard(
                         app,
@@ -977,6 +1000,7 @@ mod tests {
     fn modifier_only_tracker_keeps_recent_command_for_command_fn_chord() {
         let mut tracker = ModifierOnlyTracker::default();
         let now = Instant::now();
+        let hotkey: Hotkey = "command+fn".parse().unwrap();
         tracker.active[3] = true;
         tracker.last_pressed_at[3] = Some(now - Duration::from_millis(100));
 
@@ -994,6 +1018,29 @@ mod tests {
             tracker.modifiers(),
             handy_keys::Modifiers::CMD | handy_keys::Modifiers::FN
         );
+        assert!(tracker.modifier_only_press_is_fresh(hotkey, now));
+    }
+
+    #[test]
+    fn modifier_only_tracker_rejects_stale_multi_modifier_chord_press() {
+        let mut tracker = ModifierOnlyTracker::default();
+        let now = Instant::now();
+        tracker.active[3] = true;
+        tracker.last_pressed_at[3] =
+            Some(now - MODIFIER_ONLY_CHORD_WINDOW - Duration::from_millis(1));
+
+        let event = KeyEvent {
+            modifiers: handy_keys::Modifiers::CMD_LEFT | handy_keys::Modifiers::FN,
+            key: None,
+            is_key_down: true,
+            changed_modifier: Some(handy_keys::Modifiers::FN),
+        };
+
+        tracker.clear_stale_before_modifier_press(&event, now, true);
+        tracker.apply(&event, now);
+
+        let hotkey: Hotkey = "command+fn".parse().unwrap();
+        assert!(!tracker.modifier_only_press_is_fresh(hotkey, now));
     }
 
     #[test]
