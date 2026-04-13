@@ -10,14 +10,19 @@ type OverlayAlertKind = "no_input";
 
 const INPUT_ATTACK_SMOOTHING_KEEP = 0.18;
 const INPUT_ATTACK_SMOOTHING_NEW = 0.82;
-const INPUT_RELEASE_SMOOTHING_KEEP = 0.74;
-const INPUT_RELEASE_SMOOTHING_NEW = 0.26;
+const INPUT_RELEASE_SMOOTHING_KEEP = 0.46;
+const INPUT_RELEASE_SMOOTHING_NEW = 0.54;
 const WAVE_ENERGY_POWER = 0.72;
 const QUIET_SPEECH_GAIN = 2.85;
 const QUIET_FLOOR = 0.12;
 const SILENCE_ACTIVITY_START = 0.0025;
 const SILENCE_ACTIVITY_RANGE = 0.012;
-const SPEECH_WAKE_THRESHOLD = 0.42;
+const SILENCE_LEVEL_GATE = 0.012;
+const SPEECH_WAKE_AVERAGE = 0.01;
+const SPEECH_WAKE_PEAK = 0.05;
+const SPEECH_SLEEP_AVERAGE = 0.005;
+const SPEECH_SLEEP_PEAK = 0.024;
+const SPEECH_SLEEP_HOLD_MS = 120;
 const WAVE_ENERGY_MIN = 0;
 const WAVE_ENERGY_MAX = 1;
 const WAVE_AMPLITUDE_MIN = 0.9;
@@ -29,8 +34,8 @@ const WAVE_PEAK_GUARD = 0.72;
 const WAVE_SPEED_MIN = 0.1;
 const WAVE_SPEED_RANGE = 0.16;
 const WAVE_SPEED_CAP = 0.26;
-const WAVE_IDLE_AMPLITUDE = 0.58;
-const WAVE_IDLE_SPEED = 0.055;
+const WAVE_IDLE_AMPLITUDE = 0.08;
+const WAVE_IDLE_SPEED = 0.012;
 const IOS9_BASELINE_OFFSET_PX = 6;
 const RECORDING_CURVES = [
   { color: "255,255,255", supportLine: true },
@@ -60,7 +65,9 @@ const RecordingOverlay: React.FC = () => {
   const waveContainerRef = useRef<HTMLDivElement | null>(null);
   const siriWaveRef = useRef<SiriWave | null>(null);
   const smoothedLevelsRef = useRef<number[]>(Array(16).fill(0));
+  const overlayStateRef = useRef<OverlayState>("recording");
   const hasDetectedSpeechRef = useRef(false);
+  const quietSinceRef = useRef<number | null>(null);
   const isVisibleRef = useRef(true);
   const lastHideAtRef = useRef(0);
   const previousStateRef = useRef<OverlayState>("recording");
@@ -80,6 +87,10 @@ const RecordingOverlay: React.FC = () => {
   }, [hasDetectedSpeech]);
 
   useEffect(() => {
+    overlayStateRef.current = state;
+  }, [state]);
+
+  useEffect(() => {
     let isDisposed = false;
     const unlistenFns: Array<() => void> = [];
 
@@ -95,6 +106,7 @@ const RecordingOverlay: React.FC = () => {
         setLevels(Array(16).fill(0));
         setOverlayAlert(null);
         setHasDetectedSpeech(false);
+        quietSinceRef.current = null;
         setIsVisible(true);
       });
 
@@ -104,6 +116,7 @@ const RecordingOverlay: React.FC = () => {
         lastHideAtRef.current = Date.now();
         setOverlayAlert(null);
         setHasDetectedSpeech(false);
+        quietSinceRef.current = null;
         setIsVisible(false);
       });
 
@@ -134,6 +147,10 @@ const RecordingOverlay: React.FC = () => {
         // Apply smoothing to reduce jitter
         const smoothed = smoothedLevelsRef.current.map((prev, i) => {
           const target = newLevels[i] || 0;
+          if (target < SILENCE_LEVEL_GATE && prev < SILENCE_LEVEL_GATE * 1.5) {
+            return 0;
+          }
+
           if (target > prev) {
             if (prev < 0.015 && target > 0.05) {
               return target;
@@ -145,15 +162,55 @@ const RecordingOverlay: React.FC = () => {
             );
           }
 
-          return (
+          const next =
             prev * INPUT_RELEASE_SMOOTHING_KEEP +
-            target * INPUT_RELEASE_SMOOTHING_NEW
-          );
+            target * INPUT_RELEASE_SMOOTHING_NEW;
+          return next < SILENCE_LEVEL_GATE * 0.5 ? 0 : next;
         });
 
         smoothedLevelsRef.current = smoothed;
         setLevels(smoothed);
 
+        if (overlayStateRef.current !== "recording") {
+          quietSinceRef.current = null;
+          return;
+        }
+
+        const rawAverage =
+          newLevels.reduce((sum, level) => sum + level, 0) / newLevels.length;
+        const rawPeak = Math.max(...newLevels, 0);
+
+        if (!hasDetectedSpeechRef.current) {
+          if (
+            rawAverage >= SPEECH_WAKE_AVERAGE ||
+            rawPeak >= SPEECH_WAKE_PEAK
+          ) {
+            quietSinceRef.current = null;
+            hasDetectedSpeechRef.current = true;
+            setHasDetectedSpeech(true);
+          }
+          return;
+        }
+
+        if (
+          rawAverage <= SPEECH_SLEEP_AVERAGE &&
+          rawPeak <= SPEECH_SLEEP_PEAK
+        ) {
+          const now = Date.now();
+          if (quietSinceRef.current === null) {
+            quietSinceRef.current = now;
+            return;
+          }
+
+          if (now - quietSinceRef.current >= SPEECH_SLEEP_HOLD_MS) {
+            quietSinceRef.current = null;
+            hasDetectedSpeechRef.current = false;
+            setHasDetectedSpeech(false);
+          }
+          return;
+        }
+
+        quietSinceRef.current = null;
       });
 
       if (isDisposed) {
@@ -280,14 +337,12 @@ const RecordingOverlay: React.FC = () => {
   const showWave = isRecordingState;
 
   useEffect(() => {
-    if (!showWave || hasDetectedSpeechRef.current) {
-      return;
+    if (!showWave && hasDetectedSpeechRef.current) {
+      quietSinceRef.current = null;
+      hasDetectedSpeechRef.current = false;
+      setHasDetectedSpeech(false);
     }
-
-    if (waveMotionBlend >= SPEECH_WAKE_THRESHOLD) {
-      setHasDetectedSpeech(true);
-    }
-  }, [showWave, waveMotionBlend]);
+  }, [showWave]);
 
   useEffect(() => {
     if (!isVisible) {
@@ -335,12 +390,8 @@ const RecordingOverlay: React.FC = () => {
       WAVE_SPEED_MIN,
       WAVE_SPEED_CAP,
     );
-    const amplitude = hasDetectedSpeech
-      ? activeAmplitude
-      : lerp(WAVE_IDLE_AMPLITUDE, activeAmplitude, waveMotionBlend);
-    const speed = hasDetectedSpeech
-      ? activeSpeed
-      : lerp(WAVE_IDLE_SPEED, activeSpeed, waveMotionBlend);
+    const amplitude = hasDetectedSpeech ? activeAmplitude : WAVE_IDLE_AMPLITUDE;
+    const speed = hasDetectedSpeech ? activeSpeed : WAVE_IDLE_SPEED;
     siriWave.setAmplitude(amplitude);
     siriWave.setSpeed(speed);
     previousStateRef.current = state;
