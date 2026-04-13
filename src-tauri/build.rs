@@ -1,5 +1,8 @@
 fn main() {
     #[cfg(target_os = "macos")]
+    build_app_activation_monitor_bridge();
+
+    #[cfg(target_os = "macos")]
     build_full_system_audio_bridge();
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
@@ -8,6 +11,118 @@ fn main() {
     generate_tray_translations();
 
     tauri_build::build()
+}
+
+#[cfg(target_os = "macos")]
+fn build_app_activation_monitor_bridge() {
+    use std::env;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
+
+    const SWIFT_FILE: &str = "swift/app_activation_monitor.swift";
+    const BRIDGE_HEADER: &str = "swift/app_activation_monitor_bridge.h";
+
+    println!("cargo:rerun-if-changed={SWIFT_FILE}");
+    println!("cargo:rerun-if-changed={BRIDGE_HEADER}");
+
+    let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR not set"));
+    let object_path = out_dir.join("app_activation_monitor.o");
+    let static_lib_path = out_dir.join("libapp_activation_monitor.a");
+
+    let sdk_path = String::from_utf8(
+        Command::new("xcrun")
+            .args(["--sdk", "macosx", "--show-sdk-path"])
+            .output()
+            .expect("Failed to locate macOS SDK")
+            .stdout,
+    )
+    .expect("SDK path is not valid UTF-8")
+    .trim()
+    .to_string();
+
+    if !Path::new(SWIFT_FILE).exists() {
+        panic!("Source file {} is missing!", SWIFT_FILE);
+    }
+
+    let target_arch =
+        env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_else(|_| std::env::consts::ARCH.to_string());
+    let swift_arch = match target_arch.as_str() {
+        "aarch64" | "arm64" => "arm64",
+        "x86_64" => "x86_64",
+        other => panic!("Unsupported macOS target architecture for app activation bridge: {other}"),
+    };
+    let swift_target = format!("{swift_arch}-apple-macosx11.0");
+
+    let swiftc_path = String::from_utf8(
+        Command::new("xcrun")
+            .args(["--find", "swiftc"])
+            .output()
+            .expect("Failed to locate swiftc")
+            .stdout,
+    )
+    .expect("swiftc path is not valid UTF-8")
+    .trim()
+    .to_string();
+
+    let toolchain_swift_lib = Path::new(&swiftc_path)
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|root| root.join("lib/swift/macosx"))
+        .expect("Unable to determine Swift toolchain lib directory");
+    let sdk_swift_lib = Path::new(&sdk_path).join("usr/lib/swift");
+
+    let status = Command::new("xcrun")
+        .args([
+            "swiftc",
+            "-target",
+            &swift_target,
+            "-sdk",
+            &sdk_path,
+            "-O",
+            "-import-objc-header",
+            BRIDGE_HEADER,
+            "-c",
+            SWIFT_FILE,
+            "-o",
+            object_path
+                .to_str()
+                .expect("Failed to convert object path to string"),
+        ])
+        .status()
+        .expect("Failed to invoke swiftc for app activation bridge");
+
+    if !status.success() {
+        panic!("swiftc failed to compile {SWIFT_FILE}");
+    }
+
+    let status = Command::new("libtool")
+        .args([
+            "-static",
+            "-o",
+            static_lib_path
+                .to_str()
+                .expect("Failed to convert static lib path to string"),
+            object_path
+                .to_str()
+                .expect("Failed to convert object path to string"),
+        ])
+        .status()
+        .expect("Failed to create static library for app activation bridge");
+
+    if !status.success() {
+        panic!("libtool failed for app activation bridge");
+    }
+
+    println!("cargo:rustc-link-search=native={}", out_dir.display());
+    println!("cargo:rustc-link-lib=static=app_activation_monitor");
+    println!(
+        "cargo:rustc-link-search=native={}",
+        toolchain_swift_lib.display()
+    );
+    println!("cargo:rustc-link-search=native={}", sdk_swift_lib.display());
+    println!("cargo:rustc-link-lib=framework=Foundation");
+    println!("cargo:rustc-link-lib=framework=AppKit");
+    println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
 }
 
 /// Generate tray menu translations from frontend locale files.

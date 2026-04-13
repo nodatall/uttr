@@ -106,6 +106,7 @@ const WHISPER_SAMPLE_RATE: usize = 16000;
 // between dictation bursts. Recorder-side pre-roll only helps while the stream
 // is already open, so a warmer stream materially improves first-word capture.
 const ON_DEMAND_IDLE_KEEPALIVE: Duration = Duration::from_secs(30 * 60);
+const FRONTMOST_APP_PREWARM_COOLDOWN: Duration = Duration::from_secs(20);
 
 /* ──────────────────────────────────────────────────────────────── */
 
@@ -162,6 +163,7 @@ pub struct AudioRecordingManager {
     recording_started_at: Arc<Mutex<Option<Instant>>>,
     did_mute: Arc<Mutex<bool>>,
     idle_stop_generation: Arc<AtomicU64>,
+    frontmost_prewarm_last_attempt_at: Arc<Mutex<Option<Instant>>>,
 }
 
 impl AudioRecordingManager {
@@ -186,6 +188,7 @@ impl AudioRecordingManager {
             recording_started_at: Arc::new(Mutex::new(None)),
             did_mute: Arc::new(Mutex::new(false)),
             idle_stop_generation: Arc::new(AtomicU64::new(0)),
+            frontmost_prewarm_last_attempt_at: Arc::new(Mutex::new(None)),
         };
 
         // Always-on?  Open immediately.
@@ -399,6 +402,29 @@ impl AudioRecordingManager {
                 reason, e
             ),
         }
+    }
+
+    pub fn prewarm_for_frontmost_app_activation(&self) {
+        if !matches!(*self.mode.lock().unwrap(), MicrophoneMode::OnDemand) {
+            return;
+        }
+
+        if self.is_recording() || self.is_microphone_open() {
+            return;
+        }
+
+        let now = Instant::now();
+        {
+            let mut last_attempt = self.frontmost_prewarm_last_attempt_at.lock().unwrap();
+            if let Some(previous_attempt) = *last_attempt {
+                if now.duration_since(previous_attempt) < FRONTMOST_APP_PREWARM_COOLDOWN {
+                    return;
+                }
+            }
+            *last_attempt = Some(now);
+        }
+
+        self.prewarm_for_quick_start("frontmost app activation");
     }
 
     /* ---------- mode switching --------------------------------------------- */

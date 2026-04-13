@@ -40,6 +40,13 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tokio::time::timeout;
 
 const NO_INPUT_OVERLAY_MIN_DURATION: Duration = Duration::from_secs(4);
+const PROCESSING_OVERLAY_DELAY: Duration = Duration::from_millis(500);
+
+#[derive(Clone, Copy)]
+enum DeferredOverlayState {
+    Transcribing,
+    Processing,
+}
 
 /// Drop guard that notifies the [`TranscriptionCoordinator`] when the
 /// transcription pipeline finishes — whether it completes normally or panics.
@@ -508,6 +515,30 @@ fn transcription_source_for_binding(binding_id: &str) -> Option<&'static str> {
     }
 }
 
+async fn show_deferred_overlay_state(
+    app: &AppHandle,
+    state: DeferredOverlayState,
+    overlay_epoch: u64,
+) {
+    tokio::time::sleep(PROCESSING_OVERLAY_DELAY).await;
+    if utils::current_overlay_session_epoch() != overlay_epoch {
+        return;
+    }
+
+    match state {
+        DeferredOverlayState::Transcribing => show_transcribing_overlay(app),
+        DeferredOverlayState::Processing => show_processing_overlay(app),
+    }
+}
+
+fn spawn_deferred_overlay_state(app: &AppHandle, state: DeferredOverlayState) {
+    let ah = app.clone();
+    let overlay_epoch = utils::current_overlay_session_epoch();
+    tauri::async_runtime::spawn(async move {
+        show_deferred_overlay_state(&ah, state, overlay_epoch).await;
+    });
+}
+
 async fn show_no_input_overlay_feedback(
     app: &AppHandle,
     include_processing: bool,
@@ -793,7 +824,7 @@ fn handle_transcription_stop(
                 if !transcription.is_empty() {
                     let settings = get_settings(&ah);
                     if post_process {
-                        show_processing_overlay(&ah);
+                        spawn_deferred_overlay_state(&ah, DeferredOverlayState::Processing);
                     }
                     let finalized =
                         finalize_transcription_output(&ah, &settings, &transcription, post_process)
@@ -1013,7 +1044,7 @@ impl ShortcutAction for TranscribeAction {
         let hm = Arc::clone(&app.state::<Arc<HistoryManager>>());
 
         change_tray_icon(app, TrayIconState::Transcribing);
-        show_transcribing_overlay(app);
+        spawn_deferred_overlay_state(app, DeferredOverlayState::Transcribing);
 
         // Unmute before playing audio feedback so the stop sound is audible
         rm.remove_mute();
@@ -1163,7 +1194,7 @@ impl ShortcutAction for FullSystemTranscribeAction {
         let full_system_audio = app.state::<Arc<FullSystemAudioSessionManager>>();
 
         change_tray_icon(app, TrayIconState::Transcribing);
-        show_transcribing_overlay(app);
+        spawn_deferred_overlay_state(app, DeferredOverlayState::Transcribing);
         rm.remove_mute();
         play_feedback_sound(app, SoundType::Stop);
 

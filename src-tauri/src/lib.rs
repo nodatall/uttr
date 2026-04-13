@@ -1,4 +1,6 @@
 mod access;
+#[cfg(target_os = "macos")]
+mod app_activation_bridge;
 mod actions;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod apple_intelligence;
@@ -136,6 +138,9 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(model_manager.clone());
     app_handle.manage(transcription_manager.clone());
     app_handle.manage(history_manager.clone());
+
+    #[cfg(target_os = "macos")]
+    app_activation_bridge::install_frontmost_app_activation_monitor(recording_manager.clone());
 
     // Note: Shortcuts are NOT initialized here.
     // The frontend is responsible for calling the `initialize_shortcuts` command

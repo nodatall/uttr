@@ -1944,11 +1944,6 @@ impl TranscriptionManager {
         }
 
         let levels = audio_levels(&audio);
-        if levels.is_some_and(is_effectively_silent) {
-            info!("Skipping transcription for effectively silent audio");
-            self.maybe_unload_immediately("silent audio");
-            return Ok(String::new());
-        }
 
         if self.cancel_requested.load(Ordering::Relaxed) {
             return Err(anyhow::anyhow!("Transcription cancelled"));
