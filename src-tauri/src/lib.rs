@@ -271,6 +271,12 @@ fn spawn_shortcut_refresh_heartbeat(app_handle: AppHandle) {
                 continue;
             }
 
+            if shortcut::shortcut_refresh_blocked_by_active_session(&app_handle)
+                || shortcut::shortcut_refresh_blocked_by_warm_on_demand_microphone(&app_handle)
+            {
+                continue;
+            }
+
             if let Err(err) = shortcut::refresh_shortcuts(&app_handle) {
                 log::warn!(
                     "Failed to refresh shortcuts from backend heartbeat: {}",

@@ -76,6 +76,12 @@ pub fn refresh_shortcuts(app: &AppHandle) -> Result<(), String> {
             Ok(())
         }
         KeyboardImplementation::HandyKeys => {
+            if shortcut_refresh_blocked_by_active_session(app) {
+                warn!(
+                    "Skipping handy-keys restart because a transcription session became active during refresh"
+                );
+                return Ok(());
+            }
             restart_handy_keys_with_rollback(app)?;
             Ok(())
         }
@@ -91,6 +97,15 @@ pub fn shortcut_refresh_blocked_by_active_session(app: &AppHandle) -> bool {
         .is_some_and(|manager| manager.is_active());
 
     transcription_session_is_active(audio_recording_active, full_system_active)
+}
+
+pub fn shortcut_refresh_blocked_by_warm_on_demand_microphone(app: &AppHandle) -> bool {
+    if get_settings(app).always_on_microphone {
+        return false;
+    }
+
+    app.try_state::<Arc<AudioRecordingManager>>()
+        .is_some_and(|manager| manager.is_microphone_open())
 }
 
 /// Register the cancel shortcut (called when recording starts)
