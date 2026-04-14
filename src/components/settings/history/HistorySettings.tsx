@@ -12,6 +12,11 @@ import { useOsType } from "@/hooks/useOsType";
 
 const MAX_VISIBLE_HISTORY = 20;
 
+interface HistoryFocusRequest {
+  entryId: number | null;
+  token: number;
+}
+
 interface OpenRecordingsButtonProps {
   onClick: () => void;
   label: string;
@@ -33,11 +38,20 @@ const OpenRecordingsButton: React.FC<OpenRecordingsButtonProps> = ({
   </Button>
 );
 
-export const HistorySettings: React.FC = () => {
+interface HistorySettingsProps {
+  focusRequest?: HistoryFocusRequest | null;
+}
+
+export const HistorySettings: React.FC<HistorySettingsProps> = ({
+  focusRequest = null,
+}) => {
   const { t } = useTranslation();
   const osType = useOsType();
   const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const [highlightedEntryId, setHighlightedEntryId] = useState<number | null>(
+    null,
+  );
   const visibleEntries = historyEntries.slice(0, MAX_VISIBLE_HISTORY);
 
   const loadHistoryEntries = useCallback(async () => {
@@ -77,6 +91,37 @@ export const HistorySettings: React.FC = () => {
       });
     };
   }, [loadHistoryEntries]);
+
+  useEffect(() => {
+    if (!focusRequest?.entryId || loading) {
+      return;
+    }
+
+    const targetEntryId = focusRequest.entryId;
+    const entryElement = document.querySelector<HTMLElement>(
+      `[data-history-entry-id="${targetEntryId}"]`,
+    );
+
+    if (!entryElement) {
+      return;
+    }
+
+    setHighlightedEntryId(targetEntryId);
+    entryElement.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+
+    const timeoutId = window.setTimeout(() => {
+      setHighlightedEntryId((current) =>
+        current === targetEntryId ? null : current,
+      );
+    }, 3200);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [focusRequest, loading, visibleEntries]);
 
   const toggleSaved = async (id: number) => {
     try {
@@ -211,6 +256,7 @@ export const HistorySettings: React.FC = () => {
               <HistoryEntryComponent
                 key={entry.id}
                 entry={entry}
+                highlighted={entry.id === highlightedEntryId}
                 onToggleSaved={() => toggleSaved(entry.id)}
                 onCopyText={(text) => copyToClipboard(text)}
                 getAudioUrl={getAudioUrl}
@@ -226,6 +272,7 @@ export const HistorySettings: React.FC = () => {
 
 interface HistoryEntryProps {
   entry: HistoryEntry;
+  highlighted: boolean;
   onToggleSaved: () => void;
   onCopyText: (text: string) => void;
   getAudioUrl: (fileName: string) => Promise<string | null>;
@@ -234,6 +281,7 @@ interface HistoryEntryProps {
 
 const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
   entry,
+  highlighted,
   onToggleSaved,
   onCopyText,
   getAudioUrl,
@@ -266,7 +314,14 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
   const formattedDate = formatDateTime(String(entry.timestamp), i18n.language);
 
   return (
-    <div className="group flex flex-col gap-3 px-4 py-4">
+    <div
+      data-history-entry-id={entry.id}
+      className={`group flex flex-col gap-3 px-4 py-4 transition-colors ${
+        highlighted
+          ? "bg-logo-primary/8 shadow-[inset_0_0_0_1px_rgba(103,215,163,0.18)]"
+          : ""
+      }`}
+    >
       <div className="flex items-start justify-between gap-4">
         <div className="space-y-2">
           <p className="text-sm font-medium text-text/86">{formattedDate}</p>
