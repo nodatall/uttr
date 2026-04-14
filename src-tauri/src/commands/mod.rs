@@ -17,6 +17,34 @@ pub fn cancel_operation(app: AppHandle) {
 
 #[tauri::command]
 #[specta::specta]
+pub fn dismiss_overlay(app: AppHandle) -> Result<(), String> {
+    crate::utils::hide_recording_overlay(&app);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn show_main_window(app: AppHandle) -> Result<(), String> {
+    let Some(main_window) = app.get_webview_window("main") else {
+        return Err("Main window not found.".to_string());
+    };
+
+    main_window
+        .show()
+        .map_err(|e| format!("Failed to show main window: {}", e))?;
+    main_window
+        .set_focus()
+        .map_err(|e| format!("Failed to focus main window: {}", e))?;
+
+    #[cfg(target_os = "macos")]
+    app.set_activation_policy(tauri::ActivationPolicy::Regular)
+        .map_err(|e| format!("Failed to activate app: {}", e))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn get_app_dir_path(app: AppHandle) -> Result<String, String> {
     let app_data_dir = app
         .path()

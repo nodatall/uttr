@@ -183,7 +183,7 @@ impl HistoryManager {
         transcription_text: String,
         post_processed_text: Option<String>,
         post_process_prompt: Option<String>,
-    ) -> Result<()> {
+    ) -> Result<i64> {
         let timestamp = Utc::now().timestamp();
         let file_name = format!("uttr-{}.wav", timestamp);
         let title = self.format_timestamp_title(timestamp);
@@ -193,7 +193,7 @@ impl HistoryManager {
         save_wav_file(file_path, &audio_samples).await?;
 
         // Save to database
-        self.save_to_database(
+        let entry_id = self.save_to_database(
             file_name,
             timestamp,
             title,
@@ -210,7 +210,7 @@ impl HistoryManager {
             error!("Failed to emit history-updated event: {}", e);
         }
 
-        Ok(())
+        Ok(entry_id)
     }
 
     fn save_to_database(
@@ -221,7 +221,7 @@ impl HistoryManager {
         transcription_text: String,
         post_processed_text: Option<String>,
         post_process_prompt: Option<String>,
-    ) -> Result<()> {
+    ) -> Result<i64> {
         let conn = self.get_connection()?;
         conn.execute(
             "INSERT INTO transcription_history (file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -229,7 +229,7 @@ impl HistoryManager {
         )?;
 
         debug!("Saved transcription to database");
-        Ok(())
+        Ok(conn.last_insert_rowid())
     }
 
     pub fn cleanup_old_entries(&self) -> Result<()> {

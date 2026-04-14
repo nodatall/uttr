@@ -1,6 +1,7 @@
 use crate::settings;
 use crate::settings::OverlayPosition;
 use log::debug;
+use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -34,8 +35,23 @@ const OVERLAY_WIDTH: f64 = 172.0;
 const OVERLAY_HEIGHT: f64 = 42.0;
 const OVERLAY_ALERT_WIDTH: f64 = 260.0;
 const OVERLAY_ALERT_HEIGHT: f64 = 72.0;
+const OVERLAY_PROGRESS_WIDTH: f64 = 520.0;
+const OVERLAY_PROGRESS_HEIGHT: f64 = 196.0;
 const OVERLAY_LABEL_BASE: &str = "recording_overlay";
 static OVERLAY_SESSION_EPOCH: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FullSystemProgressPayload {
+    pub stage: String,
+    pub title: String,
+    pub subtitle: String,
+    pub progress_label: String,
+    pub progress_value: f32,
+    pub footer_note: String,
+    pub transcript_text: Option<String>,
+    pub history_entry_id: Option<i64>,
+}
 
 #[cfg(target_os = "macos")]
 const OVERLAY_TOP_OFFSET: f64 = 46.0;
@@ -403,7 +419,7 @@ fn apply_overlay_dimensions(app_handle: &AppHandle, width: f64, height: f64) {
     }
 }
 
-fn show_overlay_state(app_handle: &AppHandle, state: &str) {
+fn show_overlay_state(app_handle: &AppHandle, state: &str, width: f64, height: f64) {
     // Check if overlay should be shown based on position setting
     let settings = settings::get_settings(app_handle);
     if settings.overlay_position == OverlayPosition::None {
@@ -411,7 +427,7 @@ fn show_overlay_state(app_handle: &AppHandle, state: &str) {
     }
 
     create_recording_overlay(app_handle);
-    apply_overlay_dimensions(app_handle, OVERLAY_WIDTH, OVERLAY_HEIGHT);
+    apply_overlay_dimensions(app_handle, width, height);
 
     #[cfg(target_os = "macos")]
     {
@@ -421,7 +437,7 @@ fn show_overlay_state(app_handle: &AppHandle, state: &str) {
         let _ = app_handle.run_on_main_thread(move || {
             debug!("[overlay] macos show_overlay_state state={}", state);
             create_recording_overlay(&app);
-            apply_overlay_dimensions(&app, OVERLAY_WIDTH, OVERLAY_HEIGHT);
+            apply_overlay_dimensions(&app, width, height);
             if let Some(overlay_window) = app.get_webview_window(OVERLAY_LABEL_BASE) {
                 let _ = overlay_window.show();
                 if let Ok(panel) = app.get_webview_panel(OVERLAY_LABEL_BASE) {
@@ -463,22 +479,76 @@ fn show_overlay_state(app_handle: &AppHandle, state: &str) {
 /// Shows the recording overlay window with fade-in animation
 pub fn show_recording_overlay(app_handle: &AppHandle) {
     OVERLAY_SESSION_EPOCH.fetch_add(1, Ordering::Relaxed);
-    show_overlay_state(app_handle, "recording");
+    show_overlay_state(app_handle, "recording", OVERLAY_WIDTH, OVERLAY_HEIGHT);
 }
 
 pub fn show_warming_overlay(app_handle: &AppHandle) {
     OVERLAY_SESSION_EPOCH.fetch_add(1, Ordering::Relaxed);
-    show_overlay_state(app_handle, "warming");
+    show_overlay_state(app_handle, "warming", OVERLAY_WIDTH, OVERLAY_HEIGHT);
 }
 
 /// Shows the transcribing overlay window
 pub fn show_transcribing_overlay(app_handle: &AppHandle) {
-    show_overlay_state(app_handle, "transcribing");
+    show_overlay_state(app_handle, "transcribing", OVERLAY_WIDTH, OVERLAY_HEIGHT);
 }
 
 /// Shows the processing overlay window
 pub fn show_processing_overlay(app_handle: &AppHandle) {
-    show_overlay_state(app_handle, "processing");
+    show_overlay_state(app_handle, "processing", OVERLAY_WIDTH, OVERLAY_HEIGHT);
+}
+
+fn emit_full_system_progress_payload(
+    app_handle: &AppHandle,
+    payload: &FullSystemProgressPayload,
+) {
+    #[cfg(target_os = "macos")]
+    {
+        let payload = payload.clone();
+        let payload_for_retry = payload.clone();
+        let app = app_handle.clone();
+        let _ = app_handle.run_on_main_thread(move || {
+            if let Some(overlay_window) = app.get_webview_window(OVERLAY_LABEL_BASE) {
+                let _ = overlay_window.emit("overlay-full-system-progress", &payload);
+            }
+        });
+
+        let app_retry = app_handle.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(90));
+            if let Some(window) = app_retry.get_webview_window(OVERLAY_LABEL_BASE) {
+                let _ = window.emit("overlay-full-system-progress", &payload_for_retry);
+            }
+        });
+        return;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Some(overlay_window) = app_handle.get_webview_window(OVERLAY_LABEL_BASE) {
+            let _ = overlay_window.emit("overlay-full-system-progress", payload);
+        }
+    }
+}
+
+pub fn show_full_system_progress_overlay(
+    app_handle: &AppHandle,
+    payload: &FullSystemProgressPayload,
+) {
+    show_overlay_state(
+        app_handle,
+        "full_system_progress",
+        OVERLAY_PROGRESS_WIDTH,
+        OVERLAY_PROGRESS_HEIGHT,
+    );
+    emit_full_system_progress_payload(app_handle, payload);
+}
+
+pub fn update_full_system_progress_overlay(
+    app_handle: &AppHandle,
+    payload: &FullSystemProgressPayload,
+) {
+    apply_overlay_dimensions(app_handle, OVERLAY_PROGRESS_WIDTH, OVERLAY_PROGRESS_HEIGHT);
+    emit_full_system_progress_payload(app_handle, payload);
 }
 
 pub fn emit_overlay_alert(app_handle: &AppHandle, kind: &str) {

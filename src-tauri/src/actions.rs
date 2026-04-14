@@ -48,6 +48,20 @@ enum DeferredOverlayState {
     Processing,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum TranscriptionCompletionMode {
+    Standard,
+    FullSystemOverlay,
+}
+
+#[derive(Clone, Copy)]
+enum FullSystemProgressStage {
+    Preparing,
+    Transcribing,
+    Processing,
+    Complete,
+}
+
 /// Drop guard that notifies the [`TranscriptionCoordinator`] when the
 /// transcription pipeline finishes — whether it completes normally or panics.
 struct FinishGuard(AppHandle);
@@ -636,6 +650,55 @@ fn start_transcription_session(app: &AppHandle, binding_id: &str, started: bool)
     );
 }
 
+fn full_system_progress_payload(
+    stage: FullSystemProgressStage,
+    transcript_text: Option<String>,
+    history_entry_id: Option<i64>,
+) -> crate::overlay::FullSystemProgressPayload {
+    match stage {
+        FullSystemProgressStage::Preparing => crate::overlay::FullSystemProgressPayload {
+            stage: "preparing".to_string(),
+            title: "Preparing capture".to_string(),
+            subtitle: "Getting the system and microphone audio ready.".to_string(),
+            progress_label: "Preparing audio".to_string(),
+            progress_value: 0.18,
+            footer_note: "Large recordings can take a little longer.".to_string(),
+            transcript_text: None,
+            history_entry_id: None,
+        },
+        FullSystemProgressStage::Transcribing => crate::overlay::FullSystemProgressPayload {
+            stage: "transcribing".to_string(),
+            title: "Transcribing system audio".to_string(),
+            subtitle: "Working through the captured audio now.".to_string(),
+            progress_label: "Transcribing".to_string(),
+            progress_value: 0.66,
+            footer_note: "Uttr will save the finished transcript to History.".to_string(),
+            transcript_text: None,
+            history_entry_id: None,
+        },
+        FullSystemProgressStage::Processing => crate::overlay::FullSystemProgressPayload {
+            stage: "processing".to_string(),
+            title: "Polishing transcript".to_string(),
+            subtitle: "Applying post-processing before saving.".to_string(),
+            progress_label: "Post-processing".to_string(),
+            progress_value: 0.88,
+            footer_note: "Cleaning up punctuation and formatting.".to_string(),
+            transcript_text: None,
+            history_entry_id: None,
+        },
+        FullSystemProgressStage::Complete => crate::overlay::FullSystemProgressPayload {
+            stage: "complete".to_string(),
+            title: "Transcript ready".to_string(),
+            subtitle: "Saved to History. Copy it now or open the full entry.".to_string(),
+            progress_label: "Complete".to_string(),
+            progress_value: 1.0,
+            footer_note: "Ready for review.".to_string(),
+            transcript_text,
+            history_entry_id,
+        },
+    }
+}
+
 fn handle_transcription_stop(
     app: &AppHandle,
     binding_id: &str,
@@ -643,6 +706,7 @@ fn handle_transcription_stop(
     recording_duration: Option<Duration>,
     post_process: bool,
     use_incremental: bool,
+    completion_mode: TranscriptionCompletionMode,
     tm: Arc<TranscriptionManager>,
     hm: Arc<HistoryManager>,
 ) {
@@ -727,6 +791,12 @@ fn handle_transcription_stop(
         let samples_clone = samples.clone();
         let has_incremental_progress =
             use_incremental && tm_for_worker.has_incremental_progress(&binding_id);
+        if completion_mode == TranscriptionCompletionMode::FullSystemOverlay {
+            crate::overlay::update_full_system_progress_overlay(
+                &ah,
+                &full_system_progress_payload(FullSystemProgressStage::Transcribing, None, None),
+            );
+        }
         let transcription_result = if use_incremental
             && samples.len() >= SHORT_UTTERANCE_SAMPLES
             && has_incremental_progress
@@ -824,7 +894,18 @@ fn handle_transcription_stop(
                 if !transcription.is_empty() {
                     let settings = get_settings(&ah);
                     if post_process {
-                        spawn_deferred_overlay_state(&ah, DeferredOverlayState::Processing);
+                        if completion_mode == TranscriptionCompletionMode::FullSystemOverlay {
+                            crate::overlay::update_full_system_progress_overlay(
+                                &ah,
+                                &full_system_progress_payload(
+                                    FullSystemProgressStage::Processing,
+                                    None,
+                                    None,
+                                ),
+                            );
+                        } else {
+                            spawn_deferred_overlay_state(&ah, DeferredOverlayState::Processing);
+                        }
                     }
                     let finalized =
                         finalize_transcription_output(&ah, &settings, &transcription, post_process)
@@ -833,21 +914,60 @@ fn handle_transcription_stop(
                     let post_processed_text = finalized.post_processed_text;
                     let post_process_prompt = finalized.post_process_prompt;
 
-                    let hm_clone = Arc::clone(&hm);
-                    let transcription_for_history = transcription.clone();
-                    tauri::async_runtime::spawn(async move {
-                        if let Err(e) = hm_clone
+                    if completion_mode == TranscriptionCompletionMode::FullSystemOverlay {
+                        match hm
                             .save_transcription(
                                 samples_clone,
-                                transcription_for_history,
+                                transcription.clone(),
                                 post_processed_text,
                                 post_process_prompt,
                             )
                             .await
                         {
-                            error!("Failed to save transcription to history: {}", e);
+                            Ok(history_entry_id) => {
+                                crate::overlay::update_full_system_progress_overlay(
+                                    &ah,
+                                    &full_system_progress_payload(
+                                        FullSystemProgressStage::Complete,
+                                        Some(final_text),
+                                        Some(history_entry_id),
+                                    ),
+                                );
+                                change_tray_icon(&ah, TrayIconState::Idle);
+                                ui_guard.suppress();
+                                return;
+                            }
+                            Err(e) => {
+                                error!("Failed to save transcription to history: {}", e);
+                                let _ = ah.emit(
+                                    "transcription-error",
+                                    format!(
+                                        "Transcription succeeded, but saving to history failed: {}",
+                                        e
+                                    ),
+                                );
+                                utils::hide_recording_overlay(&ah);
+                                change_tray_icon(&ah, TrayIconState::Idle);
+                                return;
+                            }
                         }
-                    });
+                    } else {
+                        let hm_clone = Arc::clone(&hm);
+                        let transcription_for_history = transcription.clone();
+                        tauri::async_runtime::spawn(async move {
+                            if let Err(e) = hm_clone
+                                .save_transcription(
+                                    samples_clone,
+                                    transcription_for_history,
+                                    post_processed_text,
+                                    post_process_prompt,
+                                )
+                                .await
+                            {
+                                error!("Failed to save transcription to history: {}", e);
+                            }
+                        });
+                    }
 
                     let ah_clone = ah.clone();
                     let paste_time = Instant::now();
@@ -1069,6 +1189,7 @@ impl ShortcutAction for TranscribeAction {
             recording_duration,
             post_process,
             use_incremental,
+            TranscriptionCompletionMode::Standard,
             tm,
             hm,
         );
@@ -1192,9 +1313,13 @@ impl ShortcutAction for FullSystemTranscribeAction {
         let tm = Arc::clone(&app.state::<Arc<TranscriptionManager>>());
         let hm = Arc::clone(&app.state::<Arc<HistoryManager>>());
         let full_system_audio = app.state::<Arc<FullSystemAudioSessionManager>>();
+        let post_process = self.post_process || get_settings(app).post_process_enabled;
 
         change_tray_icon(app, TrayIconState::Transcribing);
-        spawn_deferred_overlay_state(app, DeferredOverlayState::Transcribing);
+        crate::overlay::show_full_system_progress_overlay(
+            app,
+            &full_system_progress_payload(FullSystemProgressStage::Preparing, None, None),
+        );
         rm.remove_mute();
         play_feedback_sound(app, SoundType::Stop);
 
@@ -1204,8 +1329,9 @@ impl ShortcutAction for FullSystemTranscribeAction {
             binding_id,
             stop_result.transcription_samples,
             None,
-            self.post_process || get_settings(app).post_process_enabled,
+            post_process,
             false,
+            TranscriptionCompletionMode::FullSystemOverlay,
             tm,
             hm,
         );

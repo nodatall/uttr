@@ -12,6 +12,7 @@ import AccessibilityPermissions from "./components/AccessibilityPermissions";
 import Footer from "./components/footer";
 import { AccessibilityOnboarding } from "./components/onboarding";
 import { Sidebar, SidebarSection, SECTIONS_CONFIG } from "./components/Sidebar";
+import { HistorySettings } from "./components/settings";
 import { useSettings } from "./hooks/useSettings";
 import { useSettingsStore } from "./stores/settingsStore";
 import { commands } from "@/bindings";
@@ -20,7 +21,19 @@ import { getLanguageDirection, initializeRTL } from "@/lib/utils/rtl";
 type OnboardingStep = "accessibility" | "done";
 const SHORTCUT_REFRESH_INTERVAL_MS = 3 * 60 * 1000;
 
-const renderSettingsContent = (section: SidebarSection) => {
+type HistoryFocusRequest = {
+  entryId: number | null;
+  token: number;
+};
+
+const renderSettingsContent = (
+  section: SidebarSection,
+  historyFocusRequest: HistoryFocusRequest | null,
+) => {
+  if (section === "history") {
+    return <HistorySettings focusRequest={historyFocusRequest} />;
+  }
+
   const ActiveComponent =
     SECTIONS_CONFIG[section]?.component || SECTIONS_CONFIG.general.component;
   return <ActiveComponent />;
@@ -33,6 +46,8 @@ function App() {
   );
   const [currentSection, setCurrentSection] =
     useState<SidebarSection>("general");
+  const [historyFocusRequest, setHistoryFocusRequest] =
+    useState<HistoryFocusRequest | null>(null);
   const { settings, updateSetting } = useSettings();
   const direction = getLanguageDirection(i18n.language);
   const refreshAudioDevices = useSettingsStore(
@@ -139,6 +154,23 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    let unlistenFn: (() => void) | undefined;
+    listen<{ entryId?: number | null }>("show-history-entry", (event) => {
+      setCurrentSection("history");
+      setHistoryFocusRequest({
+        entryId: event.payload?.entryId ?? null,
+        token: Date.now(),
+      });
+    }).then((unlisten) => {
+      unlistenFn = unlisten;
+    });
+
+    return () => {
+      if (unlistenFn) unlistenFn();
+    };
+  }, []);
+
   const checkOnboardingStatus = async () => {
     try {
       const settingsResult = await commands.getAppSettings();
@@ -228,7 +260,7 @@ function App() {
             <div className="flex h-full flex-col overflow-x-hidden overflow-y-auto uttr-scrollbar">
               <div className="flex flex-col items-center gap-5 px-4 py-5 sm:px-5 sm:py-6 md:gap-6 md:px-6 md:py-7">
                 <AccessibilityPermissions />
-                {renderSettingsContent(currentSection)}
+                {renderSettingsContent(currentSection, historyFocusRequest)}
               </div>
             </div>
           </div>

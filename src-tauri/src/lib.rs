@@ -348,6 +348,8 @@ pub fn run() {
         shortcut::handy_keys::stop_handy_keys_recording,
         trigger_update_check,
         commands::cancel_operation,
+        commands::dismiss_overlay,
+        commands::show_main_window,
         commands::get_app_dir_path,
         commands::get_app_settings,
         commands::get_default_settings,
