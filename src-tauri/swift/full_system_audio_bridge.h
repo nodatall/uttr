@@ -43,6 +43,9 @@ typedef struct {
     UttrFullSystemAudioPcmBuffer pcm;
 } UttrFullSystemAudioStopResult;
 
+typedef void (*UttrFullSystemAudioLevelCallback)(const float *levels, uintptr_t count);
+
+void uttr_full_system_audio_set_level_callback(UttrFullSystemAudioLevelCallback callback);
 int32_t uttr_full_system_audio_is_supported(void);
 UttrFullSystemAudioPermissionState uttr_full_system_audio_preflight_permission(void);
 UttrFullSystemAudioPermissionState uttr_full_system_audio_request_permission(void);
