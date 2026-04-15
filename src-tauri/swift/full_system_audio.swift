@@ -7,6 +7,7 @@ import ScreenCaptureKit
 
 private let activeSessionLock = NSLock()
 private var activeSession: AnyObject?
+private var liveLevelCallback: UttrFullSystemAudioLevelCallback?
 
 private func permissionStateValue(_ state: Int32) -> UttrFullSystemAudioPermissionState {
     state
@@ -93,6 +94,35 @@ private func makePcmBuffer(
         sample_rate: sampleRate,
         channel_count: channelCount
     )
+}
+
+private func emitLiveLevels(samples: [Float]) {
+    guard let liveLevelCallback, !samples.isEmpty else {
+        return
+    }
+
+    var sumSquares: Float = 0
+    var peak: Float = 0
+
+    for sample in samples {
+        let amplitude = abs(sample)
+        sumSquares += sample * sample
+        if amplitude > peak {
+            peak = amplitude
+        }
+    }
+
+    let rms = sqrt(sumSquares / Float(samples.count))
+    let baseLevel = min(max(max(peak, rms * 2.1), 0), 1)
+    let shapedLevel = min(pow(baseLevel * 1.28, 0.82), 1)
+    let buckets = Array(repeating: shapedLevel, count: 16)
+
+    buckets.withUnsafeBufferPointer { buffer in
+        guard let baseAddress = buffer.baseAddress else {
+            return
+        }
+        liveLevelCallback(baseAddress, UInt(buffer.count))
+    }
 }
 
 @available(macOS 13.0, *)
@@ -329,6 +359,8 @@ private final class FullSystemAudioCaptureSession: NSObject, SCStreamOutput, SCS
             return
         }
 
+        emitLiveLevels(samples: samples)
+
         stateLock.lock()
         capturedSamples.append(contentsOf: samples)
         if capturedSampleRate == 0 {
@@ -339,6 +371,13 @@ private final class FullSystemAudioCaptureSession: NSObject, SCStreamOutput, SCS
         }
         stateLock.unlock()
     }
+}
+
+@_cdecl("uttr_full_system_audio_set_level_callback")
+public func uttrFullSystemAudioSetLevelCallback(
+    _ callback: UttrFullSystemAudioLevelCallback?
+) {
+    liveLevelCallback = callback
 }
 
 @available(macOS 13.0, *)

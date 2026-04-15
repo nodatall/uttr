@@ -139,6 +139,13 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     app_handle.manage(transcription_manager.clone());
     app_handle.manage(history_manager.clone());
 
+    full_system_audio_bridge::set_live_level_callback({
+        let app_handle = app_handle.clone();
+        move |levels| {
+            utils::emit_levels(&app_handle, &levels);
+        }
+    });
+
     #[cfg(target_os = "macos")]
     app_activation_bridge::install_frontmost_app_activation_monitor(recording_manager.clone());
 

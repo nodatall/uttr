@@ -34,17 +34,17 @@ const INPUT_ATTACK_SMOOTHING_KEEP = 0.18;
 const INPUT_ATTACK_SMOOTHING_NEW = 0.82;
 const INPUT_RELEASE_SMOOTHING_KEEP = 0.46;
 const INPUT_RELEASE_SMOOTHING_NEW = 0.54;
-const WAVE_ENERGY_POWER = 0.72;
-const QUIET_SPEECH_GAIN = 2.85;
+const WAVE_ENERGY_POWER = 0.66;
+const QUIET_SPEECH_GAIN = 3.25;
 const QUIET_FLOOR = 0.12;
 const SILENCE_ACTIVITY_START = 0.0025;
 const SILENCE_ACTIVITY_RANGE = 0.012;
-const SILENCE_LEVEL_GATE = 0.012;
-const SPEECH_WAKE_AVERAGE = 0.0065;
-const SPEECH_WAKE_PEAK = 0.032;
-const SPEECH_SLEEP_AVERAGE = 0.0038;
-const SPEECH_SLEEP_PEAK = 0.02;
-const SPEECH_SLEEP_HOLD_MS = 120;
+const SILENCE_LEVEL_GATE = 0.009;
+const SPEECH_WAKE_AVERAGE = 0.0045;
+const SPEECH_WAKE_PEAK = 0.024;
+const SPEECH_SLEEP_AVERAGE = 0.0028;
+const SPEECH_SLEEP_PEAK = 0.015;
+const SPEECH_SLEEP_HOLD_MS = 300;
 const WAVE_ENERGY_MIN = 0;
 const WAVE_ENERGY_MAX = 1;
 const WAVE_AMPLITUDE_MIN = 0.9;
@@ -537,10 +537,43 @@ const RecordingOverlay: React.FC = () => {
         <div className="overlay-progress-card" role="status" aria-live="polite">
           <div className="overlay-progress-status-row">
             <div className="overlay-progress-eyebrow">{fullSystemEyebrow}</div>
-            <div className="overlay-progress-value">{progressPercent}%</div>
           </div>
           <div className="overlay-progress-headline">
-            <h1>{fullSystemProgress.title}</h1>
+            <div className="overlay-progress-headline-top">
+              <div className="overlay-progress-headline-title">
+                <h1>{fullSystemProgress.title}</h1>
+              </div>
+              {fullSystemProgress.stage === "complete" && (
+                <div className="overlay-progress-actions">
+                  <button
+                    type="button"
+                    className="overlay-progress-button overlay-progress-button-primary"
+                    onClick={handleCopyTranscript}
+                    disabled={
+                      overlayActionPending || !fullSystemProgress.transcriptText
+                    }
+                  >
+                    Copy
+                  </button>
+                  <button
+                    type="button"
+                    className="overlay-progress-button"
+                    onClick={handleViewHistoryEntry}
+                    disabled={overlayActionPending}
+                  >
+                    View
+                  </button>
+                  <button
+                    type="button"
+                    className="overlay-progress-button overlay-progress-button-ghost"
+                    onClick={handleDismissOverlay}
+                    disabled={overlayActionPending}
+                  >
+                    Exit
+                  </button>
+                </div>
+              )}
+            </div>
             <p>{fullSystemProgress.subtitle}</p>
           </div>
           <div className="overlay-progress-meter">
@@ -563,36 +596,6 @@ const RecordingOverlay: React.FC = () => {
             <span className="overlay-progress-pulse" aria-hidden />
             <span>{fullSystemProgress.footerNote}</span>
           </div>
-          {fullSystemProgress.stage === "complete" && (
-            <div className="overlay-progress-actions">
-              <button
-                type="button"
-                className="overlay-progress-button overlay-progress-button-primary"
-                onClick={handleCopyTranscript}
-                disabled={
-                  overlayActionPending || !fullSystemProgress.transcriptText
-                }
-              >
-                Copy
-              </button>
-              <button
-                type="button"
-                className="overlay-progress-button"
-                onClick={handleViewHistoryEntry}
-                disabled={overlayActionPending}
-              >
-                View
-              </button>
-              <button
-                type="button"
-                className="overlay-progress-button overlay-progress-button-ghost"
-                onClick={handleDismissOverlay}
-                disabled={overlayActionPending}
-              >
-                Exit
-              </button>
-            </div>
-          )}
         </div>
       </div>
     );

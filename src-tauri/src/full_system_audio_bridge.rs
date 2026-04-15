@@ -1,5 +1,7 @@
+use once_cell::sync::Lazy;
 use std::ffi::c_void;
 use std::os::raw::c_int;
+use std::sync::{Arc, Mutex};
 use std::{mem, ptr, slice};
 
 #[repr(i32)]
@@ -69,6 +71,10 @@ pub struct FullSystemAudioCapturedPcm {
     pub sample_rate: u32,
     pub channel_count: usize,
 }
+
+type LiveLevelCallback = Arc<dyn Fn(Vec<f32>) + Send + Sync + 'static>;
+static LIVE_LEVEL_CALLBACK: Lazy<Mutex<Option<LiveLevelCallback>>> =
+    Lazy::new(|| Mutex::new(None));
 
 #[repr(C)]
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -160,6 +166,9 @@ unsafe extern "C" {
 
 #[cfg(target_os = "macos")]
 extern "C" {
+    fn uttr_full_system_audio_set_level_callback(
+        callback: Option<unsafe extern "C" fn(*const f32, usize)>,
+    );
     fn uttr_full_system_audio_is_supported() -> c_int;
     fn uttr_full_system_audio_preflight_permission() -> c_int;
     fn uttr_full_system_audio_request_permission() -> c_int;
@@ -183,6 +192,32 @@ pub fn owned_pcm_buffer_from_samples(
     channel_count: i32,
 ) -> FullSystemAudioPcmBuffer {
     FullSystemAudioPcmBuffer::from_samples(samples, sample_rate, channel_count)
+}
+
+unsafe extern "C" fn live_level_trampoline(levels: *const f32, count: usize) {
+    if levels.is_null() || count == 0 {
+        return;
+    }
+
+    let callback = LIVE_LEVEL_CALLBACK.lock().unwrap().clone();
+    let Some(callback) = callback else {
+        return;
+    };
+
+    let buckets = unsafe { slice::from_raw_parts(levels, count).to_vec() };
+    callback(buckets);
+}
+
+pub fn set_live_level_callback<F>(callback: F)
+where
+    F: Fn(Vec<f32>) + Send + Sync + 'static,
+{
+    *LIVE_LEVEL_CALLBACK.lock().unwrap() = Some(Arc::new(callback));
+
+    #[cfg(target_os = "macos")]
+    unsafe {
+        uttr_full_system_audio_set_level_callback(Some(live_level_trampoline));
+    }
 }
 
 pub fn is_supported() -> bool {

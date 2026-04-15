@@ -226,8 +226,7 @@
 .overlay-progress-status-row {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
+  justify-content: flex-start;
 }
 
 .overlay-progress-eyebrow {
@@ -238,15 +237,22 @@
   color: rgb(122 133 146 / 78%);
 }
 
-.overlay-progress-value {
-  font-size: 12px;
-  color: rgb(149 160 173 / 64%);
-}
-
 .overlay-progress-headline {
   display: grid;
-  gap: 6px;
-  min-height: 72px;
+  gap: 10px;
+  min-height: 88px;
+}
+
+.overlay-progress-headline-top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.overlay-progress-headline-title {
+  min-width: 0;
+  flex: 1;
 }
 
 .overlay-progress-headline h1 {
@@ -336,13 +342,14 @@
 
 .overlay-progress-actions {
   display: flex;
-  gap: 10px;
+  gap: 8px;
+  flex-shrink: 0;
 }
 
 .overlay-progress-button {
   border: 0;
-  border-radius: 999px;
-  padding: 10px 15px;
+  border-radius: 7px;
+  padding: 9px 13px;
   background: rgb(255 255 255 / 8%);
   color: rgb(247 251 255 / 95%);
   font: inherit;

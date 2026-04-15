@@ -3,26 +3,22 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Full System Progress Mock</title>
+    <title>Full System Progress Overlay Mock</title>
     <style>
       @import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap");
 
       :root {
         --bg-top: #0a1018;
         --bg-bottom: #0d131d;
-        --panel-bg: linear-gradient(
-          145deg,
-          rgb(16 22 31 / 96%),
-          rgb(15 21 30 / 92%)
-        );
-        --panel-border: rgb(255 255 255 / 07%);
+        --panel-border: rgb(255 255 255 / 7%);
         --panel-shadow: 0 18px 40px rgb(0 0 0 / 28%);
         --text-strong: rgb(247 251 255 / 95%);
         --text-muted: rgb(167 179 194 / 72%);
+        --text-soft: rgb(173 186 199 / 78%);
         --accent-a: #1ea672;
         --accent-b: #2cc18c;
         --accent-c: #6fe0b4;
-        --bar-track: rgb(255 255 255 / 06%);
+        --track: rgb(255 255 255 / 6%);
       }
 
       * {
@@ -35,8 +31,8 @@
         display: grid;
         place-items: center;
         background:
-          radial-gradient(circle at top, rgb(44 193 140 / 09%), transparent 32%),
-          radial-gradient(circle at bottom right, rgb(54 92 138 / 07%), transparent 28%),
+          radial-gradient(circle at top, rgb(44 193 140 / 9%), transparent 32%),
+          radial-gradient(circle at bottom right, rgb(54 92 138 / 7%), transparent 28%),
           linear-gradient(180deg, var(--bg-top), var(--bg-bottom));
         color: var(--text-strong);
         font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
@@ -45,17 +41,50 @@
       .stage {
         width: min(920px, calc(100vw - 32px));
         display: grid;
-        gap: 24px;
+        gap: 22px;
+      }
+
+      .controls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 10px;
+      }
+
+      .control {
+        border: 0;
+        border-radius: 999px;
+        padding: 10px 14px;
+        background: rgb(255 255 255 / 8%);
+        color: var(--text-strong);
+        font: inherit;
+        font-size: 13px;
+        font-weight: 600;
+        cursor: pointer;
+        transition:
+          transform 120ms ease,
+          background 160ms ease,
+          box-shadow 160ms ease;
+      }
+
+      .control:hover {
+        transform: translateY(-1px);
+        background: rgb(255 255 255 / 12%);
+      }
+
+      .control.is-active {
+        background: linear-gradient(90deg, rgb(30 166 114 / 96%), rgb(44 193 140 / 94%));
+        color: rgb(5 18 14 / 94%);
+        box-shadow: 0 10px 22px rgb(30 166 114 / 24%);
       }
 
       .preview-shell {
-        min-height: 300px;
+        min-height: 392px;
         border-radius: 30px;
-        border: 1px solid rgb(255 255 255 / 05%);
+        border: 1px solid rgb(255 255 255 / 5%);
         background:
-          linear-gradient(180deg, rgb(255 255 255 / 02%), rgb(255 255 255 / 01%)),
+          linear-gradient(180deg, rgb(255 255 255 / 2%), rgb(255 255 255 / 1%)),
           rgb(8 12 19 / 72%);
-        box-shadow: inset 0 1px 0 rgb(255 255 255 / 02%);
+        box-shadow: inset 0 1px 0 rgb(255 255 255 / 2%);
         display: grid;
         place-items: center;
         padding: 36px;
@@ -84,21 +113,24 @@
       .preview-shell::after {
         width: 180px;
         height: 180px;
-        background: rgb(79 122 170 / 08%);
+        background: rgb(79 122 170 / 8%);
         right: -40px;
         bottom: -40px;
       }
 
       .overlay-card {
         width: min(520px, 100%);
-        height: 196px;
+        height: 272px;
         padding: 16px 18px 18px;
         border-radius: 7px;
         border: 1px solid var(--panel-border);
-        background: var(--panel-bg);
+        background:
+          radial-gradient(circle at 16% 10%, rgb(46 182 128 / 8%), transparent 24%),
+          radial-gradient(circle at 82% 80%, rgb(82 104 142 / 6%), transparent 22%),
+          linear-gradient(145deg, rgb(16 22 31 / 96%), rgb(15 21 30 / 92%));
         backdrop-filter: blur(16px) saturate(132%);
         box-shadow:
-          inset 0 1px 0 rgb(255 255 255 / 07%),
+          inset 0 1px 0 rgb(255 255 255 / 7%),
           var(--panel-shadow);
         display: grid;
         gap: 16px;
@@ -106,23 +138,10 @@
         overflow: hidden;
       }
 
-      .overlay-card::before {
-        content: "";
-        position: absolute;
-        inset: 0;
-        background:
-          radial-gradient(circle at 16% 10%, rgb(46 182 128 / 08%), transparent 24%),
-          radial-gradient(circle at 82% 80%, rgb(82 104 142 / 06%), transparent 22%);
-        pointer-events: none;
-      }
-
       .status-row {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        position: relative;
-        z-index: 1;
+        justify-content: flex-start;
       }
 
       .eyebrow {
@@ -133,17 +152,17 @@
         color: rgb(122 133 146 / 78%);
       }
 
-      .clock {
-        font-size: 12px;
-        color: rgb(149 160 173 / 64%);
+      .headline {
+        display: grid;
+        gap: 10px;
+        min-height: 88px;
       }
 
-      .headline {
-        position: relative;
-        z-index: 1;
-        display: grid;
-        gap: 6px;
-        min-height: 72px;
+      .headline-top {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 16px;
       }
 
       .headline h1 {
@@ -151,6 +170,11 @@
         font-size: clamp(22px, 4vw, 30px);
         line-height: 1;
         letter-spacing: -0.04em;
+      }
+
+      .headline-title {
+        min-width: 0;
+        flex: 1;
       }
 
       .headline p {
@@ -161,8 +185,6 @@
       }
 
       .meter {
-        position: relative;
-        z-index: 1;
         display: grid;
         gap: 10px;
       }
@@ -188,8 +210,8 @@
         height: 12px;
         border-radius: 999px;
         background:
-          linear-gradient(180deg, rgb(255 255 255 / 07%), rgb(255 255 255 / 03%)),
-          var(--bar-track);
+          linear-gradient(180deg, rgb(255 255 255 / 7%), rgb(255 255 255 / 3%)),
+          var(--track);
         padding: 2px;
         overflow: hidden;
         position: relative;
@@ -199,7 +221,7 @@
         content: "";
         position: absolute;
         inset: 0;
-        background: linear-gradient(90deg, transparent, rgb(255 255 255 / 04%), transparent);
+        background: linear-gradient(90deg, transparent, rgb(255 255 255 / 4%), transparent);
         transform: translateX(-100%);
         animation: sheen 2.6s linear infinite;
       }
@@ -208,15 +230,22 @@
         height: 100%;
         width: 0%;
         border-radius: 999px;
-        background:
-          linear-gradient(90deg, var(--accent-a), var(--accent-b), var(--accent-c));
+        background: linear-gradient(90deg, var(--accent-a), var(--accent-b), var(--accent-c));
         box-shadow:
           0 0 14px rgb(44 193 140 / 22%),
           inset 0 1px 0 rgb(255 255 255 / 26%);
-        transition: width 480ms cubic-bezier(0.22, 1, 0.36, 1);
+        transition: width 420ms cubic-bezier(0.22, 1, 0.36, 1);
       }
 
-      .mini-pulse {
+      .footer-note {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        color: var(--text-soft);
+        font-size: 12px;
+      }
+
+      .pulse {
         width: 8px;
         height: 8px;
         border-radius: 999px;
@@ -225,27 +254,21 @@
         animation: pulse 1.5s ease-in-out infinite;
       }
 
-      .footer-note {
-        position: relative;
-        z-index: 1;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        color: rgb(173 186 199 / 78%);
-        font-size: 12px;
+      .actions {
+        display: none;
+        gap: 8px;
+        flex-shrink: 0;
       }
 
-      .controls {
+      .actions.is-visible {
         display: flex;
-        flex-wrap: wrap;
-        gap: 10px;
       }
 
-      button {
+      .action {
         border: 0;
-        border-radius: 999px;
-        padding: 11px 16px;
-        background: rgb(255 255 255 / 08%);
+        border-radius: 7px;
+        padding: 9px 13px;
+        background: rgb(255 255 255 / 8%);
         color: var(--text-strong);
         font: inherit;
         font-size: 13px;
@@ -257,15 +280,48 @@
           box-shadow 160ms ease;
       }
 
-      button:hover {
-        background: rgb(255 255 255 / 12%);
-        box-shadow: 0 10px 25px rgb(0 0 0 / 16%);
+      .action:hover {
         transform: translateY(-1px);
+        background: rgb(255 255 255 / 12%);
       }
 
-      button.primary {
-        background: linear-gradient(90deg, rgb(24 131 91), rgb(34 162 114));
-        color: white;
+      .action-primary {
+        background: linear-gradient(90deg, rgb(30 166 114 / 96%), rgb(44 193 140 / 94%));
+        color: rgb(5 18 14 / 94%);
+        box-shadow: 0 10px 22px rgb(30 166 114 / 24%);
+      }
+
+      .action-primary:hover {
+        background: linear-gradient(90deg, rgb(42 178 126 / 98%), rgb(64 205 152 / 96%));
+      }
+
+      .action-ghost {
+        background: rgb(255 255 255 / 5%);
+        color: rgb(205 214 224 / 82%);
+      }
+
+      .action-ghost:hover {
+        background: rgb(255 255 255 / 9%);
+        color: rgb(240 245 250 / 92%);
+      }
+
+      .notes {
+        color: rgb(173 186 199 / 74%);
+        font-size: 13px;
+        line-height: 1.45;
+      }
+
+      @keyframes pulse {
+        0%,
+        100% {
+          transform: scale(0.9);
+          opacity: 0.82;
+        }
+
+        50% {
+          transform: scale(1.08);
+          opacity: 1;
+        }
       }
 
       @keyframes sheen {
@@ -273,201 +329,125 @@
           transform: translateX(100%);
         }
       }
-
-      @keyframes pulse {
-        0%,
-        100% {
-          transform: scale(0.82);
-          opacity: 0.7;
-        }
-
-        50% {
-          transform: scale(1.15);
-          opacity: 1;
-        }
-      }
-
-      @media (max-width: 640px) {
-        .preview-shell {
-          min-height: 250px;
-          padding: 20px;
-        }
-
-        .overlay-card {
-          height: 196px;
-          padding: 14px;
-          border-radius: 7px;
-        }
-      }
     </style>
   </head>
   <body>
-    <main class="stage">
-      <section class="preview-shell">
+    <div class="stage">
+      <div class="controls">
+        <button class="control" data-stage="preparing">Preparing</button>
+        <button class="control" data-stage="transcribing">Transcribing</button>
+        <button class="control" data-stage="processing">Post-processing</button>
+        <button class="control" data-stage="complete">Complete</button>
+      </div>
+
+      <div class="preview-shell">
         <div class="overlay-card">
           <div class="status-row">
-            <div class="eyebrow" id="eyebrow">Full system audio</div>
-            <div class="clock" id="clock">Long recording detected</div>
+            <div class="eyebrow">FULL SYSTEM</div>
           </div>
 
           <div class="headline">
-            <h1 id="title">Transcribing recording</h1>
-            <p id="description">
-              Breaking the captured audio into chunks before stitching the final
-              transcript.
-            </p>
+            <div class="headline-top">
+              <div class="headline-title">
+                <h1 id="title">Preparing capture</h1>
+              </div>
+              <div class="actions" id="actions">
+                <button class="action action-primary">Copy</button>
+                <button class="action">View</button>
+                <button class="action action-ghost">Exit</button>
+              </div>
+            </div>
+            <p id="subtitle">Getting the system and microphone audio ready.</p>
           </div>
 
           <div class="meter">
             <div class="meter-topline">
-              <div class="meter-label" id="phaseLabel">Chunk 2 of 6</div>
-              <div class="meter-value" id="percent">34%</div>
+              <div class="meter-label" id="label">Preparing audio</div>
+              <div class="meter-value" id="meter-percent">18%</div>
             </div>
             <div class="progress-track">
-              <div class="progress-fill" id="progressFill"></div>
+              <div class="progress-fill" id="fill"></div>
             </div>
           </div>
 
           <div class="footer-note">
-            <div class="mini-pulse"></div>
-            <div id="footerText">Estimated time remaining: about 6 seconds</div>
+            <span class="pulse"></span>
+            <span id="footer">Large recordings can take a little longer.</span>
           </div>
         </div>
-      </section>
+      </div>
 
-      <section class="controls">
-        <button class="primary" data-scene="loop">Play Loop</button>
-        <button data-scene="transcribe">Chunked Transcribing</button>
-        <button data-scene="stitch">Stitching</button>
-        <button data-scene="process">Post-processing</button>
-        <button data-scene="done">Done</button>
-      </section>
-    </main>
+      <div class="notes">
+        This standalone mock mirrors the current bottom overlay direction. Use the stage buttons above
+        to flip between progress states and the completed action row.
+      </div>
+    </div>
 
     <script>
-      const scenes = {
-        transcribe: {
-          eyebrow: "Full system audio",
-          clock: "Long recording detected",
-          title: "Transcribing recording",
-          description:
-            "Breaking the captured audio into chunks before stitching the final transcript.",
-          phaseLabel: "Chunk 2 of 6",
-          percent: 34,
-          footer: "Estimated time remaining: about 6 seconds",
-          chips: [
-            { label: "Capture finished", state: "complete" },
-            { label: "Chunked transcription", state: "active" },
-            { label: "Stitching", state: "" },
-            { label: "Post-processing", state: "" },
-          ],
+      const stages = {
+        preparing: {
+          percent: 18,
+          title: "Preparing capture",
+          subtitle: "Getting the system and microphone audio ready.",
+          label: "Preparing audio",
+          footer: "Large recordings can take a little longer.",
+          complete: false,
         },
-        stitch: {
-          eyebrow: "Full system audio",
-          clock: "Almost there",
-          title: "Stitching transcript",
-          description:
-            "Combining chunk output into one clean transcript before final polish.",
-          phaseLabel: "Merging chunk boundaries",
-          percent: 78,
-          footer: "Final assembly in progress",
-          chips: [
-            { label: "Capture finished", state: "complete" },
-            { label: "Chunked transcription", state: "complete" },
-            { label: "Stitching", state: "active" },
-            { label: "Post-processing", state: "" },
-          ],
+        transcribing: {
+          percent: 66,
+          title: "Transcribing system audio",
+          subtitle: "Working through the captured audio now.",
+          label: "Transcribing",
+          footer: "Uttr will save the finished transcript to History.",
+          complete: false,
         },
-        process: {
-          eyebrow: "Full system audio",
-          clock: "Optional polish",
-          title: "Post-processing transcript",
-          description:
-            "Cleaning up the stitched result and preparing the final text for paste.",
-          phaseLabel: "Applying cleanup prompt",
-          percent: 92,
-          footer: "Just a moment",
-          chips: [
-            { label: "Capture finished", state: "complete" },
-            { label: "Chunked transcription", state: "complete" },
-            { label: "Stitching", state: "complete" },
-            { label: "Post-processing", state: "active" },
-          ],
+        processing: {
+          percent: 88,
+          title: "Polishing transcript",
+          subtitle: "Applying post-processing before saving.",
+          label: "Post-processing",
+          footer: "Cleaning up punctuation and formatting.",
+          complete: false,
         },
-        done: {
-          eyebrow: "Full system audio",
-          clock: "Complete",
-          title: "Transcript ready",
-          description:
-            "The final text is prepared and ready to paste back into your app.",
-          phaseLabel: "Finished",
+        complete: {
           percent: 100,
-          footer: "Overlay dismisses after handoff",
-          chips: [
-            { label: "Capture finished", state: "complete" },
-            { label: "Chunked transcription", state: "complete" },
-            { label: "Stitching", state: "complete" },
-            { label: "Post-processing", state: "complete" },
-          ],
+          title: "Transcript ready",
+          subtitle: "Saved to History. Copy it now or open the full entry.",
+          label: "Complete",
+          footer: "Ready for review.",
+          complete: true,
         },
       };
 
-      const titleEl = document.getElementById("title");
-      const descriptionEl = document.getElementById("description");
-      const eyebrowEl = document.getElementById("eyebrow");
-      const clockEl = document.getElementById("clock");
-      const phaseLabelEl = document.getElementById("phaseLabel");
-      const percentEl = document.getElementById("percent");
-      const footerEl = document.getElementById("footerText");
-      const progressFillEl = document.getElementById("progressFill");
-      const buttons = Array.from(document.querySelectorAll("button[data-scene]"));
+      const title = document.getElementById("title");
+      const subtitle = document.getElementById("subtitle");
+      const label = document.getElementById("label");
+      const footer = document.getElementById("footer");
+      const fill = document.getElementById("fill");
+      const meterPercent = document.getElementById("meter-percent");
+      const actions = document.getElementById("actions");
+      const buttons = [...document.querySelectorAll("[data-stage]")];
 
-      let loopTimer = null;
+      function setStage(stageKey) {
+        const stage = stages[stageKey];
+        title.textContent = stage.title;
+        subtitle.textContent = stage.subtitle;
+        label.textContent = stage.label;
+        footer.textContent = stage.footer;
+        meterPercent.textContent = `${stage.percent}%`;
+        fill.style.width = `${stage.percent}%`;
+        actions.classList.toggle("is-visible", stage.complete);
 
-      function applyScene(name) {
-        const scene = scenes[name];
-        if (!scene) return;
-        eyebrowEl.textContent = scene.eyebrow;
-        clockEl.textContent = scene.clock;
-        titleEl.textContent = scene.title;
-        descriptionEl.textContent = scene.description;
-        phaseLabelEl.textContent = scene.phaseLabel;
-        percentEl.textContent = `${scene.percent}%`;
-        footerEl.textContent = scene.footer;
-        progressFillEl.style.width = `${scene.percent}%`;
-      }
-
-      function stopLoop() {
-        if (loopTimer) {
-          clearInterval(loopTimer);
-          loopTimer = null;
-        }
-      }
-
-      function startLoop() {
-        stopLoop();
-        const order = ["transcribe", "stitch", "process", "done"];
-        let index = 0;
-        applyScene(order[index]);
-        loopTimer = setInterval(() => {
-          index = (index + 1) % order.length;
-          applyScene(order[index]);
-        }, 1800);
+        buttons.forEach((button) => {
+          button.classList.toggle("is-active", button.dataset.stage === stageKey);
+        });
       }
 
       buttons.forEach((button) => {
-        button.addEventListener("click", () => {
-          const scene = button.dataset.scene;
-          if (scene === "loop") {
-            startLoop();
-            return;
-          }
-          stopLoop();
-          applyScene(scene);
-        });
+        button.addEventListener("click", () => setStage(button.dataset.stage));
       });
 
-      applyScene("transcribe");
+      setStage("complete");
     </script>
   </body>
 </html>
