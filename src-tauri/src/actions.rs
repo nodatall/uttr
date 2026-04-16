@@ -710,6 +710,13 @@ fn handle_transcription_stop(
     tm: Arc<TranscriptionManager>,
     hm: Arc<HistoryManager>,
 ) {
+    log::info!(
+        "[latency] transcription task scheduling binding={} sample_count={} recording_duration_ms={}",
+        binding_id,
+        samples.as_ref().map(|samples| samples.len()).unwrap_or(0),
+        recording_duration.unwrap_or_default().as_millis()
+    );
+
     let ah = app.clone();
     let binding_id = binding_id.to_string();
     let task_completed = Arc::new(AtomicBool::new(false));
@@ -1058,6 +1065,7 @@ fn handle_transcription_stop(
 impl ShortcutAction for TranscribeAction {
     fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
         let start_time = Instant::now();
+        log::info!("[latency] transcribe action start begin binding={}", binding_id);
         debug!("TranscribeAction::start called for binding: {}", binding_id);
 
         // Load model in the background
@@ -1090,11 +1098,6 @@ impl ShortcutAction for TranscribeAction {
         debug!("Microphone mode - always_on: {}", is_always_on);
 
         change_tray_icon(app, TrayIconState::Recording);
-        if should_show_warming {
-            show_warming_overlay(app);
-        } else {
-            show_recording_overlay(app);
-        }
 
         let mut recording_started = false;
         if is_always_on {
@@ -1111,16 +1114,46 @@ impl ShortcutAction for TranscribeAction {
 
             recording_started = rm.try_start_recording(&binding_id);
             debug!("Recording started: {}", recording_started);
+            log::info!(
+                "[latency] transcribe recording active binding={} recording_started={} elapsed_ms={}",
+                binding_id,
+                recording_started,
+                start_time.elapsed().as_millis()
+            );
+            if recording_started {
+                show_recording_overlay(app);
+                log::info!(
+                    "[latency] transcribe overlay requested binding={} warming=false elapsed_ms={}",
+                    binding_id,
+                    start_time.elapsed().as_millis()
+                );
+            }
         } else {
             // On-demand mode: Start recording first, then play audio feedback, then apply mute
             // This allows the microphone to be activated before playing the sound
             debug!("On-demand mode: Starting recording first, then audio feedback");
+            if should_show_warming {
+                show_warming_overlay(app);
+                log::info!(
+                    "[latency] transcribe overlay requested binding={} warming=true elapsed_ms={}",
+                    binding_id,
+                    start_time.elapsed().as_millis()
+                );
+            }
             let recording_start_time = Instant::now();
             if rm.try_start_recording(&binding_id) {
                 recording_started = true;
-                if should_show_warming {
-                    show_recording_overlay(app);
-                }
+                show_recording_overlay(app);
+                log::info!(
+                    "[latency] transcribe overlay requested binding={} warming=false elapsed_ms={}",
+                    binding_id,
+                    start_time.elapsed().as_millis()
+                );
+                log::info!(
+                    "[latency] transcribe recording active binding={} elapsed_ms={}",
+                    binding_id,
+                    start_time.elapsed().as_millis()
+                );
                 debug!("Recording started in {:?}", recording_start_time.elapsed());
                 // Small delay to ensure microphone stream is active
                 let app_clone = app.clone();
@@ -1150,6 +1183,12 @@ impl ShortcutAction for TranscribeAction {
             "TranscribeAction::start completed in {:?}",
             start_time.elapsed()
         );
+        log::info!(
+            "[latency] transcribe action start end binding={} recording_started={} elapsed_ms={}",
+            binding_id,
+            recording_started,
+            start_time.elapsed().as_millis()
+        );
     }
 
     fn stop(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
@@ -1157,6 +1196,7 @@ impl ShortcutAction for TranscribeAction {
         shortcut::unregister_cancel_shortcut(app);
 
         let stop_time = Instant::now();
+        log::info!("[latency] transcribe action stop begin binding={}", binding_id);
         debug!("TranscribeAction::stop called for binding: {}", binding_id);
 
         let rm = Arc::clone(&app.state::<Arc<AudioRecordingManager>>());
@@ -1182,6 +1222,12 @@ impl ShortcutAction for TranscribeAction {
         }
         let recording_duration = rm.current_recording_duration(binding_id);
         let samples = rm.stop_recording(binding_id);
+        log::info!(
+            "[latency] transcribe samples retrieved binding={} sample_count={} elapsed_ms={}",
+            binding_id,
+            samples.as_ref().map(|samples| samples.len()).unwrap_or(0),
+            stop_time.elapsed().as_millis()
+        );
         handle_transcription_stop(
             app,
             binding_id,
@@ -1198,6 +1244,11 @@ impl ShortcutAction for TranscribeAction {
             "TranscribeAction::stop completed in {:?}",
             stop_time.elapsed()
         );
+        log::info!(
+            "[latency] transcribe action stop end binding={} elapsed_ms={}",
+            binding_id,
+            stop_time.elapsed().as_millis()
+        );
     }
 }
 
@@ -1213,6 +1264,10 @@ impl ShortcutAction for FullSystemTranscribeAction {
         }
 
         let start_time = Instant::now();
+        log::info!(
+            "[latency] full-system action start begin binding={}",
+            binding_id
+        );
         debug!(
             "FullSystemTranscribeAction::start called for binding: {}",
             binding_id
@@ -1245,11 +1300,6 @@ impl ShortcutAction for FullSystemTranscribeAction {
         debug!("Full-system mode - always_on: {}", is_always_on);
 
         change_tray_icon(app, TrayIconState::Recording);
-        if should_show_warming {
-            show_warming_overlay(app);
-        } else {
-            show_recording_overlay(app);
-        }
 
         let mut recording_started = false;
         let start_config = crate::full_system_audio_bridge::FullSystemAudioCaptureConfig::default();
@@ -1265,16 +1315,46 @@ impl ShortcutAction for FullSystemTranscribeAction {
                 .start_session(&binding_id, start_config)
                 .started;
             debug!("Full-system recording started: {}", recording_started);
+            log::info!(
+                "[latency] full-system recording active binding={} recording_started={} elapsed_ms={}",
+                binding_id,
+                recording_started,
+                start_time.elapsed().as_millis()
+            );
+            if recording_started {
+                show_recording_overlay(app);
+                log::info!(
+                    "[latency] full-system overlay requested binding={} warming=false elapsed_ms={}",
+                    binding_id,
+                    start_time.elapsed().as_millis()
+                );
+            }
         } else {
+            if should_show_warming {
+                show_warming_overlay(app);
+                log::info!(
+                    "[latency] full-system overlay requested binding={} warming=true elapsed_ms={}",
+                    binding_id,
+                    start_time.elapsed().as_millis()
+                );
+            }
             let recording_start_time = Instant::now();
             if full_system_audio
                 .start_session(&binding_id, start_config)
                 .started
             {
                 recording_started = true;
-                if should_show_warming {
-                    show_recording_overlay(app);
-                }
+                show_recording_overlay(app);
+                log::info!(
+                    "[latency] full-system overlay requested binding={} warming=false elapsed_ms={}",
+                    binding_id,
+                    start_time.elapsed().as_millis()
+                );
+                log::info!(
+                    "[latency] full-system recording active binding={} elapsed_ms={}",
+                    binding_id,
+                    start_time.elapsed().as_millis()
+                );
                 debug!(
                     "Full-system recording started in {:?}",
                     recording_start_time.elapsed()
@@ -1298,12 +1378,22 @@ impl ShortcutAction for FullSystemTranscribeAction {
             "FullSystemTranscribeAction::start completed in {:?}",
             start_time.elapsed()
         );
+        log::info!(
+            "[latency] full-system action start end binding={} recording_started={} elapsed_ms={}",
+            binding_id,
+            recording_started,
+            start_time.elapsed().as_millis()
+        );
     }
 
     fn stop(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
         shortcut::unregister_cancel_shortcut(app);
 
         let stop_time = Instant::now();
+        log::info!(
+            "[latency] full-system action stop begin binding={}",
+            binding_id
+        );
         debug!(
             "FullSystemTranscribeAction::stop called for binding: {}",
             binding_id
@@ -1324,6 +1414,12 @@ impl ShortcutAction for FullSystemTranscribeAction {
         play_feedback_sound(app, SoundType::Stop);
 
         let stop_result: FullSystemSessionStopResult = full_system_audio.stop_session();
+        log::info!(
+            "[latency] full-system samples retrieved binding={} sample_count={} elapsed_ms={}",
+            binding_id,
+            stop_result.samples.as_ref().map(|samples| samples.len()).unwrap_or(0),
+            stop_time.elapsed().as_millis()
+        );
         handle_transcription_stop(
             app,
             binding_id,
@@ -1339,6 +1435,11 @@ impl ShortcutAction for FullSystemTranscribeAction {
         debug!(
             "FullSystemTranscribeAction::stop completed in {:?}",
             stop_time.elapsed()
+        );
+        log::info!(
+            "[latency] full-system action stop end binding={} elapsed_ms={}",
+            binding_id,
+            stop_time.elapsed().as_millis()
         );
     }
 }

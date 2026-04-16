@@ -420,9 +420,17 @@ fn apply_overlay_dimensions(app_handle: &AppHandle, width: f64, height: f64) {
 }
 
 fn show_overlay_state(app_handle: &AppHandle, state: &str, width: f64, height: f64) {
+    let show_start = std::time::Instant::now();
+    log::info!("[latency] overlay show requested state={}", state);
+
     // Check if overlay should be shown based on position setting
     let settings = settings::get_settings(app_handle);
     if settings.overlay_position == OverlayPosition::None {
+        log::info!(
+            "[latency] overlay show skipped state={} reason=disabled elapsed_ms={}",
+            state,
+            show_start.elapsed().as_millis()
+        );
         return;
     }
 
@@ -434,31 +442,35 @@ fn show_overlay_state(app_handle: &AppHandle, state: &str, width: f64, height: f
 
     #[cfg(target_os = "macos")]
     {
-        let app = app_handle.clone();
-        let state = state.to_string();
-        let state_for_retry = state.clone();
-        let _ = app_handle.run_on_main_thread(move || {
-            debug!("[overlay] macos show_overlay_state state={}", state);
-            create_recording_overlay(&app);
-            apply_overlay_dimensions(&app, width, height);
-            if let Some(overlay_window) = app.get_webview_window(OVERLAY_LABEL_BASE) {
-                let _ = overlay_window.show();
-                if let Ok(panel) = app.get_webview_panel(OVERLAY_LABEL_BASE) {
-                    panel.order_front_regardless();
-                }
-                let _ = overlay_window.emit("show-overlay", &state);
-            }
-        });
-
-        // Hidden webviews can miss the first event; retry state emission shortly after show.
-        let app_retry = app_handle.clone();
+        let app_for_show = app_handle.clone();
+        let state_for_show = state.to_string();
+        let state_for_retry = state_for_show.clone();
         std::thread::spawn(move || {
+            let app = app_for_show.clone();
+            let _ = app_for_show.run_on_main_thread(move || {
+                debug!("[overlay] macos show_overlay_state state={}", state_for_show);
+                create_recording_overlay(&app);
+                apply_overlay_dimensions(&app, width, height);
+                if let Some(overlay_window) = app.get_webview_window(OVERLAY_LABEL_BASE) {
+                    let _ = overlay_window.show();
+                    if let Ok(panel) = app.get_webview_panel(OVERLAY_LABEL_BASE) {
+                        panel.order_front_regardless();
+                    }
+                    let _ = overlay_window.emit("show-overlay", &state_for_show);
+                    log::info!(
+                        "[latency] overlay shown state={} elapsed_ms={}",
+                        state_for_show,
+                        show_start.elapsed().as_millis()
+                    );
+                }
+            });
+
             std::thread::sleep(std::time::Duration::from_millis(90));
-            if let Some(window) = app_retry.get_webview_window(OVERLAY_LABEL_BASE) {
+            if let Some(window) = app_for_show.get_webview_window(OVERLAY_LABEL_BASE) {
                 let _ = window.emit("show-overlay", &state_for_retry);
             }
             std::thread::sleep(std::time::Duration::from_millis(180));
-            if let Some(window) = app_retry.get_webview_window(OVERLAY_LABEL_BASE) {
+            if let Some(window) = app_for_show.get_webview_window(OVERLAY_LABEL_BASE) {
                 let _ = window.emit("show-overlay", &state_for_retry);
             }
         });
@@ -475,6 +487,11 @@ fn show_overlay_state(app_handle: &AppHandle, state: &str, width: f64, height: f
             force_overlay_topmost(&overlay_window);
 
             let _ = overlay_window.emit("show-overlay", state);
+            log::info!(
+                "[latency] overlay shown state={} elapsed_ms={}",
+                state,
+                show_start.elapsed().as_millis()
+            );
         }
     }
 }

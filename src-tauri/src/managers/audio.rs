@@ -6,11 +6,13 @@ use crate::settings::{get_settings, AppSettings};
 use crate::utils;
 use log::{debug, error, info, warn};
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
 };
 use std::time::{Duration, Instant};
 use tauri::Manager;
+
+static FIRST_AUDIO_LEVEL_LOGGED: AtomicBool = AtomicBool::new(true);
 
 fn set_mute(mute: bool) {
     // Expected behavior:
@@ -142,6 +144,14 @@ fn create_audio_recorder(
         .with_level_callback({
             let app_handle = app_handle.clone();
             move |levels| {
+                if !levels.is_empty()
+                    && !FIRST_AUDIO_LEVEL_LOGGED.swap(true, Ordering::Relaxed)
+                {
+                    info!(
+                        "[latency] first audio level callback received band_count={}",
+                        levels.len()
+                    );
+                }
                 utils::emit_levels(&app_handle, &levels);
             }
         });
@@ -463,19 +473,38 @@ impl AudioRecordingManager {
     }
 
     pub fn try_start_recording(&self, binding_id: &str) -> bool {
+        let start_time = Instant::now();
+        info!("[latency] audio start requested binding={}", binding_id);
+
         if !matches!(*self.state.lock().unwrap(), RecordingState::Idle) {
+            info!(
+                "[latency] audio start skipped binding={} reason=busy elapsed_ms={}",
+                binding_id,
+                start_time.elapsed().as_millis()
+            );
             false
         } else {
             self.cancel_idle_stop_timer();
 
             // Ensure microphone is open in on-demand mode
             if matches!(*self.mode.lock().unwrap(), MicrophoneMode::OnDemand) {
+                info!(
+                    "[latency] audio opening on-demand stream binding={} elapsed_ms={}",
+                    binding_id,
+                    start_time.elapsed().as_millis()
+                );
                 if let Err(e) = self.start_microphone_stream() {
                     error!("Failed to open microphone stream: {e}");
                     return false;
                 }
+                info!(
+                    "[latency] audio on-demand stream open binding={} elapsed_ms={}",
+                    binding_id,
+                    start_time.elapsed().as_millis()
+                );
             }
 
+            FIRST_AUDIO_LEVEL_LOGGED.store(false, Ordering::Relaxed);
             let start_result = self.start_recorder_command().or_else(|err| {
                 warn!("Recorder start failed; restarting microphone stream: {err}");
                 self.stop_microphone_stream();
@@ -495,6 +524,11 @@ impl AudioRecordingManager {
                 binding_id: binding_id.to_string(),
             };
             debug!("Recording started for binding {binding_id}");
+            info!(
+                "[latency] audio recording active binding={} elapsed_ms={}",
+                binding_id,
+                start_time.elapsed().as_millis()
+            );
             true
         }
     }
