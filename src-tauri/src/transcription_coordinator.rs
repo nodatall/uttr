@@ -1,7 +1,7 @@
 use crate::actions::ACTION_MAP;
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::full_system_audio::FullSystemAudioSessionManager;
-use log::{debug, error, warn};
+use log::{debug, error, info, warn};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
@@ -92,6 +92,13 @@ impl TranscriptionCoordinator {
                         is_pressed,
                         push_to_talk,
                     } => {
+                        if is_transcribe_binding(&binding_id) {
+                            info!(
+                                "[latency] coordinator dequeued input binding={} pressed={} push_to_talk={}",
+                                binding_id, is_pressed, push_to_talk
+                            );
+                        }
+
                         // Debounce rapid-fire press events (key repeat / double-tap).
                         // Releases always pass through for push-to-talk.
                         if is_pressed {
@@ -199,6 +206,13 @@ impl TranscriptionCoordinator {
         is_pressed: bool,
         push_to_talk: bool,
     ) {
+        if is_transcribe_binding(binding_id) {
+            info!(
+                "[latency] hotkey input received binding={} pressed={} push_to_talk={}",
+                binding_id, is_pressed, push_to_talk
+            );
+        }
+
         self.send_with_recovery(Command::Input {
             binding_id: binding_id.to_string(),
             hotkey_string: hotkey_string.to_string(),
@@ -219,6 +233,9 @@ impl TranscriptionCoordinator {
 }
 
 fn start(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &str) {
+    let start_time = Instant::now();
+    info!("[latency] coordinator start begin binding={}", binding_id);
+
     let Some(action) = ACTION_MAP.get(binding_id) else {
         warn!("No action in ACTION_MAP for '{binding_id}'");
         return;
@@ -233,18 +250,36 @@ fn start(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &s
 
     if transcription_session_is_active(audio_recording_active, full_system_active) {
         *stage = Stage::Recording(binding_id.to_string());
+        info!(
+            "[latency] coordinator start active binding={} elapsed_ms={}",
+            binding_id,
+            start_time.elapsed().as_millis()
+        );
     } else {
         debug!("Start for '{binding_id}' did not begin recording; staying idle");
+        info!(
+            "[latency] coordinator start inactive binding={} elapsed_ms={}",
+            binding_id,
+            start_time.elapsed().as_millis()
+        );
     }
 }
 
 fn stop(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &str) {
+    let stop_time = Instant::now();
+    info!("[latency] coordinator stop begin binding={}", binding_id);
+
     let Some(action) = ACTION_MAP.get(binding_id) else {
         warn!("No action in ACTION_MAP for '{binding_id}'");
         return;
     };
     action.stop(app, binding_id, hotkey_string);
     *stage = Stage::Processing;
+    info!(
+        "[latency] coordinator stop dispatched binding={} elapsed_ms={}",
+        binding_id,
+        stop_time.elapsed().as_millis()
+    );
 }
 
 #[cfg(test)]
