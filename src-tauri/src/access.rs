@@ -101,6 +101,7 @@ pub struct InstallAccessSnapshot {
     pub byok_validation_state: ByokValidationState,
     pub has_byok_secret: bool,
     pub has_install_token: bool,
+    pub dev_access_override: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Type)]
@@ -204,6 +205,7 @@ fn access_snapshot(settings: &AppSettings, has_byok_secret: bool) -> InstallAcce
         byok_validation_state: settings.byok_validation_state,
         has_byok_secret,
         has_install_token: !settings.install_token.trim().is_empty(),
+        dev_access_override: None,
     };
 
     apply_dev_access_override(&mut snapshot);
@@ -219,18 +221,21 @@ fn apply_dev_access_override(snapshot: &mut InstallAccessSnapshot) {
             snapshot.access_state = AccessState::Blocked;
             snapshot.entitlement_state = EntitlementState::Inactive;
             snapshot.has_byok_secret = false;
+            snapshot.dev_access_override = Some("free".to_string());
         }
         DevAccessOverride::Trial => {
             snapshot.trial_state = TrialState::Trialing;
             snapshot.access_state = AccessState::Trialing;
             snapshot.entitlement_state = EntitlementState::Inactive;
             snapshot.has_byok_secret = false;
+            snapshot.dev_access_override = Some("trial".to_string());
         }
         DevAccessOverride::Pro => {
             snapshot.trial_state = TrialState::Linked;
             snapshot.access_state = AccessState::Subscribed;
             snapshot.entitlement_state = EntitlementState::Active;
             snapshot.has_byok_secret = false;
+            snapshot.dev_access_override = Some("pro".to_string());
         }
     }
 }
@@ -507,6 +512,7 @@ mod tests {
             byok_validation_state: ByokValidationState::Unknown,
             has_byok_secret: false,
             has_install_token: true,
+            dev_access_override: None,
         };
         assert!(install_access_allows_premium_features(&subscribed));
 

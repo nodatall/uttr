@@ -25,12 +25,19 @@ export const DevPlanSimulation: React.FC<{ grouped?: boolean }> = ({
       return "Unknown";
     }
 
+    if (installAccess.dev_access_override) {
+      return `Simulated ${installAccess.dev_access_override}`;
+    }
+
     if (installAccess.has_byok_secret) {
       return "BYOK";
     }
 
     return installAccess.access_state;
   }, [installAccess]);
+
+  const activeMode =
+    (installAccess?.dev_access_override as DevPlanMode | null) ?? selectedMode;
 
   const setMode = useCallback(
     async (mode: DevPlanMode) => {
@@ -73,7 +80,7 @@ export const DevPlanSimulation: React.FC<{ grouped?: boolean }> = ({
               disabled={isUpdating}
               onClick={() => void setMode(option.mode)}
               className={`rounded-lg border px-3 py-1.5 text-sm transition disabled:cursor-wait disabled:opacity-60 ${
-                selectedMode === option.mode
+                activeMode === option.mode
                   ? "border-logo-primary/45 bg-logo-primary/18 text-text"
                   : "border-white/10 bg-white/[0.03] text-text/70 hover:border-white/18 hover:text-text"
               }`}
