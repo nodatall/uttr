@@ -34,17 +34,17 @@ const INPUT_ATTACK_SMOOTHING_KEEP = 0.18;
 const INPUT_ATTACK_SMOOTHING_NEW = 0.82;
 const INPUT_RELEASE_SMOOTHING_KEEP = 0.46;
 const INPUT_RELEASE_SMOOTHING_NEW = 0.54;
-const WAVE_ENERGY_POWER = 0.66;
-const QUIET_SPEECH_GAIN = 3.25;
+const WAVE_ENERGY_POWER = 0.56;
+const QUIET_SPEECH_GAIN = 3.9;
 const QUIET_FLOOR = 0.12;
 const SILENCE_ACTIVITY_START = 0.0025;
 const SILENCE_ACTIVITY_RANGE = 0.012;
-const SILENCE_LEVEL_GATE = 0.009;
-const SPEECH_WAKE_AVERAGE = 0.0045;
-const SPEECH_WAKE_PEAK = 0.024;
-const SPEECH_SLEEP_AVERAGE = 0.0028;
-const SPEECH_SLEEP_PEAK = 0.015;
-const SPEECH_SLEEP_HOLD_MS = 300;
+const SILENCE_LEVEL_GATE = 0.006;
+const SPEECH_WAKE_AVERAGE = 0.0014;
+const SPEECH_WAKE_PEAK = 0.008;
+const SPEECH_SLEEP_AVERAGE = 0.00055;
+const SPEECH_SLEEP_PEAK = 0.0025;
+const SPEECH_SLEEP_HOLD_MS = 500;
 const WAVE_ENERGY_MIN = 0;
 const WAVE_ENERGY_MAX = 1;
 const WAVE_AMPLITUDE_MIN = 0.9;
@@ -58,6 +58,7 @@ const WAVE_SPEED_RANGE = 0.16;
 const WAVE_SPEED_CAP = 0.26;
 const WAVE_IDLE_AMPLITUDE = 0.08;
 const WAVE_IDLE_SPEED = 0.012;
+const SUSTAINED_SPEECH_MIN_ENERGY = 0.34;
 const IOS9_BASELINE_OFFSET_PX = 6;
 const RECORDING_CURVES = [
   { color: "255,255,255", supportLine: true },
@@ -90,6 +91,7 @@ const RecordingOverlay: React.FC = () => {
   const waveContainerRef = useRef<HTMLDivElement | null>(null);
   const siriWaveRef = useRef<SiriWave | null>(null);
   const smoothedLevelsRef = useRef<number[]>(Array(16).fill(0));
+  const lastSpeechEnergyRef = useRef(0);
   const overlayStateRef = useRef<OverlayState>("recording");
   const hasDetectedSpeechRef = useRef(false);
   const quietSinceRef = useRef<number | null>(null);
@@ -136,6 +138,7 @@ const RecordingOverlay: React.FC = () => {
         if (overlayState !== "full_system_progress") {
           setFullSystemProgress(null);
         }
+        lastSpeechEnergyRef.current = 0;
         quietSinceRef.current = null;
         setIsVisible(true);
       });
@@ -148,6 +151,7 @@ const RecordingOverlay: React.FC = () => {
         setHasDetectedSpeech(false);
         setFullSystemProgress(null);
         setOverlayActionPending(false);
+        lastSpeechEnergyRef.current = 0;
         quietSinceRef.current = null;
         setIsVisible(false);
       });
@@ -223,12 +227,23 @@ const RecordingOverlay: React.FC = () => {
         const rawAverage =
           newLevels.reduce((sum, level) => sum + level, 0) / newLevels.length;
         const rawPeak = Math.max(...newLevels, 0);
+        const rawEnergy = clamp(
+          Math.pow(Math.max(rawAverage, rawPeak * 0.42), WAVE_ENERGY_POWER) *
+            QUIET_SPEECH_GAIN +
+            QUIET_FLOOR,
+          WAVE_ENERGY_MIN,
+          WAVE_ENERGY_MAX,
+        );
 
         if (!hasDetectedSpeechRef.current) {
           if (
             rawAverage >= SPEECH_WAKE_AVERAGE ||
             rawPeak >= SPEECH_WAKE_PEAK
           ) {
+            lastSpeechEnergyRef.current = Math.max(
+              rawEnergy,
+              SUSTAINED_SPEECH_MIN_ENERGY,
+            );
             quietSinceRef.current = null;
             hasDetectedSpeechRef.current = true;
             setHasDetectedSpeech(true);
@@ -248,12 +263,18 @@ const RecordingOverlay: React.FC = () => {
 
           if (now - quietSinceRef.current >= SPEECH_SLEEP_HOLD_MS) {
             quietSinceRef.current = null;
+            lastSpeechEnergyRef.current = 0;
             hasDetectedSpeechRef.current = false;
             setHasDetectedSpeech(false);
           }
           return;
         }
 
+        lastSpeechEnergyRef.current = Math.max(
+          lastSpeechEnergyRef.current * 0.985,
+          rawEnergy,
+          SUSTAINED_SPEECH_MIN_ENERGY,
+        );
         quietSinceRef.current = null;
       });
 
@@ -390,10 +411,19 @@ const RecordingOverlay: React.FC = () => {
   useEffect(() => {
     if (!showWave && hasDetectedSpeechRef.current) {
       quietSinceRef.current = null;
+      lastSpeechEnergyRef.current = 0;
       hasDetectedSpeechRef.current = false;
       setHasDetectedSpeech(false);
     }
   }, [showWave]);
+
+  const effectiveWaveEnergy = useMemo(() => {
+    if (!hasDetectedSpeech) {
+      return waveEnergy;
+    }
+
+    return Math.max(waveEnergy, lastSpeechEnergyRef.current);
+  }, [hasDetectedSpeech, waveEnergy]);
 
   const handleCopyTranscript = async () => {
     if (!fullSystemProgress?.transcriptText || overlayActionPending) {
@@ -475,7 +505,7 @@ const RecordingOverlay: React.FC = () => {
     }
 
     const activeAmplitude = clamp(
-      (WAVE_AMPLITUDE_MIN + waveEnergy * WAVE_AMPLITUDE_RANGE) *
+      (WAVE_AMPLITUDE_MIN + effectiveWaveEnergy * WAVE_AMPLITUDE_RANGE) *
         WAVE_AMPLITUDE_BOOST,
       WAVE_AMPLITUDE_MIN,
       WAVE_AMPLITUDE_CAP *
@@ -484,7 +514,7 @@ const RecordingOverlay: React.FC = () => {
         WAVE_PEAK_GUARD,
     );
     const activeSpeed = clamp(
-      WAVE_SPEED_MIN + waveEnergy * WAVE_SPEED_RANGE,
+      WAVE_SPEED_MIN + effectiveWaveEnergy * WAVE_SPEED_RANGE,
       WAVE_SPEED_MIN,
       WAVE_SPEED_CAP,
     );
@@ -501,7 +531,7 @@ const RecordingOverlay: React.FC = () => {
     hasDetectedSpeech,
     state,
     waveMotionBlend,
-    waveEnergy,
+    effectiveWaveEnergy,
   ]);
 
   const noInputTitle =
