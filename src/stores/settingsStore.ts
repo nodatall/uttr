@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import { subscribeWithSelector } from "zustand/middleware";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import type {
   AppSettings as Settings,
   AudioDevice,
@@ -10,6 +11,8 @@ import type { BrowserE2ETestState } from "@/types/browserE2E";
 
 const getBrowserE2ETestState = () =>
   typeof window !== "undefined" ? window.__UTTR_E2E__ : undefined;
+
+let installAccessChangedListener: Promise<UnlistenFn> | null = null;
 
 const normalizeTestSettings = (settings?: Partial<Settings> | null): Settings =>
   ({
@@ -636,6 +639,15 @@ export const useSettingsStore = create<SettingsStore>()(
     // Initialize everything
     initialize: async () => {
       const { refreshSettings, checkCustomSounds, loadDefaultSettings } = get();
+
+      if (!installAccessChangedListener && typeof window !== "undefined") {
+        installAccessChangedListener = listen<InstallAccessSnapshot>(
+          "install-access-changed",
+          (event) => {
+            set({ installAccess: event.payload });
+          },
+        );
+      }
 
       // Note: Audio devices are NOT refreshed here. The frontend (App.tsx)
       // is responsible for calling refreshAudioDevices/refreshOutputDevices

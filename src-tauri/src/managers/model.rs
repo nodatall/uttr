@@ -258,7 +258,7 @@ impl ModelManager {
             ModelInfo {
                 id: GROQ_MODEL_WHISPER_LARGE_V3_TURBO.to_string(),
                 name: "Groq Whisper Large V3 Turbo".to_string(),
-                description: "Cloud model. Extremely fast. Requires internet and a Groq API key."
+                description: "Cloud model. Extremely fast. Requires internet."
                     .to_string(),
                 filename: GROQ_MODEL_WHISPER_LARGE_V3_TURBO.to_string(),
                 url: None,
@@ -282,7 +282,7 @@ impl ModelManager {
             ModelInfo {
                 id: GROQ_MODEL_WHISPER_LARGE_V3.to_string(),
                 name: "Groq Whisper Large V3".to_string(),
-                description: "Cloud model. Higher quality. Requires internet and a Groq API key."
+                description: "Cloud model. Higher quality. Requires internet."
                     .to_string(),
                 filename: GROQ_MODEL_WHISPER_LARGE_V3.to_string(),
                 url: None,

@@ -1,7 +1,7 @@
 import type { InstallAccessSnapshot } from "@/bindings";
 
 export const PREMIUM_FEATURE_LOCK_MESSAGE =
-  "Please purchase a subscription to use this feature. You can also add your own Groq API key in API Keys.";
+  "Upgrade to Pro to use this feature.";
 
 export function hasPremiumFeatureAccess(
   installAccess: InstallAccessSnapshot | null,
@@ -11,7 +11,9 @@ export function hasPremiumFeatureAccess(
   }
 
   return (
-    installAccess.has_byok_secret || installAccess.access_state === "subscribed"
+    installAccess.has_byok_secret ||
+    installAccess.access_state === "trialing" ||
+    installAccess.access_state === "subscribed"
   );
 }
 

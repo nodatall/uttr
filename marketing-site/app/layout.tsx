@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { JetBrains_Mono, Space_Grotesk } from "next/font/google";
+import { AgentationDevToolbar } from "@/components/agentation-dev-toolbar";
 import "./globals.css";
 
 const spaceGrotesk = Space_Grotesk({
@@ -29,6 +30,7 @@ export default function RootLayout({
         className={`${spaceGrotesk.variable} ${jetbrainsMono.variable} bg-cosmic-950 font-display text-cosmic-50 antialiased`}
       >
         {children}
+        <AgentationDevToolbar />
       </body>
     </html>
   );

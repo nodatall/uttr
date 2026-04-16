@@ -235,7 +235,7 @@ export function ClaimFlow({
   };
 
   return (
-    <div className="mt-8 grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
+    <div className="mx-auto mt-8 w-full max-w-xl space-y-4 text-left">
       <div className="space-y-4">
         <label className="block">
           <span className="mb-2 block text-sm text-cosmic-200">Email</span>
@@ -301,41 +301,24 @@ export function ClaimFlow({
             <strong>{DEV_ACCOUNT.password}</strong>. The account is created on first use.
           </p>
         ) : null}
-
-        {error ? <p className="text-sm text-rose-200">{error}</p> : null}
       </div>
 
-      <div className="glass-panel rounded-2xl p-6">
-        <p className="font-mono text-xs tracking-[0.2em] text-cosmic-300 uppercase">
-          Flow
+      {error ? <p className="text-sm text-rose-200">{error}</p> : null}
+
+      {signedInEmail ? (
+        <p className="text-sm text-cosmic-100">
+          Signed in as <strong>{signedInEmail}</strong>.
         </p>
-        <ol className="mt-4 space-y-3 text-sm text-cosmic-100/90">
-          <li>1. Sign in or create an account.</li>
-          <li>2. Link the claim token from the blocked install, if present.</li>
-          <li>3. Continue to Stripe Checkout with the linked install metadata.</li>
-        </ol>
-        <div className="mt-6 rounded-2xl border border-white/10 bg-black/20 p-4 text-sm text-cosmic-200">
-          {initialClaimToken ? (
-            <p>The desktop app claim token is ready to redeem.</p>
-          ) : (
-            <p>No claim token detected. You can still sign in and start checkout.</p>
-          )}
-          {signedInEmail ? (
-            <p className="mt-3 text-cosmic-100">
-              Signed in as <strong>{signedInEmail}</strong>.
-            </p>
-          ) : null}
-          {status !== "idle" ? (
-            <p className="mt-3 text-cosmic-100">
-              {status === "auth"
-                ? "Authenticating account..."
-                : status === "link"
-                  ? "Linking install..."
-                  : "Starting checkout..."}
-            </p>
-          ) : null}
-        </div>
-      </div>
+      ) : null}
+      {status !== "idle" ? (
+        <p className="text-sm text-cosmic-100">
+          {status === "auth"
+            ? "Authenticating account..."
+            : status === "link"
+              ? "Linking install..."
+              : "Starting checkout..."}
+        </p>
+      ) : null}
     </div>
   );
 }

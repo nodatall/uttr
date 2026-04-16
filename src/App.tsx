@@ -16,15 +16,28 @@ import { HistorySettings } from "./components/settings";
 import { useSettings } from "./hooks/useSettings";
 import { useSettingsStore } from "./stores/settingsStore";
 import { commands } from "@/bindings";
+import { logFrontendStartup } from "@/lib/startupLog";
 import { getLanguageDirection, initializeRTL } from "@/lib/utils/rtl";
 
 type OnboardingStep = "accessibility" | "done";
-const SHORTCUT_REFRESH_INTERVAL_MS = 3 * 60 * 1000;
+const PERMISSION_CHECK_TIMEOUT_MS = 1500;
 
 type HistoryFocusRequest = {
   entryId: number | null;
   token: number;
 };
+
+async function withTimeout<T>(
+  promise: Promise<T>,
+  timeoutMs: number,
+): Promise<T | null> {
+  return Promise.race([
+    promise,
+    new Promise<null>((resolve) =>
+      window.setTimeout(() => resolve(null), timeoutMs),
+    ),
+  ]);
+}
 
 const renderSettingsContent = (
   section: SidebarSection,
@@ -59,6 +72,7 @@ function App() {
   const hasCompletedPostOnboardingInit = useRef(false);
 
   useEffect(() => {
+    logFrontendStartup("check onboarding start");
     checkOnboardingStatus();
   }, []);
 
@@ -71,48 +85,20 @@ function App() {
   useEffect(() => {
     if (onboardingStep === "done" && !hasCompletedPostOnboardingInit.current) {
       hasCompletedPostOnboardingInit.current = true;
+      logFrontendStartup("post onboarding init start");
       Promise.all([
         commands.initializeEnigo(),
         commands.initializeShortcuts(),
-      ]).catch((e) => {
-        console.warn("Failed to initialize:", e);
-      });
+      ])
+        .then(() => logFrontendStartup("post onboarding input init complete"))
+        .catch((e) => {
+          console.warn("Failed to initialize:", e);
+          logFrontendStartup("post onboarding input init failed");
+        });
       refreshAudioDevices();
       refreshOutputDevices();
     }
   }, [onboardingStep, refreshAudioDevices, refreshOutputDevices]);
-
-  useEffect(() => {
-    if (onboardingStep !== "done") {
-      return;
-    }
-
-    const refreshShortcuts = () => {
-      commands.initializeShortcuts().catch((e) => {
-        console.warn("Failed to refresh shortcuts:", e);
-      });
-    };
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        refreshShortcuts();
-      }
-    };
-
-    const intervalId = window.setInterval(
-      refreshShortcuts,
-      SHORTCUT_REFRESH_INTERVAL_MS,
-    );
-
-    window.addEventListener("focus", refreshShortcuts);
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    return () => {
-      window.clearInterval(intervalId);
-      window.removeEventListener("focus", refreshShortcuts);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, [onboardingStep]);
 
   // Handle keyboard shortcuts for debug mode toggle
   useEffect(() => {
@@ -174,6 +160,7 @@ function App() {
   const checkOnboardingStatus = async () => {
     try {
       const settingsResult = await commands.getAppSettings();
+      logFrontendStartup("settings loaded for onboarding");
 
       const onboardingCompleted =
         settingsResult.status === "ok" &&
@@ -183,27 +170,39 @@ function App() {
         // Returning user - but check if they need to grant permissions on macOS
         if (platform() === "macos") {
           try {
-            const [hasAccessibility, hasMicrophone] = await Promise.all([
-              checkAccessibilityPermission(),
-              checkMicrophonePermission(),
-            ]);
-            if (!hasAccessibility || !hasMicrophone) {
+            const permissions = await withTimeout(
+              Promise.all([
+                checkAccessibilityPermission(),
+                checkMicrophonePermission(),
+              ]),
+              PERMISSION_CHECK_TIMEOUT_MS,
+            );
+            if (permissions === null) {
+              console.warn("Permission check timed out; continuing startup.");
+              logFrontendStartup("permission check timed out");
+            } else if (!permissions[0] || !permissions[1]) {
               // Missing permissions - show accessibility onboarding
+              logFrontendStartup("permissions missing; showing onboarding");
               setOnboardingStep("accessibility");
               return;
             }
+            logFrontendStartup("permissions checked");
           } catch (e) {
             console.warn("Failed to check permissions:", e);
+            logFrontendStartup("permission check failed");
             // If we can't check, proceed to main app and let them fix it there
           }
         }
+        logFrontendStartup("onboarding done");
         setOnboardingStep("done");
       } else {
         // New user - start permissions onboarding
+        logFrontendStartup("onboarding required");
         setOnboardingStep("accessibility");
       }
     } catch (error) {
       console.error("Failed to check onboarding status:", error);
+      logFrontendStartup("onboarding check failed");
       setOnboardingStep("accessibility");
     }
   };
@@ -221,7 +220,11 @@ function App() {
 
   // Still checking onboarding status
   if (onboardingStep === null) {
-    return null;
+    return (
+      <div className="flex h-screen items-center justify-center bg-[linear-gradient(180deg,rgba(10,15,25,0.985),rgba(6,10,18,0.96))] text-text">
+        <div className="h-8 w-8 rounded-lg bg-background-ui/80 shadow-[0_0_34px_rgba(29,155,100,0.28)]" />
+      </div>
+    );
   }
 
   if (onboardingStep === "accessibility") {

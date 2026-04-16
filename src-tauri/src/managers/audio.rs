@@ -209,6 +209,7 @@ impl AudioRecordingManager {
             // If this fails (e.g. no device yet), we retry on actual recording start.
             let manager_clone = manager.clone();
             tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(Duration::from_secs(2)).await;
                 manager_clone.prewarm_for_quick_start("startup");
             });
         }

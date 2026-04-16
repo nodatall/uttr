@@ -1,4 +1,4 @@
-import type { AccessState } from "./types";
+import type { AccessState, TrialState } from "./types";
 
 const PREMIUM_CLOUD_SOURCES = new Set([
   "file_transcription",
@@ -20,10 +20,11 @@ export function sourceRequiresPremiumCloudAccess(
 export function accessAllowsCloudSource(
   accessState: AccessState,
   source: string | null | undefined,
+  trialState?: TrialState,
 ) {
-  if (!sourceRequiresPremiumCloudAccess(source)) {
+  if (trialState === "new") {
     return true;
   }
 
-  return accessState === "subscribed";
+  return accessState === "trialing" || accessState === "subscribed";
 }
