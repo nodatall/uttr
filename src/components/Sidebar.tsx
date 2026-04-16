@@ -19,6 +19,7 @@ import {
   FileTranscriptionSettings,
 } from "./settings";
 import UpdateChecker from "./update-checker";
+import { UpgradeButton } from "./settings/UpgradeButton";
 
 export type SidebarSection = keyof typeof SECTIONS_CONFIG;
 
@@ -88,7 +89,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSectionChange,
 }) => {
   const { t } = useTranslation();
-  const { settings } = useSettings();
+  const { settings, installAccess } = useSettings();
   const [version, setVersion] = useState("");
   const versionTapCountRef = useRef(0);
   const versionTapTimerRef = useRef<number | null>(null);
@@ -134,7 +135,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const availableSections = Object.entries(SECTIONS_CONFIG)
-    .filter(([, config]) => config.enabled(settings))
+    .filter(([id, config]) => {
+      if (
+        id === "apiKeys" &&
+        !settings?.debug_mode &&
+        !installAccess?.has_byok_secret
+      ) {
+        return false;
+      }
+
+      return config.enabled(settings);
+    })
     .map(([id, config]) => ({ id: id as SidebarSection, ...config }));
 
   return (
@@ -190,6 +201,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
       <div className="mt-4 shrink-0 border-t border-white/6 px-2 pt-4">
         <div className="flex flex-col gap-1.5 text-xs text-text/48">
+          <UpgradeButton />
           <UpdateChecker className="min-w-0" />
           <button
             type="button"

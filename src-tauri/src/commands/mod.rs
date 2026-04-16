@@ -56,6 +56,12 @@ pub fn get_app_dir_path(app: AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 #[specta::specta]
+pub fn log_frontend_startup(message: String) {
+    log::info!("[startup] frontend {}", message);
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn get_app_settings(app: AppHandle) -> Result<AppSettings, String> {
     Ok(get_settings(&app))
 }
@@ -268,15 +274,7 @@ pub struct ShortcutsInitialized;
 pub fn initialize_shortcuts(app: AppHandle) -> Result<(), String> {
     // Check if already initialized
     if app.try_state::<ShortcutsInitialized>().is_some() {
-        if crate::shortcut::shortcut_refresh_blocked_by_active_session(&app) {
-            log::debug!(
-                "Shortcuts already initialized; skipping refresh because a transcription session is active"
-            );
-            return Ok(());
-        }
-
-        log::debug!("Shortcuts already initialized; refreshing registrations");
-        crate::shortcut::refresh_shortcuts(&app)?;
+        log::debug!("Shortcuts already initialized");
         return Ok(());
     }
 

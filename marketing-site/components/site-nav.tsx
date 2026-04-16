@@ -9,7 +9,7 @@ export function SiteNav({
   overlay?: boolean;
 }) {
   const headerClass = overlay
-    ? "absolute top-0 left-0 right-0 z-40 bg-transparent"
+    ? "fixed top-0 left-0 right-0 z-40 border-b border-white/10 bg-cosmic-950/35 backdrop-blur-xl"
     : "sticky top-0 z-40 border-b border-white/10 bg-cosmic-950/65 backdrop-blur-xl";
 
   return (

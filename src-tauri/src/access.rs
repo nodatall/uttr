@@ -6,12 +6,16 @@ use once_cell::sync::Lazy;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use specta::Type;
+#[cfg(debug_assertions)]
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 use tauri::AppHandle;
 
 const BACKEND_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const PREMIUM_FEATURE_ACCESS_MESSAGE: &str =
-    "Please purchase a subscription to use this feature. You can also add your own Groq API key in API Keys.";
+    "Upgrade to Pro to use this feature.";
+const TRANSCRIPTION_ACCESS_MESSAGE: &str =
+    "Your trial has ended. Upgrade to Pro to keep using transcription.";
 
 static BACKEND_HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
     Client::builder()
@@ -19,6 +23,39 @@ static BACKEND_HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
         .build()
         .expect("Failed to build backend HTTP client")
 });
+
+#[cfg(debug_assertions)]
+static DEV_ACCESS_OVERRIDE: AtomicU8 = AtomicU8::new(0);
+
+#[cfg(debug_assertions)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DevAccessOverride {
+    None,
+    Free,
+    Trial,
+    Pro,
+}
+
+#[cfg(debug_assertions)]
+impl DevAccessOverride {
+    fn from_u8(value: u8) -> Self {
+        match value {
+            1 => Self::Free,
+            2 => Self::Trial,
+            3 => Self::Pro,
+            _ => Self::None,
+        }
+    }
+
+    fn as_u8(self) -> u8 {
+        match self {
+            Self::None => 0,
+            Self::Free => 1,
+            Self::Trial => 2,
+            Self::Pro => 3,
+        }
+    }
+}
 
 #[derive(Debug, Deserialize)]
 struct BootstrapResponse {
@@ -157,7 +194,7 @@ fn format_backend_transport_error(
 }
 
 fn access_snapshot(settings: &AppSettings, has_byok_secret: bool) -> InstallAccessSnapshot {
-    InstallAccessSnapshot {
+    let mut snapshot = InstallAccessSnapshot {
         install_id: settings.install_id.clone(),
         device_fingerprint_hash: settings.device_fingerprint_hash.clone(),
         trial_state: settings.anonymous_trial_state,
@@ -167,8 +204,39 @@ fn access_snapshot(settings: &AppSettings, has_byok_secret: bool) -> InstallAcce
         byok_validation_state: settings.byok_validation_state,
         has_byok_secret,
         has_install_token: !settings.install_token.trim().is_empty(),
+    };
+
+    apply_dev_access_override(&mut snapshot);
+    snapshot
+}
+
+#[cfg(debug_assertions)]
+fn apply_dev_access_override(snapshot: &mut InstallAccessSnapshot) {
+    match DevAccessOverride::from_u8(DEV_ACCESS_OVERRIDE.load(Ordering::Relaxed)) {
+        DevAccessOverride::None => {}
+        DevAccessOverride::Free => {
+            snapshot.trial_state = TrialState::Expired;
+            snapshot.access_state = AccessState::Blocked;
+            snapshot.entitlement_state = EntitlementState::Inactive;
+            snapshot.has_byok_secret = false;
+        }
+        DevAccessOverride::Trial => {
+            snapshot.trial_state = TrialState::Trialing;
+            snapshot.access_state = AccessState::Trialing;
+            snapshot.entitlement_state = EntitlementState::Inactive;
+            snapshot.has_byok_secret = false;
+        }
+        DevAccessOverride::Pro => {
+            snapshot.trial_state = TrialState::Linked;
+            snapshot.access_state = AccessState::Subscribed;
+            snapshot.entitlement_state = EntitlementState::Active;
+            snapshot.has_byok_secret = false;
+        }
     }
 }
+
+#[cfg(not(debug_assertions))]
+fn apply_dev_access_override(_snapshot: &mut InstallAccessSnapshot) {}
 
 fn has_groq_secret(app: &AppHandle, settings: &AppSettings) -> bool {
     crate::byok_secrets::load_groq_api_key(app, settings)
@@ -336,10 +404,20 @@ async fn request_claim_token_internal(app: &AppHandle) -> Result<ClaimTokenResul
 }
 
 pub async fn bootstrap_install_state(app: &AppHandle) -> Result<InstallAccessSnapshot, String> {
+    #[cfg(debug_assertions)]
+    if dev_access_override() != DevAccessOverride::None {
+        return Ok(get_install_access_snapshot(app));
+    }
+
     bootstrap_install_state_internal(app).await
 }
 
 pub async fn refresh_entitlement_state(app: &AppHandle) -> Result<InstallAccessSnapshot, String> {
+    #[cfg(debug_assertions)]
+    if dev_access_override() != DevAccessOverride::None {
+        return Ok(get_install_access_snapshot(app));
+    }
+
     refresh_entitlement_state_internal(app).await
 }
 
@@ -351,13 +429,36 @@ pub fn premium_feature_access_message() -> &'static str {
     PREMIUM_FEATURE_ACCESS_MESSAGE
 }
 
+pub fn transcription_access_message() -> &'static str {
+    TRANSCRIPTION_ACCESS_MESSAGE
+}
+
+pub fn install_access_allows_transcription(snapshot: &InstallAccessSnapshot) -> bool {
+    snapshot.has_byok_secret
+        || matches!(snapshot.trial_state, TrialState::New)
+        || matches!(
+            snapshot.access_state,
+            AccessState::Trialing | AccessState::Subscribed
+        )
+}
+
 pub fn install_access_allows_premium_features(snapshot: &InstallAccessSnapshot) -> bool {
-    snapshot.has_byok_secret || matches!(snapshot.access_state, AccessState::Subscribed)
+    install_access_allows_transcription(snapshot)
 }
 
 pub fn get_install_access_snapshot(app: &AppHandle) -> InstallAccessSnapshot {
     let settings = ensure_identity(app);
     access_snapshot(&settings, has_groq_secret(app, &settings))
+}
+
+#[cfg(debug_assertions)]
+pub fn dev_access_override() -> DevAccessOverride {
+    DevAccessOverride::from_u8(DEV_ACCESS_OVERRIDE.load(Ordering::Relaxed))
+}
+
+#[cfg(debug_assertions)]
+pub fn set_dev_access_override(value: DevAccessOverride) {
+    DEV_ACCESS_OVERRIDE.store(value.as_u8(), Ordering::Relaxed);
 }
 
 #[cfg(test)]
@@ -423,6 +524,6 @@ mod tests {
             has_byok_secret: false,
             ..subscribed
         };
-        assert!(!install_access_allows_premium_features(&trial));
+        assert!(install_access_allows_premium_features(&trial));
     }
 }

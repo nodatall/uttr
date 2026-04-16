@@ -372,6 +372,9 @@ async getAppDirPath() : Promise<Result<string, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async logFrontendStartup(message: string) : Promise<void> {
+    await TAURI_INVOKE("log_frontend_startup", { message });
+},
 async getAppSettings() : Promise<Result<AppSettings, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_app_settings") };
@@ -479,6 +482,14 @@ async createTrialClaim() : Promise<Result<ClaimTokenResult, string>> {
 async getInstallAccessSnapshot() : Promise<Result<InstallAccessSnapshot, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("get_install_access_snapshot") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async setDevInstallAccessOverride(mode: string) : Promise<Result<InstallAccessSnapshot, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("set_dev_install_access_override", { mode }) };
 } catch (e) {
     if(e instanceof Error) throw e;
     else return { status: "error", error: e  as any };

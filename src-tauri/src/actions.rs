@@ -1,6 +1,6 @@
 use crate::access::{
     get_install_access_snapshot, install_access_allows_premium_features,
-    premium_feature_access_message,
+    install_access_allows_transcription, premium_feature_access_message,
 };
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use crate::apple_intelligence;
@@ -1068,6 +1068,27 @@ impl ShortcutAction for TranscribeAction {
         log::info!("[latency] transcribe action start begin binding={}", binding_id);
         debug!("TranscribeAction::start called for binding: {}", binding_id);
 
+        let access = get_install_access_snapshot(app);
+        if !install_access_allows_transcription(&access) {
+            change_tray_icon(app, TrayIconState::Idle);
+            utils::show_trial_ended_overlay(app);
+            let overlay_epoch = utils::current_overlay_session_epoch();
+            utils::emit_overlay_alert(app, "trial_ended");
+            let ah = app.clone();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(120));
+                if utils::current_overlay_session_epoch() != overlay_epoch {
+                    return;
+                }
+                utils::emit_overlay_alert(&ah, "trial_ended");
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                if utils::current_overlay_session_epoch() == overlay_epoch {
+                    utils::hide_recording_overlay(&ah);
+                }
+            });
+            return;
+        }
+
         // Load model in the background
         let tm = app.state::<Arc<TranscriptionManager>>();
         tm.clear_cancel_request();
@@ -1417,7 +1438,11 @@ impl ShortcutAction for FullSystemTranscribeAction {
         log::info!(
             "[latency] full-system samples retrieved binding={} sample_count={} elapsed_ms={}",
             binding_id,
-            stop_result.samples.as_ref().map(|samples| samples.len()).unwrap_or(0),
+            stop_result
+                .transcription_samples
+                .as_ref()
+                .map(|samples| samples.len())
+                .unwrap_or(0),
             stop_time.elapsed().as_millis()
         );
         handle_transcription_stop(

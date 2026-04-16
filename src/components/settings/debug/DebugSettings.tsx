@@ -11,6 +11,7 @@ import { ClamshellMicrophoneSelector } from "../ClamshellMicrophoneSelector";
 import { ShortcutInput } from "../ShortcutInput";
 import { UpdateChecksToggle } from "../UpdateChecksToggle";
 import { useSettings } from "../../../hooks/useSettings";
+import { DevPlanSimulation } from "./DevPlanSimulation";
 
 export const DebugSettings: React.FC = () => {
   const { t } = useTranslation();
@@ -21,6 +22,7 @@ export const DebugSettings: React.FC = () => {
   return (
     <div className="max-w-3xl w-full mx-auto space-y-6">
       <SettingsGroup title={t("settings.debug.title")}>
+        <DevPlanSimulation grouped={true} />
         <LogLevelSelector grouped={true} />
         <UpdateChecksToggle descriptionMode="tooltip" grouped={true} />
         <SoundPicker

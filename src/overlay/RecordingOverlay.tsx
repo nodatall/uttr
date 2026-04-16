@@ -9,10 +9,11 @@ import SiriWave from "siriwave";
 type OverlayState =
   | "warming"
   | "recording"
+  | "trial_ended"
   | "transcribing"
   | "processing"
   | "full_system_progress";
-type OverlayAlertKind = "no_input";
+type OverlayAlertKind = "no_input" | "trial_ended";
 type FullSystemProgressStage =
   | "preparing"
   | "transcribing"
@@ -35,7 +36,7 @@ const INPUT_ATTACK_SMOOTHING_NEW = 0.82;
 const INPUT_RELEASE_SMOOTHING_KEEP = 0.46;
 const INPUT_RELEASE_SMOOTHING_NEW = 0.54;
 const WAVE_ENERGY_POWER = 0.56;
-const QUIET_SPEECH_GAIN = 3.9;
+const QUIET_SPEECH_GAIN = 2.2;
 const QUIET_FLOOR = 0.12;
 const SILENCE_ACTIVITY_START = 0.0025;
 const SILENCE_ACTIVITY_RANGE = 0.012;
@@ -47,18 +48,19 @@ const SPEECH_SLEEP_PEAK = 0.0025;
 const SPEECH_SLEEP_HOLD_MS = 500;
 const WAVE_ENERGY_MIN = 0;
 const WAVE_ENERGY_MAX = 1;
-const WAVE_AMPLITUDE_MIN = 0.9;
-const WAVE_AMPLITUDE_RANGE = 4.35;
-const WAVE_AMPLITUDE_CAP = 5.8;
-const WAVE_AMPLITUDE_BOOST = 1.9;
-const WAVE_MAX_AMPLITUDE_FACTOR = 0.78;
+const WAVE_AMPLITUDE_MIN = 0.65;
+const WAVE_AMPLITUDE_RANGE = 3.2;
+const WAVE_AMPLITUDE_CAP = 2.95;
+const WAVE_AMPLITUDE_BOOST = 1.45;
+const WAVE_MAX_AMPLITUDE_FACTOR = 0.6;
 const WAVE_PEAK_GUARD = 0.9;
-const WAVE_SPEED_MIN = 0.1;
-const WAVE_SPEED_RANGE = 0.16;
-const WAVE_SPEED_CAP = 0.26;
+const WAVE_SPEED_MIN = 0.065;
+const WAVE_SPEED_RANGE = 0.105;
+const WAVE_SPEED_CAP = 0.17;
 const WAVE_IDLE_AMPLITUDE = 0.08;
 const WAVE_IDLE_SPEED = 0.012;
-const SUSTAINED_SPEECH_MIN_ENERGY = 0.34;
+const SUSTAINED_SPEECH_MIN_ENERGY = 0.12;
+const EFFECTIVE_WAVE_ENERGY_CAP = 0.56;
 const IOS9_BASELINE_OFFSET_PX = 6;
 const RECORDING_CURVES = [
   { color: "255,255,255", supportLine: true },
@@ -130,7 +132,7 @@ const RecordingOverlay: React.FC = () => {
         setState(overlayState);
         smoothedLevelsRef.current = Array(16).fill(0);
         setLevels(Array(16).fill(0));
-        setOverlayAlert(null);
+        setOverlayAlert(overlayState === "trial_ended" ? "trial_ended" : null);
         setHasDetectedSpeech(false);
         setOverlayActionPending(false);
         if (overlayState !== "full_system_progress") {
@@ -424,7 +426,10 @@ const RecordingOverlay: React.FC = () => {
       return waveEnergy;
     }
 
-    return Math.max(waveEnergy, lastSpeechEnergyRef.current);
+    return Math.min(
+      Math.max(waveEnergy, lastSpeechEnergyRef.current),
+      EFFECTIVE_WAVE_ENERGY_CAP,
+    );
   }, [hasDetectedSpeech, waveEnergy]);
 
   const handleCopyTranscript = async () => {
@@ -536,20 +541,32 @@ const RecordingOverlay: React.FC = () => {
     effectiveWaveEnergy,
   ]);
 
-  const noInputTitle =
-    overlayAlert === "no_input"
-      ? i18n.t("overlay.noInputTitle", {
-          defaultValue: "No input detected",
+  const overlayAlertTitle =
+    overlayAlert === "trial_ended"
+      ? i18n.t("overlay.trialEndedTitle", {
+          defaultValue: "Trial ended",
         })
-      : "";
-  const noInputDescription =
-    overlayAlert === "no_input"
-      ? i18n.t("overlay.noInputDescription", {
-          defaultValue: "Check your microphone settings.",
+      : overlayAlert === "no_input"
+        ? i18n.t("overlay.noInputTitle", {
+            defaultValue: "No input detected",
+          })
+        : "";
+  const overlayAlertDescription =
+    overlayAlert === "trial_ended"
+      ? i18n.t("overlay.trialEndedDescription", {
+          defaultValue: "Upgrade to Pro in Settings to keep transcribing.",
         })
-      : "";
+      : overlayAlert === "no_input"
+        ? i18n.t("overlay.noInputDescription", {
+            defaultValue: "Check your microphone settings.",
+          })
+        : "";
   const overlayAlertClassName =
-    overlayAlert === "no_input" ? "overlay-alert-pane-warning" : "";
+    overlayAlert === "trial_ended"
+      ? "overlay-alert-pane-warning overlay-alert-pane-trial-ended"
+      : overlayAlert === "no_input"
+        ? "overlay-alert-pane-warning"
+      : "";
   const warmingTitle = i18n.t("overlay.warmingMic", {
     defaultValue: "Warming mic...",
   });
@@ -662,9 +679,9 @@ const RecordingOverlay: React.FC = () => {
             role="status"
             aria-live="polite"
           >
-            <div className="overlay-alert-title">{noInputTitle}</div>
+            <div className="overlay-alert-title">{overlayAlertTitle}</div>
             <div className="overlay-alert-description">
-              {noInputDescription}
+              {overlayAlertDescription}
             </div>
           </div>
         )}

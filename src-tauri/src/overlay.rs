@@ -502,6 +502,11 @@ pub fn show_recording_overlay(app_handle: &AppHandle) {
     show_overlay_state(app_handle, "recording", OVERLAY_WIDTH, OVERLAY_HEIGHT);
 }
 
+pub fn show_trial_ended_overlay(app_handle: &AppHandle) {
+    OVERLAY_SESSION_EPOCH.fetch_add(1, Ordering::Relaxed);
+    show_overlay_state(app_handle, "trial_ended", OVERLAY_WIDTH, OVERLAY_HEIGHT);
+}
+
 pub fn show_warming_overlay(app_handle: &AppHandle) {
     OVERLAY_SESSION_EPOCH.fetch_add(1, Ordering::Relaxed);
     show_overlay_state(app_handle, "warming", OVERLAY_WIDTH, OVERLAY_HEIGHT);

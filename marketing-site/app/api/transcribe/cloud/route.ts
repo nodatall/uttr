@@ -151,11 +151,16 @@ export async function POST(request: Request) {
       requestedModel || "default",
     );
 
-    if (!accessAllowsCloudSource(accessDecision.accessState, source)) {
+    if (
+      !accessAllowsCloudSource(
+        accessDecision.accessState,
+        source,
+        accessDecision.trialState,
+      )
+    ) {
       return NextResponse.json(
         {
-          error:
-            "Please purchase a subscription to use this feature. You can also add your own Groq API key in API Keys.",
+          error: "Upgrade to Pro to keep using transcription.",
         },
         { status: 403 },
       );

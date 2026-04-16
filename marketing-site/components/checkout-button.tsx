@@ -1,11 +1,15 @@
 "use client";
 
+import type { ReactNode } from "react";
+
 type CheckoutButtonProps = {
+  children?: ReactNode;
   className?: string;
   source?: string;
 };
 
 export function CheckoutButton({
+  children,
   className,
   source = "landing-hero",
 }: CheckoutButtonProps) {
@@ -21,7 +25,7 @@ export function CheckoutButton({
       onClick={onClick}
       className={`${className ?? ""} cursor-pointer`}
     >
-      Start for $5/month
+      {children ?? "Download for macOS"}
     </button>
   );
 }
