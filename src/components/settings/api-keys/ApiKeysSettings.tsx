@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { useSettings } from "@/hooks/useSettings";
+import { isDevPlanSimulationActive } from "@/lib/utils/premiumFeatures";
 
 export const ApiKeysSettings: React.FC = () => {
   const { t } = useTranslation();
@@ -28,6 +29,7 @@ export const ApiKeysSettings: React.FC = () => {
   const hasStoredSecret = installAccess?.has_byok_secret ?? false;
   const isKeyUpdating = isUpdating("post_process_api_key:groq");
   const isBusy = isKeyUpdating;
+  const isPlanSimulationActive = isDevPlanSimulationActive(installAccess);
 
   const handleSaveKey = async () => {
     await updatePostProcessApiKey("groq", groqApiKeyDraft.trim());
@@ -37,6 +39,10 @@ export const ApiKeysSettings: React.FC = () => {
     await updatePostProcessApiKey("groq", "");
     setGroqApiKeyDraft("");
   };
+
+  if (isPlanSimulationActive) {
+    return null;
+  }
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-6">

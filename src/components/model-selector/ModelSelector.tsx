@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from "react";
+import React, { useState, useRef, useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { commands } from "@/bindings";
@@ -7,6 +7,8 @@ import { useModelStore } from "../../stores/modelStore";
 import ModelStatusButton from "./ModelStatusButton";
 import ModelDropdown from "./ModelDropdown";
 import DownloadProgressDisplay from "./DownloadProgressDisplay";
+import { useSettings } from "@/hooks/useSettings";
+import { shouldShowModelControls } from "@/lib/utils/premiumFeatures";
 
 interface ModelStateEvent {
   event_type: string;
@@ -30,6 +32,8 @@ interface ModelSelectorProps {
 
 const ModelSelector: React.FC<ModelSelectorProps> = ({ onError }) => {
   const { t } = useTranslation();
+  const { installAccess } = useSettings();
+  const showModelControls = shouldShowModelControls(installAccess);
   const {
     models,
     currentModel,
@@ -49,6 +53,13 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ onError }) => {
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   const displayModelId = pendingModelId || currentModel;
+  const visibleModels = useMemo(() => {
+    if (showModelControls) {
+      return models;
+    }
+
+    return [];
+  }, [showModelControls, models]);
 
   // Check model status when currentModel changes
   useEffect(() => {
@@ -166,7 +177,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ onError }) => {
     if (extractingKeys.length > 0) {
       if (extractingKeys.length === 1) {
         const modelId = extractingKeys[0];
-        const model = models.find((m) => m.id === modelId);
+        const model = visibleModels.find((m) => m.id === modelId);
         const modelName = model
           ? getTranslatedModelName(model, t)
           : t("modelSelector.extractingGeneric").replace("...", "");
@@ -194,7 +205,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ onError }) => {
       }
     }
 
-    const currentModelInfo = models.find((m) => m.id === displayModelId);
+    const currentModelInfo = visibleModels.find((m) => m.id === displayModelId);
 
     switch (modelStatus) {
       case "ready":
@@ -235,6 +246,10 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ onError }) => {
     return modelStatus;
   };
 
+  if (!showModelControls) {
+    return null;
+  }
+
   return (
     <>
       {/* Model Status and Switcher */}
@@ -249,7 +264,7 @@ const ModelSelector: React.FC<ModelSelectorProps> = ({ onError }) => {
         {/* Model Dropdown */}
         {showModelDropdown && (
           <ModelDropdown
-            models={models}
+            models={visibleModels}
             currentModelId={displayModelId}
             onModelSelect={handleModelSelect}
           />

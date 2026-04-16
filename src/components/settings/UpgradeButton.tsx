@@ -2,6 +2,7 @@ import React, { useCallback, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { commands } from "@/bindings";
 import { useSettings } from "@/hooks/useSettings";
+import { isDevPlanSimulationActive } from "@/lib/utils/premiumFeatures";
 
 const FALLBACK_CLAIM_URL = "https://uttr.app/claim?source=settings-upgrade";
 
@@ -10,9 +11,11 @@ export const UpgradeButton: React.FC = () => {
   const [isOpening, setIsOpening] = useState(false);
 
   const shouldShow = useMemo(() => {
+    const isPlanSimulationActive = isDevPlanSimulationActive(installAccess);
+
     return (
       installAccess !== null &&
-      !installAccess.has_byok_secret &&
+      (isPlanSimulationActive || !installAccess.has_byok_secret) &&
       installAccess.access_state !== "subscribed"
     );
   }, [installAccess]);

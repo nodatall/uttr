@@ -11,6 +11,8 @@ import {
   getLocalizedLanguageLabel,
 } from "@/lib/constants/languages.ts";
 import type { ModelInfo } from "@/bindings";
+import { useSettings } from "@/hooks/useSettings";
+import { shouldShowModelControls } from "@/lib/utils/premiumFeatures";
 
 // check if model supports a language based on its supported_languages list
 const modelSupportsLanguage = (model: ModelInfo, langCode: string): boolean => {
@@ -21,6 +23,8 @@ const isCloudModel = (modelId: string): boolean => modelId.startsWith("groq-");
 
 export const ModelsSettings: React.FC = () => {
   const { t, i18n } = useTranslation();
+  const { installAccess } = useSettings();
+  const showModelControls = shouldShowModelControls(installAccess);
   const [switchingModelId, setSwitchingModelId] = useState<string | null>(null);
   const [languageFilter, setLanguageFilter] = useState("all");
   const [languageDropdownOpen, setLanguageDropdownOpen] = useState(false);
@@ -182,8 +186,12 @@ export const ModelsSettings: React.FC = () => {
   };
 
   const cloudModels = useMemo(() => {
+    if (!showModelControls) {
+      return [];
+    }
+
     return models.filter((model: ModelInfo) => isCloudModel(model.id));
-  }, [models]);
+  }, [showModelControls, models]);
 
   // Filter local models based on language filter
   const filteredLocalModels = useMemo(() => {
@@ -236,6 +244,10 @@ export const ModelsSettings: React.FC = () => {
         </div>
       </div>
     );
+  }
+
+  if (!showModelControls) {
+    return null;
   }
 
   return (
