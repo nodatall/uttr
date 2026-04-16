@@ -426,8 +426,11 @@ fn show_overlay_state(app_handle: &AppHandle, state: &str, width: f64, height: f
         return;
     }
 
-    create_recording_overlay(app_handle);
-    apply_overlay_dimensions(app_handle, width, height);
+    #[cfg(not(target_os = "macos"))]
+    {
+        create_recording_overlay(app_handle);
+        apply_overlay_dimensions(app_handle, width, height);
+    }
 
     #[cfg(target_os = "macos")]
     {
@@ -617,7 +620,7 @@ pub fn update_overlay_position(app_handle: &AppHandle) {
 
 /// Hides the recording overlay window with fade-out animation
 pub fn hide_recording_overlay(app_handle: &AppHandle) {
-    OVERLAY_SESSION_EPOCH.fetch_add(1, Ordering::Relaxed);
+    let hide_epoch = OVERLAY_SESSION_EPOCH.fetch_add(1, Ordering::Relaxed) + 1;
     #[cfg(target_os = "macos")]
     {
         let app = app_handle.clone();
@@ -627,7 +630,9 @@ pub fn hide_recording_overlay(app_handle: &AppHandle) {
                 let window_clone = overlay_window.clone();
                 std::thread::spawn(move || {
                     std::thread::sleep(std::time::Duration::from_millis(300));
-                    let _ = window_clone.hide();
+                    if OVERLAY_SESSION_EPOCH.load(Ordering::Relaxed) == hide_epoch {
+                        let _ = window_clone.hide();
+                    }
                 });
             }
         });
@@ -643,7 +648,9 @@ pub fn hide_recording_overlay(app_handle: &AppHandle) {
             let window_clone = overlay_window.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_millis(300));
-                let _ = window_clone.hide();
+                if OVERLAY_SESSION_EPOCH.load(Ordering::Relaxed) == hide_epoch {
+                    let _ = window_clone.hide();
+                }
             });
         }
     }

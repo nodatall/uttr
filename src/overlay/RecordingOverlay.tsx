@@ -125,8 +125,6 @@ const RecordingOverlay: React.FC = () => {
     const setupEventListeners = async () => {
       // Listen for show-overlay event from Rust
       const unlistenShow = await listen("show-overlay", async (event) => {
-        // Sync language from settings each time overlay is shown
-        await syncLanguageFromSettings();
         const overlayState = event.payload as OverlayState;
         isVisibleRef.current = true;
         setState(overlayState);
@@ -141,6 +139,10 @@ const RecordingOverlay: React.FC = () => {
         lastSpeechEnergyRef.current = 0;
         quietSinceRef.current = null;
         setIsVisible(true);
+
+        // Sync language from settings without blocking the overlay from
+        // becoming visible on the hotkey path.
+        void syncLanguageFromSettings();
       });
 
       // Listen for hide-overlay event from Rust
