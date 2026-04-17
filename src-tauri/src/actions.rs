@@ -1067,6 +1067,7 @@ impl ShortcutAction for TranscribeAction {
         let start_time = Instant::now();
         log::info!("[latency] transcribe action start begin binding={}", binding_id);
         debug!("TranscribeAction::start called for binding: {}", binding_id);
+        utils::cancel_pending_overlay_transitions();
 
         let access = get_install_access_snapshot(app);
         if !install_access_allows_transcription(&access) {

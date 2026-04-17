@@ -1,0 +1,139 @@
+- generic [ref=e4]:
+  - generic [ref=e5]:
+    - banner [ref=e6]:
+      - generic [ref=e8]:
+        - link "Back to The Three Words sandbox" [ref=e9] [cursor=pointer]:
+          - /url: http://localhost:4317/cancel
+          - generic [ref=e11]:
+            - img [ref=e12]
+            - generic [ref=e14]: Back
+            - generic [ref=e16]:
+              - img [ref=e18]
+              - heading "The Three Words sandbox" [level=1] [ref=e20]
+        - generic [ref=e21]:
+          - img [ref=e22]
+          - text: Sandbox
+    - generic [ref=e24]:
+      - generic [ref=e26]:
+        - heading "Subscribe to Uttr" [level=2] [ref=e27]
+        - generic [ref=e33]:
+          - generic [ref=e34]: $5.00
+          - generic [ref=e37]:
+            - text: per
+            - text: month
+      - generic [ref=e38]:
+        - list [ref=e39]:
+          - listitem [ref=e40]:
+            - generic [ref=e43]:
+              - generic [ref=e47]: Uttr
+              - generic [ref=e48]:
+                - generic [ref=e52]: Fast voice to text, audio file, and live system recording transcriptions.
+                - generic [ref=e55]: Billed monthly
+              - generic [ref=e59]: $5.00
+        - generic [ref=e61]:
+          - generic [ref=e62]:
+            - generic [ref=e63]: Subtotal
+            - generic [ref=e65]: $5.00
+          - generic [ref=e71]:
+            - textbox "Add promotion code" [ref=e75] [cursor=pointer]
+            - button [disabled]:
+              - generic:
+                - generic: Apply
+          - generic [ref=e76]:
+            - generic [ref=e77]: Total due today
+            - generic [ref=e79]: $5.00
+  - generic [ref=e80]:
+    - main [ref=e81]:
+      - generic [ref=e84]:
+        - generic [ref=e85]:
+          - iframe [ref=e91]:
+            - generic [ref=f4e6]:
+              - button "Pay with Link" [ref=f4e8] [cursor=pointer]:
+                - generic [ref=f4e9]:
+                  - generic [ref=f4e10]:
+                    - text: Pay with
+                    - img [ref=f4e11]
+                  - generic [ref=f4e14]:
+                    - img [ref=f4e15]
+                    - generic [ref=f4e22]: "0000"
+              - iframe [ref=f4e26]:
+                - button "Amazon Pay - Use your Amazon Pay Sandbox test account" [ref=f18e3]:
+                  - img "Pay With Amazon - Use your Amazon account" [ref=f18e7] [cursor=pointer]
+          - generic [ref=e92]:
+            - separator [ref=e93]
+            - paragraph [ref=e94]: Or
+        - heading "Contact information" [level=2] [ref=e95]
+      - generic [ref=e99]:
+        - generic [ref=e100]:
+          - generic [ref=e107]:
+            - generic [ref=e108]: Email
+            - generic [ref=e111]: stripe-e2e-1776461346@example.com
+          - heading "Payment method" [level=2] [ref=e113]
+        - generic [ref=e114]:
+          - list [ref=e115]:
+            - listitem [ref=e120]:
+              - generic [ref=e129]:
+                - generic [ref=e133]:
+                  - radio "Card" [ref=e134]
+                  - generic [ref=e136]: Card
+                  - generic:
+                    - generic:
+                      - generic:
+                        - img "Visa"
+                    - generic:
+                      - generic:
+                        - img "MasterCard"
+                    - generic:
+                      - generic:
+                        - img "American Express"
+                    - generic:
+                      - img "Discover"
+                      - img "JCB"
+                      - img "Diners Club"
+                      - img "UnionPay"
+                - generic:
+                  - button "Pay with card"
+            - listitem [ref=e141]:
+              - generic [ref=e150]:
+                - generic [ref=e154]:
+                  - radio "Cash App Pay" [ref=e155]
+                  - generic [ref=e157]: Cash App Pay
+                - generic:
+                  - button "Pay with Cash App"
+            - listitem [ref=e162]:
+              - generic [ref=e171]:
+                - generic [ref=e175]:
+                  - radio "Klarna" [ref=e176]
+                  - generic [ref=e178]: Klarna
+                - generic:
+                  - button "Pay with Klarna"
+            - listitem [ref=e183]:
+              - generic [ref=e192]:
+                - generic [ref=e196]:
+                  - radio "Bank" [ref=e197]
+                  - generic [ref=e199]: Bank
+                - generic:
+                  - button "Pay with Bank"
+          - generic [ref=e212]:
+            - checkbox "Save my information for faster checkout" [active] [ref=e214] [cursor=pointer]
+            - generic [ref=e215]:
+              - generic [ref=e218] [cursor=pointer]: Save my information for faster checkout
+              - generic [ref=e220]: Pay securely at The Three Words sandbox and everywhere Link is accepted.
+        - generic [ref=e235]:
+          - button "Subscribe" [ref=e238] [cursor=pointer]:
+            - generic:
+              - generic [ref=e240]: Subscribe
+              - generic [ref=e241]: Processing
+            - img [ref=e246]
+            - img [ref=e251]
+          - generic [ref=e257]: By subscribing, you authorize The Three Words sandbox to charge you according to the terms until you cancel.
+    - contentinfo [ref=e262]:
+      - link "Powered by Stripe" [ref=e264] [cursor=pointer]:
+        - /url: https://stripe.com
+        - generic [ref=e265]:
+          - text: Powered by
+          - img "Stripe" [ref=e267]
+      - link "Terms" [ref=e270] [cursor=pointer]:
+        - /url: https://stripe.com/legal/end-users
+      - link "Privacy" [ref=e271] [cursor=pointer]:
+        - /url: https://stripe.com/privacy

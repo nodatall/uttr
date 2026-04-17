@@ -715,6 +715,10 @@ pub fn current_overlay_session_epoch() -> u64 {
     OVERLAY_SESSION_EPOCH.load(Ordering::Relaxed)
 }
 
+pub fn cancel_pending_overlay_transitions() {
+    OVERLAY_SESSION_EPOCH.fetch_add(1, Ordering::Relaxed);
+}
+
 pub fn emit_levels(app_handle: &AppHandle, levels: &Vec<f32>) {
     // emit levels to main app
     let _ = app_handle.emit("mic-level", levels);
