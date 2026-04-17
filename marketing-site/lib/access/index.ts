@@ -22,6 +22,7 @@ export {
   isAnonymousTrialExpired,
   insertTrialClaim,
   patchAnonymousTrialById,
+  patchEntitlementByStripeSubscriptionId,
   redeemTrialClaim,
   upsertAnonymousTrialHeartbeat,
   upsertEntitlementState,

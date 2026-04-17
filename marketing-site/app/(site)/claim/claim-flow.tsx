@@ -112,11 +112,13 @@ export function ClaimFlow({
   );
   const [error, setError] = useState<string | null>(null);
   const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
+  const [activeSession, setActiveSession] = useState<Session | null>(null);
 
   const finishAuthenticatedSession = async (
     session: Session,
     fallbackEmail: string,
   ) => {
+    setActiveSession(session);
     setSignedInEmail(session.user.email ?? fallbackEmail);
     setStatus(initialClaimToken ? "link" : "checkout");
     await continueCheckoutFlow({
@@ -137,7 +139,8 @@ export function ClaimFlow({
       return signUpResult.data.session;
     }
 
-    const retrySignInResult = await supabase.auth.signInWithPassword(DEV_ACCOUNT);
+    const retrySignInResult =
+      await supabase.auth.signInWithPassword(DEV_ACCOUNT);
     if (retrySignInResult.data.session) {
       return retrySignInResult.data.session;
     }
@@ -158,24 +161,10 @@ export function ClaimFlow({
         return;
       }
 
+      setActiveSession(data.session);
       setSignedInEmail(data.session.user.email ?? null);
       setError(null);
-
-      try {
-        setStatus(initialClaimToken ? "link" : "checkout");
-        await continueCheckoutFlow({
-          session: data.session,
-          initialClaimToken,
-          initialSource,
-        });
-      } catch (err) {
-        if (!cancelled) {
-          const message =
-            err instanceof Error ? err.message : "Checkout failed.";
-          setError(message);
-          setStatus("idle");
-        }
-      }
+      setStatus("idle");
     });
 
     return () => {
@@ -210,7 +199,8 @@ export function ClaimFlow({
 
       await finishAuthenticatedSession(session, email);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Authentication failed.";
+      const message =
+        err instanceof Error ? err.message : "Authentication failed.";
       setError(message);
       setStatus("idle");
     }
@@ -234,82 +224,144 @@ export function ClaimFlow({
     }
   };
 
+  const continueWithCurrentAccount = async () => {
+    if (!activeSession) {
+      setError("Sign in or create an account before checkout.");
+      return;
+    }
+
+    setError(null);
+    setStatus(initialClaimToken ? "link" : "checkout");
+
+    try {
+      await continueCheckoutFlow({
+        session: activeSession,
+        initialClaimToken,
+        initialSource,
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Checkout failed.";
+      setError(message);
+      setStatus("idle");
+    }
+  };
+
+  const handleDifferentAccount = async () => {
+    await supabase.auth.signOut();
+    setActiveSession(null);
+    setSignedInEmail(null);
+    setEmail("");
+    setPassword("");
+    setStatus("idle");
+    setError(null);
+  };
+
   return (
     <div className="mx-auto mt-8 w-full max-w-xl space-y-4 text-left">
-      <div className="space-y-4">
-        <label className="block">
-          <span className="mb-2 block text-sm text-cosmic-200">Email</span>
-          <input
-            type="email"
-            autoComplete="email"
-            value={email}
-            onChange={(event) => setEmail(event.target.value)}
-            className="w-full rounded-2xl border border-white/15 bg-black/20 px-4 py-3 text-cosmic-50 outline-none ring-0 transition placeholder:text-cosmic-400 focus:border-white/35"
-            placeholder="you@example.com"
-          />
-        </label>
-
-        <label className="block">
-          <span className="mb-2 block text-sm text-cosmic-200">Password</span>
-          <input
-            type="password"
-            autoComplete={authMode === "signup" ? "new-password" : "current-password"}
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            className="w-full rounded-2xl border border-white/15 bg-black/20 px-4 py-3 text-cosmic-50 outline-none ring-0 transition placeholder:text-cosmic-400 focus:border-white/35"
-            placeholder="Use at least 6 characters"
-          />
-        </label>
-
-        <div className="flex flex-wrap gap-3 pt-2">
-          <button
-            type="button"
-            onClick={() => void submit("signup")}
-            disabled={status !== "idle"}
-            className="rounded-full bg-cosmic-50 px-6 py-3 text-sm font-semibold text-cosmic-950 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
-          >
-            {status === "auth" && authMode === "signup"
-              ? "Creating account..."
-              : "Create account"}
-          </button>
-          <button
-            type="button"
-            onClick={() => void submit("signin")}
-            disabled={status !== "idle"}
-            className="rounded-full border border-white/20 px-6 py-3 text-sm text-cosmic-100 transition hover:border-white/40 disabled:cursor-not-allowed disabled:opacity-70"
-          >
-            {status === "auth" && authMode === "signin"
-              ? "Signing in..."
-              : "Sign in"}
-          </button>
-          {SHOW_DEV_ACCOUNT_SHORTCUT ? (
+      {activeSession && signedInEmail ? (
+        <div>
+          <p className="text-sm text-cosmic-100">
+            Signed in as <strong>{signedInEmail}</strong>.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-3">
             <button
               type="button"
-              onClick={() => void handleDevAccount()}
+              onClick={() => void continueWithCurrentAccount()}
               disabled={status !== "idle"}
-              className="rounded-full border border-galaxy-blue/40 bg-galaxy-blue/10 px-6 py-3 text-sm text-galaxy-blue transition hover:border-galaxy-blue/70 hover:bg-galaxy-blue/20 disabled:cursor-not-allowed disabled:opacity-70"
+              className="rounded-full bg-cosmic-50 px-6 py-3 text-sm font-semibold text-cosmic-950 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
             >
-              {status === "auth" && authMode === "signin" && email === DEV_ACCOUNT.email
-                ? "Opening dev account..."
-                : "Use dev account"}
+              {status === "link"
+                ? "Linking install..."
+                : status === "checkout"
+                  ? "Starting checkout..."
+                  : "Continue to checkout"}
             </button>
+            <button
+              type="button"
+              onClick={() => void handleDifferentAccount()}
+              disabled={status !== "idle"}
+              className="rounded-full border border-white/20 px-6 py-3 text-sm text-cosmic-100 transition hover:border-white/40 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              Use different account
+            </button>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <label className="block">
+            <span className="mb-2 block text-sm text-cosmic-200">Email</span>
+            <input
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(event) => setEmail(event.target.value)}
+              className="w-full rounded-2xl border border-white/15 bg-black/20 px-4 py-3 text-cosmic-50 outline-none ring-0 transition placeholder:text-cosmic-400 focus:border-white/35"
+              placeholder="you@example.com"
+            />
+          </label>
+
+          <label className="block">
+            <span className="mb-2 block text-sm text-cosmic-200">Password</span>
+            <input
+              type="password"
+              autoComplete={
+                authMode === "signup" ? "new-password" : "current-password"
+              }
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+              className="w-full rounded-2xl border border-white/15 bg-black/20 px-4 py-3 text-cosmic-50 outline-none ring-0 transition placeholder:text-cosmic-400 focus:border-white/35"
+              placeholder="Use at least 6 characters"
+            />
+          </label>
+
+          <div className="flex flex-wrap gap-3 pt-2">
+            <button
+              type="button"
+              onClick={() => void submit("signup")}
+              disabled={status !== "idle"}
+              className="rounded-full bg-cosmic-50 px-6 py-3 text-sm font-semibold text-cosmic-950 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {status === "auth" && authMode === "signup"
+                ? "Creating account..."
+                : "Create account"}
+            </button>
+            <button
+              type="button"
+              onClick={() => void submit("signin")}
+              disabled={status !== "idle"}
+              className="rounded-full border border-white/20 px-6 py-3 text-sm text-cosmic-100 transition hover:border-white/40 disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {status === "auth" && authMode === "signin"
+                ? "Signing in..."
+                : "Sign in"}
+            </button>
+            {SHOW_DEV_ACCOUNT_SHORTCUT ? (
+              <button
+                type="button"
+                onClick={() => void handleDevAccount()}
+                disabled={status !== "idle"}
+                className="rounded-full border border-galaxy-blue/40 bg-galaxy-blue/10 px-6 py-3 text-sm text-galaxy-blue transition hover:border-galaxy-blue/70 hover:bg-galaxy-blue/20 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                {status === "auth" &&
+                authMode === "signin" &&
+                email === DEV_ACCOUNT.email
+                  ? "Opening dev account..."
+                  : "Use dev account"}
+              </button>
+            ) : null}
+          </div>
+          {SHOW_DEV_ACCOUNT_SHORTCUT ? (
+            <p className="text-xs text-cosmic-300">
+              Local dev shortcut: <strong>{DEV_ACCOUNT.email}</strong> /{" "}
+              <strong>{DEV_ACCOUNT.password}</strong>. The account is created on
+              first use.
+            </p>
           ) : null}
         </div>
-        {SHOW_DEV_ACCOUNT_SHORTCUT ? (
-          <p className="text-xs text-cosmic-300">
-            Local dev shortcut: <strong>{DEV_ACCOUNT.email}</strong> /{" "}
-            <strong>{DEV_ACCOUNT.password}</strong>. The account is created on first use.
-          </p>
-        ) : null}
-      </div>
+      )}
 
       {error ? <p className="text-sm text-rose-200">{error}</p> : null}
 
-      {signedInEmail ? (
-        <p className="text-sm text-cosmic-100">
-          Signed in as <strong>{signedInEmail}</strong>.
-        </p>
-      ) : null}
       {status !== "idle" ? (
         <p className="text-sm text-cosmic-100">
           {status === "auth"

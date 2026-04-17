@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { Logo } from "@/components/logo";
 
-const supportEmail = process.env.NEXT_PUBLIC_SUPPORT_EMAIL || "support@uttr.app";
+const supportEmail =
+  process.env.NEXT_PUBLIC_SUPPORT_EMAIL || "support@uttr.pro";
 
 export function SiteFooter() {
   return (
@@ -12,9 +13,9 @@ export function SiteFooter() {
         </Link>
 
         <div className="flex flex-wrap items-center gap-5 text-sm text-cosmic-300/90">
-          <a href="#features" className="transition hover:text-cosmic-50">
-            Features
-          </a>
+          <Link href="/legal" className="transition hover:text-cosmic-50">
+            Terms & Privacy
+          </Link>
           <a
             href={`mailto:${supportEmail}`}
             className="transition hover:text-cosmic-50"

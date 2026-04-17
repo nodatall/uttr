@@ -15,18 +15,36 @@ export function SiteNav({
   return (
     <header className={headerClass}>
       <div className="mx-auto flex h-20 w-full max-w-6xl items-center justify-between px-6">
-        <Link href="/" aria-label="Uttr home" className="transition hover:opacity-90">
+        <Link
+          href="/"
+          aria-label="Uttr home"
+          className="transition hover:opacity-90"
+        >
           <Logo variant="nav" />
         </Link>
 
         <nav className="flex items-center gap-4 text-sm text-cosmic-100/90">
-          <a href="#features" className="hidden transition hover:text-cosmic-50 md:inline">
-            Features
-          </a>
           {showPricingLink ? (
-            <a href="#pricing" className="hidden transition hover:text-cosmic-50 md:inline">
-              Pricing
-            </a>
+            <>
+              <a
+                href="#features"
+                className="hidden transition hover:text-cosmic-50 md:inline"
+              >
+                Features
+              </a>
+              <a
+                href="#pricing"
+                className="hidden transition hover:text-cosmic-50 md:inline"
+              >
+                Pricing
+              </a>
+              <Link
+                href="/account"
+                className="hidden transition hover:text-cosmic-50 md:inline"
+              >
+                Account
+              </Link>
+            </>
           ) : null}
         </nav>
       </div>
