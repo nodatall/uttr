@@ -113,7 +113,7 @@ export default function Home() {
               </div>
 
               <div className="justify-self-end">
-                <div className="glass-panel w-full max-w-[320px] rounded-2xl p-6 text-cosmic-100">
+                <div className="glass-panel w-full max-w-[368px] rounded-2xl p-6 text-cosmic-100">
                   <p className="font-mono text-xs tracking-[0.2em] text-cosmic-300 uppercase">
                     Uttr at a glance
                   </p>
