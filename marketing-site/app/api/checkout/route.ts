@@ -156,6 +156,14 @@ export async function POST(request: Request) {
         anonymousTrialId: claimContext?.anonymousTrialId,
         installId: claimContext?.installId,
       }),
+      subscription_data: {
+        metadata: buildCheckoutMetadata({
+          source,
+          userId: currentUser.id,
+          anonymousTrialId: claimContext?.anonymousTrialId,
+          installId: claimContext?.installId,
+        }),
+      },
       billing_address_collection: "auto",
       allow_promotion_codes: true,
     });

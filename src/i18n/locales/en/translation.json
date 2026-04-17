@@ -15,7 +15,10 @@
     "postProcessing": "Post Process",
     "history": "History",
     "debug": "Debug",
-    "about": "About"
+    "about": "About",
+    "manageSubscription": "Manage subscription",
+    "manageSubscriptionOpening": "Opening...",
+    "manageSubscriptionCaption": "Billing, invoices, cancellation"
   },
   "onboarding": {
     "subtitle": "To get started, choose a transcription model",

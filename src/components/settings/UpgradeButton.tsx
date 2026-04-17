@@ -4,7 +4,23 @@ import { commands } from "@/bindings";
 import { useSettings } from "@/hooks/useSettings";
 import { isDevPlanSimulationActive } from "@/lib/utils/premiumFeatures";
 
-const FALLBACK_CLAIM_URL = "https://uttr.app/claim?source=settings-upgrade";
+const LOCAL_MARKETING_ORIGIN = "http://localhost:4317";
+const PRODUCTION_CLAIM_URL = "https://uttr.app/claim?source=settings-upgrade";
+
+const toUpgradeUrl = (claimUrl?: string) => {
+  const targetUrl = claimUrl || PRODUCTION_CLAIM_URL;
+
+  if (!import.meta.env.DEV) {
+    return targetUrl;
+  }
+
+  try {
+    const url = new URL(targetUrl);
+    return `${LOCAL_MARKETING_ORIGIN}${url.pathname}${url.search}`;
+  } catch {
+    return `${LOCAL_MARKETING_ORIGIN}/claim?source=settings-upgrade`;
+  }
+};
 
 export const UpgradeButton: React.FC = () => {
   const { installAccess, refreshInstallAccess } = useSettings();
@@ -43,14 +59,14 @@ export const UpgradeButton: React.FC = () => {
       await refreshInstallAccess();
       const claim = await commands.createTrialClaim();
       if (claim.status === "ok") {
-        await openUrl(claim.data.claim_url);
+        await openUrl(toUpgradeUrl(claim.data.claim_url));
         return;
       }
 
-      await openUrl(FALLBACK_CLAIM_URL);
+      await openUrl(toUpgradeUrl());
     } catch (error) {
       console.warn("Failed to open upgrade flow:", error);
-      await openUrl(FALLBACK_CLAIM_URL);
+      await openUrl(toUpgradeUrl());
     } finally {
       setIsOpening(false);
     }

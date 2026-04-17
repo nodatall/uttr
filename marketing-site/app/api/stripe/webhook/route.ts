@@ -1,6 +1,11 @@
 import { NextResponse } from "next/server";
 import Stripe from "stripe";
 import { sendTransactionalEmail } from "@/lib/email";
+import {
+  patchEntitlementByStripeSubscriptionId,
+  upsertEntitlementState,
+  type EntitlementState,
+} from "@/lib/access";
 import { readEmailConfig, readWebhookConfig } from "@/lib/env";
 import { registerWebhookEvent } from "@/lib/idempotency";
 import { getStripe } from "@/lib/stripe";
@@ -42,10 +47,138 @@ async function sendSupportFallbackIfMissingEmail(subject: string) {
   );
 }
 
+function stripeId(value: string | { id?: string } | null): string | null {
+  if (!value) {
+    return null;
+  }
+
+  return typeof value === "string" ? value : value.id ?? null;
+}
+
+function mapSubscriptionStatus(
+  status: Stripe.Subscription.Status,
+): EntitlementState {
+  switch (status) {
+    case "active":
+    case "trialing":
+      return "active";
+    case "past_due":
+      return "past_due";
+    case "canceled":
+      return "canceled";
+    case "incomplete_expired":
+      return "expired";
+    default:
+      return "inactive";
+  }
+}
+
+function currentPeriodEndsAt(subscription: Stripe.Subscription): string | null {
+  const currentPeriodEnd = (subscription as { current_period_end?: unknown })
+    .current_period_end;
+
+  if (typeof currentPeriodEnd !== "number") {
+    return null;
+  }
+
+  return new Date(currentPeriodEnd * 1000).toISOString();
+}
+
+async function retrieveSubscriptionForCheckout(
+  session: Stripe.Checkout.Session,
+  stripe: Stripe,
+) {
+  const subscriptionId = stripeId(session.subscription);
+  if (!subscriptionId) {
+    return null;
+  }
+
+  return stripe.subscriptions.retrieve(subscriptionId);
+}
+
+async function syncEntitlementFromCheckout(
+  session: Stripe.Checkout.Session,
+  stripe: Stripe,
+) {
+  const userId = session.client_reference_id || session.metadata?.user_id;
+  if (!userId) {
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        event: "checkout_entitlement_missing_user",
+        sessionId: session.id,
+      }),
+    );
+    return;
+  }
+
+  const subscription = await retrieveSubscriptionForCheckout(session, stripe);
+  const subscriptionId = subscription?.id || stripeId(session.subscription);
+  const customerId = stripeId(session.customer) || stripeId(subscription?.customer ?? null);
+  if (!subscriptionId || !customerId || !subscription) {
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        event: "checkout_entitlement_missing_stripe_ids",
+        sessionId: session.id,
+        hasCustomer: Boolean(customerId),
+        hasSubscription: Boolean(subscriptionId),
+      }),
+    );
+    return;
+  }
+
+  await upsertEntitlementState({
+    user_id: userId,
+    subscription_status: mapSubscriptionStatus(subscription.status),
+    stripe_customer_id: customerId,
+    stripe_subscription_id: subscriptionId,
+    current_period_ends_at: currentPeriodEndsAt(subscription),
+  });
+}
+
+async function syncEntitlementFromSubscription(
+  subscription: Stripe.Subscription,
+) {
+  const customerId = stripeId(subscription.customer);
+  const patch = {
+    subscription_status: mapSubscriptionStatus(subscription.status),
+    stripe_customer_id: customerId,
+    current_period_ends_at: currentPeriodEndsAt(subscription),
+  };
+
+  const userId = subscription.metadata?.user_id;
+  if (userId) {
+    await upsertEntitlementState({
+      user_id: userId,
+      stripe_subscription_id: subscription.id,
+      ...patch,
+    });
+    return;
+  }
+
+  const entitlement = await patchEntitlementByStripeSubscriptionId(
+    subscription.id,
+    patch,
+  );
+
+  if (!entitlement) {
+    console.warn(
+      JSON.stringify({
+        level: "warn",
+        event: "subscription_entitlement_missing_user",
+        subscriptionId: subscription.id,
+      }),
+    );
+  }
+}
+
 async function handleCheckoutCompleted(
   session: Stripe.Checkout.Session,
   stripe: Stripe,
 ) {
+  await syncEntitlementFromCheckout(session, stripe);
+
   const email = session.customer_details?.email ||
     (await resolveCustomerEmail(stripe, session.customer));
 
@@ -98,6 +231,8 @@ async function handleSubscriptionDeleted(
   subscription: Stripe.Subscription,
   stripe: Stripe,
 ) {
+  await syncEntitlementFromSubscription(subscription);
+
   const email = await resolveCustomerEmail(stripe, subscription.customer);
 
   if (!email) {
@@ -117,6 +252,8 @@ async function handleSubscriptionUpdated(
   subscription: Stripe.Subscription,
   stripe: Stripe,
 ) {
+  await syncEntitlementFromSubscription(subscription);
+
   const priorStatus =
     (event.data.previous_attributes as { status?: Stripe.Subscription.Status })
       ?.status || null;

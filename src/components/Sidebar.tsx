@@ -19,6 +19,7 @@ import {
   FileTranscriptionSettings,
 } from "./settings";
 import UpdateChecker from "./update-checker";
+import { ManageSubscriptionButton } from "./settings/ManageSubscriptionButton";
 import { UpgradeButton } from "./settings/UpgradeButton";
 import {
   isDevPlanSimulationActive,
@@ -217,6 +218,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       <div className="mt-4 shrink-0 border-t border-white/6 px-2 pt-4">
         <div className="flex flex-col gap-1.5 text-xs text-text/48">
           <UpgradeButton />
+          <ManageSubscriptionButton />
           <UpdateChecker className="min-w-0" />
           <button
             type="button"

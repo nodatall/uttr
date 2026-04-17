@@ -275,6 +275,35 @@ export async function upsertEntitlementState(
   return firstOrNull((await parseJsonArray(response)) as EntitlementRow[]);
 }
 
+export async function patchEntitlementByStripeSubscriptionId(
+  stripeSubscriptionId: string,
+  patch: Partial<
+    Pick<
+      EntitlementRow,
+      | "subscription_status"
+      | "stripe_customer_id"
+      | "current_period_ends_at"
+    >
+  >,
+) {
+  const response = await supabaseRequest(
+    "entitlements",
+    {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+      headers: {
+        prefer: "return=representation",
+      },
+    },
+    {
+      stripe_subscription_id: `eq.${stripeSubscriptionId}`,
+      select: "*",
+    },
+  );
+
+  return firstOrNull((await parseJsonArray(response)) as EntitlementRow[]);
+}
+
 export async function redeemTrialClaim(params: {
   claimTokenHash: string;
   userId: string;

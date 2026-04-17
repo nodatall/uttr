@@ -419,6 +419,35 @@ fn apply_overlay_dimensions(app_handle: &AppHandle, width: f64, height: f64) {
     }
 }
 
+fn apply_overlay_z_order_for_state(
+    overlay_window: &tauri::webview::WebviewWindow,
+    state: &str,
+) {
+    let should_float = state != "full_system_progress";
+
+    #[cfg(target_os = "macos")]
+    {
+        let _ = overlay_window.set_always_on_top(should_float);
+        if let Ok(panel) = overlay_window
+            .app_handle()
+            .get_webview_panel(OVERLAY_LABEL_BASE)
+        {
+            let level = if should_float {
+                PanelLevel::Status
+            } else {
+                PanelLevel::Normal
+            };
+            panel.set_level(level.value());
+        }
+        return;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = overlay_window.set_always_on_top(should_float);
+    }
+}
+
 fn show_overlay_state(app_handle: &AppHandle, state: &str, width: f64, height: f64) {
     let show_start = std::time::Instant::now();
     log::info!("[latency] overlay show requested state={}", state);
@@ -452,6 +481,7 @@ fn show_overlay_state(app_handle: &AppHandle, state: &str, width: f64, height: f
                 create_recording_overlay(&app);
                 apply_overlay_dimensions(&app, width, height);
                 if let Some(overlay_window) = app.get_webview_window(OVERLAY_LABEL_BASE) {
+                    apply_overlay_z_order_for_state(&overlay_window, &state_for_show);
                     let _ = overlay_window.show();
                     if let Ok(panel) = app.get_webview_panel(OVERLAY_LABEL_BASE) {
                         panel.order_front_regardless();
@@ -480,11 +510,14 @@ fn show_overlay_state(app_handle: &AppHandle, state: &str, width: f64, height: f
     #[cfg(not(target_os = "macos"))]
     {
         if let Some(overlay_window) = app_handle.get_webview_window(OVERLAY_LABEL_BASE) {
+            apply_overlay_z_order_for_state(&overlay_window, state);
             let _ = overlay_window.show();
 
             // On Windows, aggressively re-assert "topmost" in the native Z-order after showing
             #[cfg(target_os = "windows")]
-            force_overlay_topmost(&overlay_window);
+            if state != "full_system_progress" {
+                force_overlay_topmost(&overlay_window);
+            }
 
             let _ = overlay_window.emit("show-overlay", state);
             log::info!(
