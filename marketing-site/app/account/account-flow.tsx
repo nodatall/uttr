@@ -1,6 +1,7 @@
 "use client";
 
 import { createClient, type Session } from "@supabase/supabase-js";
+import Link from "next/link";
 import { useEffect, useState } from "react";
 
 type AccountFlowProps = {
@@ -55,13 +56,32 @@ export function AccountFlow({
 
   useEffect(() => {
     let cancelled = false;
+    let fallbackTimeoutId: number | null = null;
+
+    const clearFallbackTimeout = () => {
+      if (fallbackTimeoutId !== null) {
+        window.clearTimeout(fallbackTimeoutId);
+        fallbackTimeoutId = null;
+      }
+    };
+
+    const scheduleSignedOutFallback = () => {
+      clearFallbackTimeout();
+      fallbackTimeoutId = window.setTimeout(() => {
+        if (!cancelled) {
+          setHasCheckedSession(true);
+        }
+      }, 900);
+    };
 
     const syncSession = async () => {
+      scheduleSignedOutFallback();
       const { data } = await supabase.auth.getSession();
       if (cancelled) {
         return;
       }
 
+      clearFallbackTimeout();
       setSignedInEmail(data.session?.user.email ?? null);
       setHasCheckedSession(true);
     };
@@ -95,6 +115,7 @@ export function AccountFlow({
 
     return () => {
       cancelled = true;
+      clearFallbackTimeout();
       subscription.unsubscribe();
       window.removeEventListener("pageshow", refreshSession);
       window.removeEventListener("focus", refreshSession);
@@ -172,7 +193,7 @@ export function AccountFlow({
   };
 
   return (
-    <div className="mx-auto mt-8 w-full max-w-xl space-y-4 text-left">
+    <div className="mx-auto mt-9 w-full max-w-xl text-left">
       {signedInEmail ? (
         <div className="space-y-4 text-sm text-cosmic-200">
           <button
@@ -205,45 +226,62 @@ export function AccountFlow({
         </div>
       ) : (
         <form
-          className="space-y-4"
+          className="flex flex-col"
           onSubmit={(event) => {
             event.preventDefault();
             void signIn();
           }}
         >
-          <label className="block">
-            <span className="mb-2 block text-sm text-cosmic-200">Email</span>
-            <input
-              type="email"
-              autoComplete="email"
-              value={email}
-              onChange={(event) => setEmail(event.target.value)}
-              className="w-full rounded-2xl border border-white/15 bg-black/20 px-4 py-3 text-cosmic-50 outline-none ring-0 transition placeholder:text-cosmic-400 focus:border-white/35"
-              placeholder="you@example.com"
-            />
-          </label>
+          <div className="space-y-5">
+            <label className="block">
+              <span className="mb-2 block text-sm text-cosmic-200">Email</span>
+              <input
+                type="email"
+                autoComplete="email"
+                value={email}
+                onChange={(event) => setEmail(event.target.value)}
+                className="w-full rounded-2xl border border-white/15 bg-black/20 px-4 py-3 text-cosmic-50 outline-none ring-0 transition placeholder:text-cosmic-400 focus:border-white/35"
+                placeholder="you@example.com"
+              />
+            </label>
 
-          <label className="block">
-            <span className="mb-2 block text-sm text-cosmic-200">Password</span>
-            <input
-              type="password"
-              autoComplete="current-password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              className="w-full rounded-2xl border border-white/15 bg-black/20 px-4 py-3 text-cosmic-50 outline-none ring-0 transition placeholder:text-cosmic-400 focus:border-white/35"
-              placeholder="Your account password"
-            />
-          </label>
+            <label className="block">
+              <span className="mb-2 block text-sm text-cosmic-200">
+                Password
+              </span>
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                className="w-full rounded-2xl border border-white/15 bg-black/20 px-4 py-3 text-cosmic-50 outline-none ring-0 transition placeholder:text-cosmic-400 focus:border-white/35"
+                placeholder="Your account password"
+              />
+            </label>
+          </div>
 
-          <button
-            type="submit"
-            disabled={!canSubmitCredentials}
-            className="mx-auto block rounded-full bg-cosmic-50 px-6 py-3 text-sm font-semibold text-cosmic-950 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
-          >
-            {status === "auth"
-              ? "Signing in..."
-              : "Sign in and manage subscription"}
-          </button>
+          <div className="mt-5 flex flex-col items-center gap-4">
+            <button
+              type="submit"
+              disabled={!canSubmitCredentials}
+              className="rounded-full bg-cosmic-50 px-6 py-3 text-sm font-semibold text-cosmic-950 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
+            >
+              {status === "auth"
+                ? "Signing in..."
+                : "Sign in and manage subscription"}
+            </button>
+
+            <p className="text-center text-sm leading-relaxed text-cosmic-200">
+              New to Uttr?{" "}
+              <Link
+                href="/claim?source=account"
+                className="font-medium text-galaxy-blue transition hover:text-cosmic-50"
+              >
+                Download the app
+              </Link>{" "}
+              first, then start your subscription from the app.
+            </p>
+          </div>
         </form>
       )}
 
