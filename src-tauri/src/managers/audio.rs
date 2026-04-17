@@ -108,7 +108,7 @@ const WHISPER_SAMPLE_RATE: usize = 16000;
 // between dictation bursts. Recorder-side pre-roll only helps while the stream
 // is already open, so a warmer stream materially improves first-word capture.
 const ON_DEMAND_IDLE_KEEPALIVE: Duration = Duration::from_secs(30 * 60);
-const FRONTMOST_APP_PREWARM_COOLDOWN: Duration = Duration::from_secs(20);
+const FRONTMOST_APP_PREWARM_COOLDOWN: Duration = Duration::from_secs(5);
 
 /* ──────────────────────────────────────────────────────────────── */
 
