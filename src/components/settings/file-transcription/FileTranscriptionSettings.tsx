@@ -67,10 +67,8 @@ export const FileTranscriptionSettings: React.FC = () => {
   });
 
   useEffect(() => {
-    if (!accessLoaded) {
-      void refreshInstallAccess();
-    }
-  }, [accessLoaded, refreshInstallAccess]);
+    void refreshInstallAccess();
+  }, [refreshInstallAccess]);
 
   const selectPath = useCallback(
     (path: string) => {

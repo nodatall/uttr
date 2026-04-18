@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
+import { checkoutRequiresClaimToken } from "@/lib/checkout-policy";
 import {
   fetchAnonymousTrialById,
   fetchEntitlementByUserId,
@@ -128,9 +129,6 @@ export async function POST(request: Request) {
     const { stripeSecretKey, monthlyPriceId, siteUrl } = readCheckoutConfig();
     const stripe = getStripe(stripeSecretKey);
     const source = normalizeSource(parsedBody.data.source);
-    const claimContext = parsedBody.data.claim_token
-      ? await resolveClaimContext(parsedBody.data.claim_token, currentUser.id)
-      : null;
     const entitlement = await fetchEntitlementByUserId(currentUser.id);
     const hasActiveEntitlement = entitlement?.subscription_status === "active";
 
@@ -142,6 +140,25 @@ export async function POST(request: Request) {
         user_id: currentUser.id,
       });
     }
+
+    if (
+      checkoutRequiresClaimToken({
+        hasActiveEntitlement,
+        claimToken: parsedBody.data.claim_token,
+      })
+    ) {
+      return NextResponse.json(
+        { error: "Start checkout from the Uttr desktop app." },
+        { status: 400 },
+      );
+    }
+
+    const claimToken = parsedBody.data.claim_token;
+    if (!claimToken) {
+      throw new CheckoutRouteError(400, "Missing claim token.");
+    }
+
+    const claimContext = await resolveClaimContext(claimToken, currentUser.id);
 
     const checkoutSession = await stripe.checkout.sessions.create({
       mode: "subscription",

@@ -114,10 +114,8 @@ export const RecordFullSystemAudio: React.FC<RecordFullSystemAudioProps> =
     }, [refreshSettings, refreshStatus]);
 
     useEffect(() => {
-      if (!accessLoaded) {
-        void refreshInstallAccess();
-      }
-    }, [accessLoaded, refreshInstallAccess]);
+      void refreshInstallAccess();
+    }, [refreshInstallAccess]);
 
     useEffect(() => {
       void refreshStatus();

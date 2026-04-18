@@ -15,7 +15,17 @@
     "history": "Historie",
     "debug": "Ladění",
     "about": "O aplikaci",
-    "apiKeys": "Klíče API"
+    "apiKeys": "Klíče API",
+    "manageSubscription": "Manage subscription",
+    "manageSubscriptionOpening": "Opening...",
+    "manageSubscriptionCaption": "Billing, invoices, cancellation",
+    "upgradeToPro": "Upgrade to Pro",
+    "upgradeOpening": "Opening...",
+    "upgradeStatusTrial": "2-day trial active",
+    "upgradeStatusExpired": "Trial ended",
+    "upgradeStatusFree": "Free plan",
+    "upgradeCaption": "{{status}} - $5/month",
+    "upgradeOpenFailed": "Could not start checkout. Try again from Uttr in a moment."
   },
   "onboarding": {
     "subtitle": "Pro začátek vyberte model pro přepis",
@@ -100,6 +110,10 @@
       "errors": {
         "checkFailed": "Nepodařilo se zkontrolovat oprávnění. Zkuste to prosím znovu.",
         "requestFailed": "Nepodařilo se požádat o oprávnění. Zkuste to prosím znovu."
+      },
+      "screenRecording": {
+        "title": "Screen Recording Access",
+        "description": "Only needed for full-system recording later. Microphone-only transcription works without it."
       }
     }
   },
@@ -236,7 +250,8 @@
         "statusCheckFailed": "Uttr could not check full-system audio support right now.",
         "unsupportedDescription": "This feature is available only on macOS 13 or later.",
         "permissionRequired": "Screen Recording access is required before this can be enabled. Microphone access alone is not enough.",
-        "pendingDescription": "{{reason}} Microphone access is handled separately. Uttr will retry automatically when this window regains focus."
+        "pendingDescription": "{{reason}} Microphone access is handled separately. Uttr will retry automatically when this window regains focus.",
+        "shortcutLabel": "Shortcut"
       }
     },
     "advanced": {
@@ -400,6 +415,10 @@
         "cancel": "Zrušit",
         "selectToEdit": "Vyberte výše prompt, abyste zobrazili a upravili jeho podrobnosti.",
         "createFirst": "Klikněte nahoře na 'Vytvořit nový prompt' a vytvořte svůj první prompt pro následné zpracování."
+      },
+      "systemPrompt": {
+        "save": "Save",
+        "cancel": "Cancel"
       }
     },
     "history": {
@@ -485,6 +504,11 @@
       "pasteDelay": {
         "title": "Zpoždění vložení",
         "description": "Zpoždění před odesláním klávesy pro vložení (v milisekundách). Zvyšte, pokud se vkládá špatný text."
+      },
+      "planSimulation": {
+        "title": "Plan simulation",
+        "description": "Force the local access state for testing locked and paid UI.",
+        "currentAccess": "Current access: {{currentLabel}}"
       }
     },
     "about": {
@@ -526,7 +550,37 @@
         "description": "Vyžadováno pro cloudové přepisovací modely Groq. Tento klíč je sdílený s nastavením poskytovatele následného zpracování.",
         "placeholder": "gsk_..."
       },
-      "autosave": "Po opuštění pole se uloží automaticky."
+      "autosave": "Po opuštění pole se uloží automaticky.",
+      "validation": {
+        "unknown": "Not validated",
+        "valid": "Validated",
+        "invalid": "Invalid"
+      }
+    },
+    "byok": {
+      "eyebrow": "Hidden access",
+      "title": "BYOK controls",
+      "description": "Manage the optional Groq Bring Your Own Key path. The key is stored securely and only used when BYOK is enabled and validated.",
+      "status": "Status",
+      "secretStored": "Secret stored in Stronghold",
+      "noSecret": "No stored secret",
+      "enableLabel": "Enable BYOK",
+      "enableDescription": "Use the stored Groq key for direct routing only after the key validates successfully.",
+      "enableGuard": "Save and validate a Groq key before enabling direct BYOK routing.",
+      "save": "Save key",
+      "validate": "Validate key",
+      "validateFailed": "Failed to validate the Groq key.",
+      "clear": "Clear key",
+      "unlocked": "BYOK unlocked",
+      "groq": {
+        "sectionLabel": "Groq BYOK",
+        "title": "Direct Groq routing",
+        "description": "Unlock the key entry, save the secret, validate it, and then enable BYOK to bypass subscription gating when the key is valid.",
+        "keyLabel": "Groq API key",
+        "stored": "Secret stored in Stronghold",
+        "placeholder": "gsk_...",
+        "storageNote": "The key is not shown after saving. Replace it here, or clear it to remove the stored secret."
+      }
     }
   },
   "footer": {
@@ -582,6 +636,13 @@
   },
   "overlay": {
     "transcribing": "Přepisuji...",
-    "processing": "Zpracovávám..."
+    "processing": "Zpracovávám...",
+    "noInputTitle": "No input detected",
+    "noInputDescription": "Check your microphone settings.",
+    "fullSystemProgress": {
+      "copy": "Copy",
+      "view": "View",
+      "exit": "Exit"
+    }
   }
 }

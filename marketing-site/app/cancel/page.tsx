@@ -1,9 +1,11 @@
 import Link from "next/link";
-import { CheckoutButton } from "@/components/checkout-button";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteNav } from "@/components/site-nav";
+import { getDownloadUrl } from "@/lib/download";
 
 export default function CancelPage() {
+  const downloadUrl = getDownloadUrl();
+
   return (
     <div className="min-h-screen bg-cosmic-950 text-cosmic-50">
       <SiteNav showPricingLink={false} />
@@ -17,15 +19,17 @@ export default function CancelPage() {
             No worries.
           </h1>
           <p className="mt-5 text-cosmic-200">
-            Your subscription was not started. You can continue whenever you
-            want.
+            Your subscription was not started. Open Uttr to try again whenever
+            you want.
           </p>
 
           <div className="mt-8 flex flex-wrap gap-3">
-            <CheckoutButton
-              source="cancel-page"
-              className="rounded-full bg-cosmic-50 px-6 py-3 text-sm font-semibold text-cosmic-950 transition hover:bg-white"
-            />
+            <a
+              href={downloadUrl}
+              className="rounded-full bg-cosmic-50 px-6 py-3 text-sm font-semibold !text-cosmic-950 transition hover:bg-white"
+            >
+              Download for macOS
+            </a>
             <Link
               href="/"
               className="rounded-full border border-white/25 px-6 py-3 text-sm text-cosmic-100 transition hover:border-white/45 hover:text-cosmic-50"

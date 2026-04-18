@@ -1,8 +1,8 @@
-import { CheckoutButton } from "@/components/checkout-button";
 import { GalaxyCanvas } from "@/components/galaxy-canvas";
 import { Logo } from "@/components/logo";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteNav } from "@/components/site-nav";
+import { getDownloadUrl } from "@/lib/download";
 
 const quickPoints = [
   "Fast, accurate transcription",
@@ -60,7 +60,7 @@ const plans = [
     price: "$5",
     suffix: "/month",
     description: "For using voice as a serious writing and meeting tool.",
-    cta: "Start Pro",
+    cta: "Download for macOS",
     featured: true,
     features: [
       "Everything in Free",
@@ -73,6 +73,8 @@ const plans = [
 ];
 
 export default function Home() {
+  const downloadUrl = getDownloadUrl();
+
   return (
     <div className="relative overflow-hidden bg-cosmic-950">
       <div className="noise-mask" />
@@ -104,10 +106,12 @@ export default function Home() {
                 </p>
 
                 <div className="mt-8 flex flex-wrap items-center gap-4">
-                  <CheckoutButton
-                    source="landing-hero"
-                    className="rounded-full bg-white px-8 py-3.5 text-sm font-semibold text-cosmic-950 transition hover:bg-cosmic-100"
-                  />
+                  <a
+                    href={downloadUrl}
+                    className="rounded-full bg-white px-8 py-3.5 text-sm font-semibold !text-cosmic-950 transition hover:bg-cosmic-100"
+                  >
+                    Download for macOS
+                  </a>
                 </div>
 
               </div>
@@ -263,16 +267,16 @@ export default function Home() {
                   </ul>
 
                   <div className="mt-auto pt-8">
-                    <CheckoutButton
-                      source={`pricing-${plan.name.toLowerCase()}`}
-                      className={`w-full rounded-full px-6 py-3 text-sm font-semibold transition ${
+                    <a
+                      href={downloadUrl}
+                      className={`inline-flex w-full justify-center rounded-full px-6 py-3 text-sm font-semibold transition ${
                         plan.featured
-                          ? "bg-cosmic-950 text-white hover:bg-cosmic-800"
-                          : "border border-white/30 text-white hover:border-white/60"
+                          ? "bg-cosmic-950 !text-white hover:bg-cosmic-800"
+                          : "border border-white/30 !text-white hover:border-white/60"
                       }`}
                     >
                       {plan.cta}
-                    </CheckoutButton>
+                    </a>
                   </div>
                 </div>
               ))}

@@ -69,6 +69,9 @@ function App() {
   const refreshOutputDevices = useSettingsStore(
     (state) => state.refreshOutputDevices,
   );
+  const refreshInstallAccess = useSettingsStore(
+    (state) => state.refreshInstallAccess,
+  );
   const hasCompletedPostOnboardingInit = useRef(false);
 
   useEffect(() => {
@@ -80,6 +83,25 @@ function App() {
   useEffect(() => {
     initializeRTL(i18n.language);
   }, [i18n.language]);
+
+  useEffect(() => {
+    const refreshAccess = () => {
+      void refreshInstallAccess();
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") {
+        refreshAccess();
+      }
+    };
+
+    window.addEventListener("focus", refreshAccess);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+
+    return () => {
+      window.removeEventListener("focus", refreshAccess);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [refreshInstallAccess]);
 
   // Initialize Enigo, shortcuts, and refresh audio devices when main app loads
   useEffect(() => {

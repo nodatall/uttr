@@ -602,7 +602,9 @@ const RecordingOverlay: React.FC = () => {
                       overlayActionPending || !fullSystemProgress.transcriptText
                     }
                   >
-                    Copy
+                    {i18n.t("overlay.fullSystemProgress.copy", {
+                      defaultValue: "Copy",
+                    })}
                   </button>
                   <button
                     type="button"
@@ -610,7 +612,9 @@ const RecordingOverlay: React.FC = () => {
                     onClick={handleViewHistoryEntry}
                     disabled={overlayActionPending}
                   >
-                    View
+                    {i18n.t("overlay.fullSystemProgress.view", {
+                      defaultValue: "View",
+                    })}
                   </button>
                   <button
                     type="button"
@@ -618,7 +622,9 @@ const RecordingOverlay: React.FC = () => {
                     onClick={handleDismissOverlay}
                     disabled={overlayActionPending}
                   >
-                    Exit
+                    {i18n.t("overlay.fullSystemProgress.exit", {
+                      defaultValue: "Exit",
+                    })}
                   </button>
                 </div>
               )}

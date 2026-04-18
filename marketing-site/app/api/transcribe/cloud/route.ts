@@ -10,15 +10,18 @@ import { buildTimings } from "@/lib/groq/timings";
 import {
   fetchAnonymousTrialById,
   fetchEntitlementByUserId,
+  fetchUsageEventsSince,
   insertUsageEvent,
   patchAnonymousTrialById,
   readInstallTokenFromRequest,
   refreshAnonymousTrialState,
   resolveAccessDecision,
   type InstallTokenPayload,
+  type UsageEventRow,
   verifyInstallToken,
 } from "@/lib/access";
-import { accessAllowsCloudSource } from "@/lib/access/premium-features";
+import { evaluateCloudTranscriptionPreflight } from "@/lib/access/cloud-transcription-policy";
+import { checkRateLimit, rateLimitKeyFromRequest } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -67,6 +70,23 @@ export async function POST(request: Request) {
   const startMs = performance.now();
 
   try {
+    const rateLimit = checkRateLimit({
+      key: rateLimitKeyFromRequest(request, "cloud-transcribe"),
+      limit: 60,
+      windowMs: 60_000,
+    });
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        { error: "Too many transcription requests." },
+        {
+          status: 429,
+          headers: {
+            "retry-after": String(rateLimit.retryAfterSeconds),
+          },
+        },
+      );
+    }
+
     const installToken = readInstallTokenFromRequest(request);
     if (!installToken) {
       return NextResponse.json(
@@ -151,32 +171,33 @@ export async function POST(request: Request) {
       requestedModel || "default",
     );
 
-    if (
-      !accessAllowsCloudSource(
-        accessDecision.accessState,
-        source,
-        accessDecision.trialState,
-      )
-    ) {
-      return NextResponse.json(
-        {
-          error: "Upgrade to Pro to keep using transcription.",
-        },
-        { status: 403 },
-      );
+    let usageEvents: UsageEventRow[] = [];
+    if (accessDecision.accessState !== "subscribed") {
+      const usageWindowStart =
+        refreshedTrial.trial_started_at ||
+        new Date(Date.now() - TRIAL_DURATION_MS).toISOString();
+      usageEvents = await fetchUsageEventsSince({
+        anonymousTrialId: refreshedTrial.id,
+        since: usageWindowStart,
+      });
     }
 
-    const fileBytes = Buffer.from(await fileEntry.arrayBuffer());
-    const groqStartMs = performance.now();
-    const groqResult = await transcribeWithGroq({
-      audioBytes: fileBytes,
-      fileName: fileEntry.name || "uttr.wav",
-      mimeType: fileEntry.type || "audio/wav",
-      language: parseTextField(formData.get("language")),
-      model: requestedModel,
-      translateToEnglish,
+    const preflightDecision = evaluateCloudTranscriptionPreflight({
+      accessState: accessDecision.accessState,
+      trialState: accessDecision.trialState,
+      source,
+      usageEvents,
+      audioSeconds,
     });
-    const groqEndMs = performance.now();
+    if (!preflightDecision.allowed) {
+      return NextResponse.json(
+        {
+          error: preflightDecision.error,
+          reason: preflightDecision.reason,
+        },
+        { status: preflightDecision.status },
+      );
+    }
 
     const now = new Date().toISOString();
     let persistedTrial = refreshedTrial;
@@ -219,6 +240,18 @@ export async function POST(request: Request) {
     if (!usageEvent) {
       throw new Error("Unable to record usage event.");
     }
+
+    const fileBytes = Buffer.from(await fileEntry.arrayBuffer());
+    const groqStartMs = performance.now();
+    const groqResult = await transcribeWithGroq({
+      audioBytes: fileBytes,
+      fileName: fileEntry.name || "uttr.wav",
+      mimeType: fileEntry.type || "audio/wav",
+      language: parseTextField(formData.get("language")),
+      model: requestedModel,
+      translateToEnglish,
+    });
+    const groqEndMs = performance.now();
 
     const endMs = performance.now();
 

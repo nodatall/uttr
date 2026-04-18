@@ -212,6 +212,23 @@ export async function insertUsageEvent(
   return firstOrNull((await parseJsonArray(response)) as UsageEventRow[]);
 }
 
+export async function fetchUsageEventsSince(params: {
+  anonymousTrialId: string;
+  since: string;
+}) {
+  const response = await supabaseRequest(
+    "usage_events",
+    { method: "GET" },
+    {
+      select: "*",
+      anonymous_trial_id: `eq.${params.anonymousTrialId}`,
+      created_at: `gte.${params.since}`,
+    },
+  );
+
+  return (await parseJsonArray(response)) as UsageEventRow[];
+}
+
 export async function fetchSupabaseUser(accessToken: string) {
   const { url, anonKey } = readSupabaseConfig();
   const response = await fetch(new URL("/auth/v1/user", url), {

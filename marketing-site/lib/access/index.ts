@@ -9,6 +9,7 @@ export type {
   SupabaseUser,
   TrialState,
   TrialClaimRow,
+  UsageEventRow,
   UsageEventSource,
 } from "./types";
 export { resolveAccessDecision, refreshAnonymousTrialState } from "./resolve";
@@ -18,6 +19,7 @@ export {
   fetchEntitlementByUserId,
   fetchSupabaseUser,
   fetchTrialClaimByHash,
+  fetchUsageEventsSince,
   insertUsageEvent,
   isAnonymousTrialExpired,
   insertTrialClaim,

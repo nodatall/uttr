@@ -14,7 +14,9 @@ import {
   type InstallTokenPayload,
   verifyInstallToken,
 } from "@/lib/access";
+import { trialCanCreateClaim } from "@/lib/access/claim-eligibility";
 import { readSiteConfig } from "@/lib/env";
+import { checkRateLimit, rateLimitKeyFromRequest } from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -48,6 +50,23 @@ async function readInstallTokenFromBodyOrRequest(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const rateLimit = checkRateLimit({
+      key: rateLimitKeyFromRequest(request, "trial-create-claim"),
+      limit: 20,
+      windowMs: 60_000,
+    });
+    if (!rateLimit.allowed) {
+      return NextResponse.json(
+        { error: "Too many claim requests." },
+        {
+          status: 429,
+          headers: {
+            "retry-after": String(rateLimit.retryAfterSeconds),
+          },
+        },
+      );
+    }
+
     const installToken = await readInstallTokenFromBodyOrRequest(request);
     if (!installToken) {
       return NextResponse.json(
@@ -94,12 +113,9 @@ export async function POST(request: Request) {
       );
     }
 
-    if (
-      accessDecision.accessState !== "blocked" ||
-      refreshedTrial.status !== "expired"
-    ) {
+    if (!trialCanCreateClaim(refreshedTrial, accessDecision)) {
       return NextResponse.json(
-        { error: "Claim tokens are only available after trial expiry." },
+        { error: "Claim tokens are only available for unlinked installs." },
         { status: 409 },
       );
     }

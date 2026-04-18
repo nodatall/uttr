@@ -2,6 +2,7 @@
 
 import { createClient, type Session } from "@supabase/supabase-js";
 import { useEffect, useState } from "react";
+import { getDownloadUrl } from "@/lib/download";
 
 type AuthMode = "signin" | "signup";
 
@@ -95,6 +96,7 @@ export function ClaimFlow({
   initialClaimToken,
   initialSource,
 }: ClaimFlowProps) {
+  const downloadUrl = getDownloadUrl();
   const [supabase] = useState(() =>
     createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
@@ -113,6 +115,8 @@ export function ClaimFlow({
   const [error, setError] = useState<string | null>(null);
   const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
   const [activeSession, setActiveSession] = useState<Session | null>(null);
+  const canSubmitCredentials =
+    status === "idle" && email.trim().length > 0 && password.length > 0;
 
   const finishAuthenticatedSession = async (
     session: Session,
@@ -173,6 +177,10 @@ export function ClaimFlow({
   }, [supabase, initialClaimToken, initialSource]);
 
   const submit = async (mode: AuthMode) => {
+    if (!canSubmitCredentials) {
+      return;
+    }
+
     setAuthMode(mode);
     setStatus("auth");
     setError(null);
@@ -256,6 +264,26 @@ export function ClaimFlow({
     setError(null);
   };
 
+  if (!initialClaimToken) {
+    return (
+      <div className="mx-auto mt-8 w-full max-w-xl space-y-5 text-center">
+        <h1 className="text-4xl font-semibold leading-tight md:text-5xl">
+          Download Uttr first.
+        </h1>
+        <p className="mx-auto max-w-lg text-sm leading-relaxed text-cosmic-200">
+          New to Uttr? Download the desktop app, use the trial, then start your
+          subscription from inside the app so Pro is linked to your install.
+        </p>
+        <a
+          href={downloadUrl}
+          className="inline-flex rounded-full bg-cosmic-50 px-6 py-3 text-sm font-semibold !text-cosmic-950 transition hover:bg-white"
+        >
+          Download for macOS
+        </a>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto mt-8 w-full max-w-xl space-y-4 text-left">
       {activeSession && signedInEmail ? (
@@ -318,7 +346,7 @@ export function ClaimFlow({
             <button
               type="button"
               onClick={() => void submit("signup")}
-              disabled={status !== "idle"}
+              disabled={!canSubmitCredentials}
               className="rounded-full bg-cosmic-50 px-6 py-3 text-sm font-semibold text-cosmic-950 transition hover:bg-white disabled:cursor-not-allowed disabled:opacity-70"
             >
               {status === "auth" && authMode === "signup"
@@ -328,7 +356,7 @@ export function ClaimFlow({
             <button
               type="button"
               onClick={() => void submit("signin")}
-              disabled={status !== "idle"}
+              disabled={!canSubmitCredentials}
               className="rounded-full border border-white/20 px-6 py-3 text-sm text-cosmic-100 transition hover:border-white/40 disabled:cursor-not-allowed disabled:opacity-70"
             >
               {status === "auth" && authMode === "signin"

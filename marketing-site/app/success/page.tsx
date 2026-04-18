@@ -44,7 +44,7 @@ export default async function SuccessPage({
             {isAlreadyEntitled ? "Access confirmed" : "Subscription confirmed"}
           </p>
           <h1 className="mt-4 text-4xl font-semibold leading-tight md:text-5xl">
-            {isAlreadyEntitled ? "You&apos;re already set." : "You&apos;re in."}
+            {isAlreadyEntitled ? "You're already set." : "You're in."}
           </h1>
           <p className="mt-5 text-cosmic-200">
             {isAlreadyEntitled ? (
@@ -66,7 +66,7 @@ export default async function SuccessPage({
           <div className="mt-8 flex flex-wrap gap-3">
             <Link
               href="/"
-              className="rounded-full bg-cosmic-50 px-6 py-3 text-sm font-semibold text-cosmic-950 transition hover:bg-white"
+              className="rounded-full bg-cosmic-50 px-6 py-3 text-sm font-semibold !text-cosmic-950 transition hover:bg-white hover:!text-cosmic-950"
             >
               Back to homepage
             </Link>

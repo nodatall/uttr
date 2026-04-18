@@ -18,7 +18,7 @@ export function SiteNav({
         <Link
           href="/"
           aria-label="Uttr home"
-          className="transition hover:opacity-90"
+          className="cursor-pointer transition hover:opacity-90"
         >
           <Logo variant="nav" />
         </Link>
@@ -28,19 +28,19 @@ export function SiteNav({
             <>
               <a
                 href="#features"
-                className="hidden transition hover:text-cosmic-50 md:inline"
+                className="hidden cursor-pointer transition hover:text-cosmic-50 md:inline"
               >
                 Features
               </a>
               <a
                 href="#pricing"
-                className="hidden transition hover:text-cosmic-50 md:inline"
+                className="hidden cursor-pointer transition hover:text-cosmic-50 md:inline"
               >
                 Pricing
               </a>
               <Link
                 href="/account"
-                className="hidden transition hover:text-cosmic-50 md:inline"
+                className="hidden cursor-pointer transition hover:text-cosmic-50 md:inline"
               >
                 Account
               </Link>

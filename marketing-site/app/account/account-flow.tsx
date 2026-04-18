@@ -1,8 +1,8 @@
 "use client";
 
 import { createClient, type Session } from "@supabase/supabase-js";
-import Link from "next/link";
 import { useEffect, useState } from "react";
+import { getDownloadUrl } from "@/lib/download";
 
 type AccountFlowProps = {
   supabaseUrl: string;
@@ -34,6 +34,7 @@ export function AccountFlow({
   supabaseUrl,
   supabaseAnonKey,
 }: AccountFlowProps) {
+  const downloadUrl = getDownloadUrl();
   const [supabase] = useState(() =>
     createClient(supabaseUrl, supabaseAnonKey, {
       auth: {
@@ -273,12 +274,12 @@ export function AccountFlow({
 
             <p className="text-center text-sm leading-relaxed text-cosmic-200">
               New to Uttr?{" "}
-              <Link
-                href="/claim?source=account"
-                className="font-medium text-galaxy-blue transition hover:text-cosmic-50"
+              <a
+                href={downloadUrl}
+                className="font-medium !text-galaxy-blue transition hover:!text-cosmic-50"
               >
                 Download the app
-              </Link>{" "}
+              </a>{" "}
               first, then start your subscription from the app.
             </p>
           </div>

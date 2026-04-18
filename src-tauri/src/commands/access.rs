@@ -16,13 +16,17 @@ pub async fn bootstrap_install_access(app: AppHandle) -> Result<InstallAccessSna
         warn!("Bootstrap entitlement refresh failed: {}", error);
     }
 
-    Ok(build_install_access_snapshot(&app))
+    let snapshot = build_install_access_snapshot(&app);
+    let _ = app.emit("install-access-changed", snapshot.clone());
+    Ok(snapshot)
 }
 
 #[tauri::command]
 #[specta::specta]
 pub async fn refresh_install_entitlement(app: AppHandle) -> Result<InstallAccessSnapshot, String> {
-    refresh_entitlement_state(&app).await
+    let snapshot = refresh_entitlement_state(&app).await?;
+    let _ = app.emit("install-access-changed", snapshot.clone());
+    Ok(snapshot)
 }
 
 #[tauri::command]

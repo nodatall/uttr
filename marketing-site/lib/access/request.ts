@@ -11,9 +11,7 @@ export function readInstallTokenFromRequest(request: Request) {
     return headerToken.trim() || null;
   }
 
-  const url = new URL(request.url);
-  const queryToken = url.searchParams.get("install_token");
-  return queryToken?.trim() || null;
+  return null;
 }
 
 function readCookieValue(cookieHeader: string | null, name: string) {

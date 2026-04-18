@@ -18,7 +18,14 @@
     "about": "About",
     "manageSubscription": "Manage subscription",
     "manageSubscriptionOpening": "Opening...",
-    "manageSubscriptionCaption": "Billing, invoices, cancellation"
+    "manageSubscriptionCaption": "Billing, invoices, cancellation",
+    "upgradeToPro": "Upgrade to Pro",
+    "upgradeOpening": "Opening...",
+    "upgradeStatusTrial": "2-day trial active",
+    "upgradeStatusExpired": "Trial ended",
+    "upgradeStatusFree": "Free plan",
+    "upgradeCaption": "{{status}} - $5/month",
+    "upgradeOpenFailed": "Could not start checkout. Try again from Uttr in a moment."
   },
   "onboarding": {
     "subtitle": "To get started, choose a transcription model",
@@ -450,6 +457,10 @@
         "cancel": "Cancel",
         "selectToEdit": "Select a prompt above to view and edit its details.",
         "createFirst": "Click 'Create New Prompt' above to create your first post-processing prompt."
+      },
+      "systemPrompt": {
+        "save": "Save",
+        "cancel": "Cancel"
       }
     },
     "history": {
@@ -501,6 +512,11 @@
         "weeks2": "After 2 weeks",
         "months3": "After 3 months",
         "placeholder": "Select retention period..."
+      },
+      "planSimulation": {
+        "title": "Plan simulation",
+        "description": "Force the local access state for testing locked and paid UI.",
+        "currentAccess": "Current access: {{currentLabel}}"
       },
       "alwaysOnMicrophone": {
         "label": "Always-On Microphone",
@@ -622,6 +638,11 @@
     "noInputTitle": "No input detected",
     "noInputDescription": "Check your microphone settings.",
     "transcribing": "Transcribing...",
-    "processing": "Processing..."
+    "processing": "Processing...",
+    "fullSystemProgress": {
+      "copy": "Copy",
+      "view": "View",
+      "exit": "Exit"
+    }
   }
 }

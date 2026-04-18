@@ -15,7 +15,17 @@
     "history": "Lịch sử",
     "debug": "Gỡ lỗi",
     "about": "Giới thiệu",
-    "apiKeys": "Khóa API"
+    "apiKeys": "Khóa API",
+    "manageSubscription": "Manage subscription",
+    "manageSubscriptionOpening": "Opening...",
+    "manageSubscriptionCaption": "Billing, invoices, cancellation",
+    "upgradeToPro": "Upgrade to Pro",
+    "upgradeOpening": "Opening...",
+    "upgradeStatusTrial": "2-day trial active",
+    "upgradeStatusExpired": "Trial ended",
+    "upgradeStatusFree": "Free plan",
+    "upgradeCaption": "{{status}} - $5/month",
+    "upgradeOpenFailed": "Could not start checkout. Try again from Uttr in a moment."
   },
   "onboarding": {
     "subtitle": "Để bắt đầu, hãy chọn một mô hình chuyển đổi giọng nói",
@@ -100,6 +110,10 @@
       "errors": {
         "checkFailed": "Không thể kiểm tra quyền. Vui lòng thử lại.",
         "requestFailed": "Không thể yêu cầu quyền. Vui lòng thử lại."
+      },
+      "screenRecording": {
+        "title": "Screen Recording Access",
+        "description": "Only needed for full-system recording later. Microphone-only transcription works without it."
       }
     }
   },
@@ -236,7 +250,8 @@
         "statusCheckFailed": "Uttr could not check full-system audio support right now.",
         "unsupportedDescription": "This feature is available only on macOS 13 or later.",
         "permissionRequired": "Screen Recording access is required before this can be enabled. Microphone access alone is not enough.",
-        "pendingDescription": "{{reason}} Microphone access is handled separately. Uttr will retry automatically when this window regains focus."
+        "pendingDescription": "{{reason}} Microphone access is handled separately. Uttr will retry automatically when this window regains focus.",
+        "shortcutLabel": "Shortcut"
       }
     },
     "advanced": {
@@ -400,6 +415,10 @@
         "cancel": "Hủy",
         "selectToEdit": "Chọn một prompt ở trên để xem và chỉnh sửa chi tiết.",
         "createFirst": "Nhấn 'Tạo Prompt mới' ở trên để tạo prompt xử lý sau đầu tiên của bạn."
+      },
+      "systemPrompt": {
+        "save": "Save",
+        "cancel": "Cancel"
       }
     },
     "history": {
@@ -485,6 +504,11 @@
       "pasteDelay": {
         "title": "Độ trễ dán",
         "description": "Độ trễ trước khi gửi phím dán (tính bằng mili giây). Tăng nếu văn bản sai đang được dán."
+      },
+      "planSimulation": {
+        "title": "Plan simulation",
+        "description": "Force the local access state for testing locked and paid UI.",
+        "currentAccess": "Current access: {{currentLabel}}"
       }
     },
     "about": {
@@ -526,7 +550,37 @@
         "description": "Bắt buộc cho các mô hình phiên âm đám mây của Groq. Khóa này được dùng chung với cài đặt nhà cung cấp hậu xử lý.",
         "placeholder": "gsk_..."
       },
-      "autosave": "Tự động lưu khi bạn rời khỏi trường."
+      "autosave": "Tự động lưu khi bạn rời khỏi trường.",
+      "validation": {
+        "unknown": "Not validated",
+        "valid": "Validated",
+        "invalid": "Invalid"
+      }
+    },
+    "byok": {
+      "eyebrow": "Hidden access",
+      "title": "BYOK controls",
+      "description": "Manage the optional Groq Bring Your Own Key path. The key is stored securely and only used when BYOK is enabled and validated.",
+      "status": "Status",
+      "secretStored": "Secret stored in Stronghold",
+      "noSecret": "No stored secret",
+      "enableLabel": "Enable BYOK",
+      "enableDescription": "Use the stored Groq key for direct routing only after the key validates successfully.",
+      "enableGuard": "Save and validate a Groq key before enabling direct BYOK routing.",
+      "save": "Save key",
+      "validate": "Validate key",
+      "validateFailed": "Failed to validate the Groq key.",
+      "clear": "Clear key",
+      "unlocked": "BYOK unlocked",
+      "groq": {
+        "sectionLabel": "Groq BYOK",
+        "title": "Direct Groq routing",
+        "description": "Unlock the key entry, save the secret, validate it, and then enable BYOK to bypass subscription gating when the key is valid.",
+        "keyLabel": "Groq API key",
+        "stored": "Secret stored in Stronghold",
+        "placeholder": "gsk_...",
+        "storageNote": "The key is not shown after saving. Replace it here, or clear it to remove the stored secret."
+      }
     }
   },
   "footer": {
@@ -582,6 +636,13 @@
   },
   "overlay": {
     "transcribing": "Đang chuyển đổi...",
-    "processing": "Đang xử lý..."
+    "processing": "Đang xử lý...",
+    "noInputTitle": "No input detected",
+    "noInputDescription": "Check your microphone settings.",
+    "fullSystemProgress": {
+      "copy": "Copy",
+      "view": "View",
+      "exit": "Exit"
+    }
   }
 }

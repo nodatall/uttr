@@ -35,45 +35,47 @@
   --color-galaxy-blue: var(--galaxy-blue);
 }
 
-* {
-  box-sizing: border-box;
-}
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
 
-html,
-body {
-  min-height: 100%;
-  scroll-behavior: smooth;
-}
+  html,
+  body {
+    min-height: 100%;
+    scroll-behavior: smooth;
+  }
 
-body {
-  margin: 0;
-  background:
-    radial-gradient(circle at 20% 15%, rgba(182, 134, 255, 0.2), transparent 38%),
-    radial-gradient(circle at 84% 80%, rgba(107, 184, 255, 0.14), transparent 36%),
-    linear-gradient(180deg, #060810 0%, #04050a 100%);
-  color: var(--foreground);
-  font-family: var(--font-display), "Space Grotesk", sans-serif;
-}
+  body {
+    margin: 0;
+    background:
+      radial-gradient(circle at 20% 15%, rgba(182, 134, 255, 0.2), transparent 38%),
+      radial-gradient(circle at 84% 80%, rgba(107, 184, 255, 0.14), transparent 36%),
+      linear-gradient(180deg, #060810 0%, #04050a 100%);
+    color: var(--foreground);
+    font-family: var(--font-display), "Space Grotesk", sans-serif;
+  }
 
-a {
-  color: inherit;
-  cursor: pointer;
-  text-decoration: none;
-}
+  a {
+    color: inherit;
+    cursor: pointer;
+    text-decoration: none;
+  }
 
-button:not(:disabled),
-[role="button"]:not([aria-disabled="true"]) {
-  cursor: pointer;
-}
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]) {
+    cursor: pointer;
+  }
 
-button:disabled,
-[role="button"][aria-disabled="true"] {
-  cursor: not-allowed;
-}
+  button:disabled,
+  [role="button"][aria-disabled="true"] {
+    cursor: not-allowed;
+  }
 
-::selection {
-  background: rgba(246, 166, 218, 0.45);
-  color: #fff;
+  ::selection {
+    background: rgba(246, 166, 218, 0.45);
+    color: #fff;
+  }
 }
 
 .glass-panel {
