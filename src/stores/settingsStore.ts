@@ -38,6 +38,7 @@ interface SettingsStore {
 
   // Actions
   initialize: () => Promise<void>;
+  loadInstallAccessSnapshot: () => Promise<void>;
   loadDefaultSettings: () => Promise<void>;
   updateSetting: <K extends keyof Settings>(
     key: K,
@@ -229,7 +230,7 @@ export const useSettingsStore = create<SettingsStore>()(
       }
     },
 
-    refreshInstallAccess: async () => {
+    loadInstallAccessSnapshot: async () => {
       try {
         const testState = getBrowserE2ETestState();
         if (testState?.installAccess) {
@@ -248,6 +249,28 @@ export const useSettingsStore = create<SettingsStore>()(
         }
       } catch (error) {
         console.error("Failed to load install access snapshot:", error);
+      }
+    },
+
+    refreshInstallAccess: async () => {
+      try {
+        const testState = getBrowserE2ETestState();
+        if (testState?.installAccess) {
+          set({ installAccess: testState.installAccess });
+          return;
+        }
+
+        const result = await commands.refreshInstallEntitlement();
+        if (result.status === "ok") {
+          set({ installAccess: result.data });
+          return;
+        }
+
+        console.error("Failed to refresh install entitlement:", result.error);
+        await get().loadInstallAccessSnapshot();
+      } catch (error) {
+        console.error("Failed to refresh install entitlement:", error);
+        await get().loadInstallAccessSnapshot();
       }
     },
 
@@ -638,7 +661,13 @@ export const useSettingsStore = create<SettingsStore>()(
 
     // Initialize everything
     initialize: async () => {
-      const { refreshSettings, checkCustomSounds, loadDefaultSettings } = get();
+      const {
+        refreshSettings,
+        checkCustomSounds,
+        loadDefaultSettings,
+        loadInstallAccessSnapshot,
+        refreshInstallAccess,
+      } = get();
 
       if (!installAccessChangedListener && typeof window !== "undefined") {
         installAccessChangedListener = listen<InstallAccessSnapshot>(
@@ -656,9 +685,11 @@ export const useSettingsStore = create<SettingsStore>()(
       await Promise.all([
         loadDefaultSettings(),
         refreshSettings(),
-        get().refreshInstallAccess(),
+        loadInstallAccessSnapshot(),
         checkCustomSounds(),
       ]);
+
+      void refreshInstallAccess();
     },
   })),
 );

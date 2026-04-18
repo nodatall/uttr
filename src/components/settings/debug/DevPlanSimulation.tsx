@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { useTranslation } from "react-i18next";
 import type { InstallAccessSnapshot } from "@/bindings";
 import { useSettings } from "@/hooks/useSettings";
 import { SettingContainer } from "@/components/ui/SettingContainer";
@@ -16,6 +17,7 @@ const OPTIONS: Array<{ mode: DevPlanMode; label: string }> = [
 export const DevPlanSimulation: React.FC<{ grouped?: boolean }> = ({
   grouped = false,
 }) => {
+  const { t } = useTranslation();
   const { installAccess, refreshInstallAccess } = useSettings();
   const [selectedMode, setSelectedMode] = useState<DevPlanMode>("none");
   const [isUpdating, setIsUpdating] = useState(false);
@@ -65,13 +67,23 @@ export const DevPlanSimulation: React.FC<{ grouped?: boolean }> = ({
 
   return (
     <SettingContainer
-      title="Plan simulation"
-      description="Force the local access state for testing locked and paid UI."
+      title={t("settings.debug.planSimulation.title", {
+        defaultValue: "Plan simulation",
+      })}
+      description={t("settings.debug.planSimulation.description", {
+        defaultValue:
+          "Force the local access state for testing locked and paid UI.",
+      })}
       grouped={grouped}
       layout="stacked"
     >
       <div className="flex flex-col gap-3">
-        <p className="text-sm text-mid-gray">Current access: {currentLabel}</p>
+        <p className="text-sm text-mid-gray">
+          {t("settings.debug.planSimulation.currentAccess", {
+            defaultValue: "Current access: {{currentLabel}}",
+            currentLabel,
+          })}
+        </p>
         <div className="flex flex-wrap gap-2">
           {OPTIONS.map((option) => (
             <button

@@ -339,7 +339,9 @@ pub async fn transcribe_audio_file(
     transcription_manager: State<'_, Arc<TranscriptionManager>>,
     path: String,
 ) -> Result<FileTranscriptionResult, String> {
-    let access = get_install_access_snapshot(&app);
+    let access = refresh_entitlement_state(&app)
+        .await
+        .unwrap_or_else(|_| get_install_access_snapshot(&app));
     if !install_access_allows_premium_features(&access) {
         return Err(premium_feature_access_message().to_string());
     }

@@ -41,6 +41,7 @@ npm run dev
 The site expects these runtime variables:
 
 - `NEXT_PUBLIC_SITE_URL` - public site URL used for redirects and checkout success/cancel links.
+- `NEXT_PUBLIC_DOWNLOAD_URL` - public macOS download URL used by marketing and account CTAs.
 - `NEXT_PUBLIC_SUPPORT_EMAIL` - public support address shown in site UI.
 - `NEXT_PUBLIC_STRIPE_PRICE_ID_MONTHLY` - Stripe monthly subscription price ID.
 - `STRIPE_SECRET_KEY` - Stripe server secret for checkout and billing operations.

@@ -19,3 +19,13 @@ jobs:
 
       - name: Run ESLint
         run: bun run lint
+
+      - name: Install marketing site dependencies
+        working-directory: marketing-site
+        run: npm ci
+
+      - name: Run marketing site ESLint
+        run: npm --prefix marketing-site run lint
+
+      - name: Build marketing site
+        run: npm --prefix marketing-site run build

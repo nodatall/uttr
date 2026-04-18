@@ -15,7 +15,17 @@
     "history": "히스토리",
     "debug": "디버그",
     "about": "정보",
-    "apiKeys": "API 키"
+    "apiKeys": "API 키",
+    "manageSubscription": "Manage subscription",
+    "manageSubscriptionOpening": "Opening...",
+    "manageSubscriptionCaption": "Billing, invoices, cancellation",
+    "upgradeToPro": "Upgrade to Pro",
+    "upgradeOpening": "Opening...",
+    "upgradeStatusTrial": "2-day trial active",
+    "upgradeStatusExpired": "Trial ended",
+    "upgradeStatusFree": "Free plan",
+    "upgradeCaption": "{{status}} - $5/month",
+    "upgradeOpenFailed": "Could not start checkout. Try again from Uttr in a moment."
   },
   "onboarding": {
     "subtitle": "시작하려면 음성 인식 모델을 선택하세요",
@@ -100,6 +110,10 @@
       "errors": {
         "checkFailed": "권한 확인에 실패했습니다. 다시 시도해주세요.",
         "requestFailed": "권한 요청에 실패했습니다. 다시 시도해주세요."
+      },
+      "screenRecording": {
+        "title": "Screen Recording Access",
+        "description": "Only needed for full-system recording later. Microphone-only transcription works without it."
       }
     }
   },
@@ -212,7 +226,8 @@
         "statusCheckFailed": "Uttr could not check full-system audio support right now.",
         "unsupportedDescription": "This feature is available only on macOS 13 or later.",
         "permissionRequired": "Screen Recording access is required before this can be enabled. Microphone access alone is not enough.",
-        "pendingDescription": "{{reason}} Microphone access is handled separately. Uttr will retry automatically when this window regains focus."
+        "pendingDescription": "{{reason}} Microphone access is handled separately. Uttr will retry automatically when this window regains focus.",
+        "shortcutLabel": "Shortcut"
       }
     },
     "models": {
@@ -400,6 +415,10 @@
         "cancel": "취소",
         "selectToEdit": "세부 정보를 보고 편집하려면 위에서 프롬프트를 선택하세요.",
         "createFirst": "첫 번째 후처리 프롬프트를 만들려면 위의 '새 프롬프트 만들기'를 클릭하세요."
+      },
+      "systemPrompt": {
+        "save": "Save",
+        "cancel": "Cancel"
       }
     },
     "history": {
@@ -485,6 +504,11 @@
         "appData": "앱 데이터:",
         "models": "모델:",
         "settings": "설정:"
+      },
+      "planSimulation": {
+        "title": "Plan simulation",
+        "description": "Force the local access state for testing locked and paid UI.",
+        "currentAccess": "Current access: {{currentLabel}}"
       }
     },
     "about": {
@@ -526,7 +550,37 @@
         "description": "Groq 클라우드 전사 모델에 필요합니다. 이 키는 후처리 제공업체 설정과 공유됩니다.",
         "placeholder": "gsk_..."
       },
-      "autosave": "필드를 벗어나면 자동으로 저장됩니다."
+      "autosave": "필드를 벗어나면 자동으로 저장됩니다.",
+      "validation": {
+        "unknown": "Not validated",
+        "valid": "Validated",
+        "invalid": "Invalid"
+      }
+    },
+    "byok": {
+      "eyebrow": "Hidden access",
+      "title": "BYOK controls",
+      "description": "Manage the optional Groq Bring Your Own Key path. The key is stored securely and only used when BYOK is enabled and validated.",
+      "status": "Status",
+      "secretStored": "Secret stored in Stronghold",
+      "noSecret": "No stored secret",
+      "enableLabel": "Enable BYOK",
+      "enableDescription": "Use the stored Groq key for direct routing only after the key validates successfully.",
+      "enableGuard": "Save and validate a Groq key before enabling direct BYOK routing.",
+      "save": "Save key",
+      "validate": "Validate key",
+      "validateFailed": "Failed to validate the Groq key.",
+      "clear": "Clear key",
+      "unlocked": "BYOK unlocked",
+      "groq": {
+        "sectionLabel": "Groq BYOK",
+        "title": "Direct Groq routing",
+        "description": "Unlock the key entry, save the secret, validate it, and then enable BYOK to bypass subscription gating when the key is valid.",
+        "keyLabel": "Groq API key",
+        "stored": "Secret stored in Stronghold",
+        "placeholder": "gsk_...",
+        "storageNote": "The key is not shown after saving. Replace it here, or clear it to remove the stored secret."
+      }
     }
   },
   "footer": {
@@ -582,6 +636,13 @@
   },
   "overlay": {
     "transcribing": "텍스트로 변환 중...",
-    "processing": "처리 중..."
+    "processing": "처리 중...",
+    "noInputTitle": "No input detected",
+    "noInputDescription": "Check your microphone settings.",
+    "fullSystemProgress": {
+      "copy": "Copy",
+      "view": "View",
+      "exit": "Exit"
+    }
   }
 }

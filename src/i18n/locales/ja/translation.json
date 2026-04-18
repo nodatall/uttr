@@ -15,7 +15,17 @@
     "history": "履歴",
     "debug": "デバッグ",
     "about": "概要",
-    "apiKeys": "APIキー"
+    "apiKeys": "APIキー",
+    "manageSubscription": "Manage subscription",
+    "manageSubscriptionOpening": "Opening...",
+    "manageSubscriptionCaption": "Billing, invoices, cancellation",
+    "upgradeToPro": "Upgrade to Pro",
+    "upgradeOpening": "Opening...",
+    "upgradeStatusTrial": "2-day trial active",
+    "upgradeStatusExpired": "Trial ended",
+    "upgradeStatusFree": "Free plan",
+    "upgradeCaption": "{{status}} - $5/month",
+    "upgradeOpenFailed": "Could not start checkout. Try again from Uttr in a moment."
   },
   "onboarding": {
     "subtitle": "開始するには、文字起こしモデルを選択してください",
@@ -100,6 +110,10 @@
       "errors": {
         "checkFailed": "権限の確認に失敗しました。もう一度お試しください。",
         "requestFailed": "権限のリクエストに失敗しました。もう一度お試しください。"
+      },
+      "screenRecording": {
+        "title": "Screen Recording Access",
+        "description": "Only needed for full-system recording later. Microphone-only transcription works without it."
       }
     }
   },
@@ -236,7 +250,8 @@
         "statusCheckFailed": "Uttr could not check full-system audio support right now.",
         "unsupportedDescription": "This feature is available only on macOS 13 or later.",
         "permissionRequired": "Screen Recording access is required before this can be enabled. Microphone access alone is not enough.",
-        "pendingDescription": "{{reason}} Microphone access is handled separately. Uttr will retry automatically when this window regains focus."
+        "pendingDescription": "{{reason}} Microphone access is handled separately. Uttr will retry automatically when this window regains focus.",
+        "shortcutLabel": "Shortcut"
       }
     },
     "advanced": {
@@ -400,6 +415,10 @@
         "cancel": "キャンセル",
         "selectToEdit": "上からプロンプトを選択して、詳細を表示・編集します。",
         "createFirst": "上の「新しいプロンプトを作成」をクリックして、最初の後処理プロンプトを作成してください。"
+      },
+      "systemPrompt": {
+        "save": "Save",
+        "cancel": "Cancel"
       }
     },
     "history": {
@@ -485,6 +504,11 @@
       "pasteDelay": {
         "title": "貼り付け遅延",
         "description": "貼り付けキー送信前の遅延（ミリ秒）。間違ったテキストが貼り付けられる場合は増やしてください。"
+      },
+      "planSimulation": {
+        "title": "Plan simulation",
+        "description": "Force the local access state for testing locked and paid UI.",
+        "currentAccess": "Current access: {{currentLabel}}"
       }
     },
     "about": {
@@ -526,7 +550,37 @@
         "description": "Groqのクラウド文字起こしモデルに必要です。このキーは後処理プロバイダー設定と共有されます。",
         "placeholder": "gsk_..."
       },
-      "autosave": "フィールドを離れると自動的に保存されます。"
+      "autosave": "フィールドを離れると自動的に保存されます。",
+      "validation": {
+        "unknown": "Not validated",
+        "valid": "Validated",
+        "invalid": "Invalid"
+      }
+    },
+    "byok": {
+      "eyebrow": "Hidden access",
+      "title": "BYOK controls",
+      "description": "Manage the optional Groq Bring Your Own Key path. The key is stored securely and only used when BYOK is enabled and validated.",
+      "status": "Status",
+      "secretStored": "Secret stored in Stronghold",
+      "noSecret": "No stored secret",
+      "enableLabel": "Enable BYOK",
+      "enableDescription": "Use the stored Groq key for direct routing only after the key validates successfully.",
+      "enableGuard": "Save and validate a Groq key before enabling direct BYOK routing.",
+      "save": "Save key",
+      "validate": "Validate key",
+      "validateFailed": "Failed to validate the Groq key.",
+      "clear": "Clear key",
+      "unlocked": "BYOK unlocked",
+      "groq": {
+        "sectionLabel": "Groq BYOK",
+        "title": "Direct Groq routing",
+        "description": "Unlock the key entry, save the secret, validate it, and then enable BYOK to bypass subscription gating when the key is valid.",
+        "keyLabel": "Groq API key",
+        "stored": "Secret stored in Stronghold",
+        "placeholder": "gsk_...",
+        "storageNote": "The key is not shown after saving. Replace it here, or clear it to remove the stored secret."
+      }
     }
   },
   "footer": {
@@ -582,6 +636,13 @@
   },
   "overlay": {
     "transcribing": "文字起こし中...",
-    "processing": "処理中..."
+    "processing": "処理中...",
+    "noInputTitle": "No input detected",
+    "noInputDescription": "Check your microphone settings.",
+    "fullSystemProgress": {
+      "copy": "Copy",
+      "view": "View",
+      "exit": "Exit"
+    }
   }
 }

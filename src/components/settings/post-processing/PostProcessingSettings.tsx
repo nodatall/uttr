@@ -105,6 +105,7 @@ Preserve the human fingerprint. Remove the machine fingerprint. Translate into c
 Output is clean, standalone, ready for pipeline injection.`;
 
 const PostProcessingSettingsAdvancedComponent: React.FC = () => {
+  const { t } = useTranslation();
   const { getSetting, updateSetting, isUpdating } = useSettings();
 
   const timeoutSecs = (getSetting("post_process_timeout_secs") as number) ?? 60;
@@ -186,14 +187,18 @@ const PostProcessingSettingsAdvancedComponent: React.FC = () => {
                   size="md"
                   disabled={isUpdating("post_process_system_prompt")}
                 >
-                  Save
+                  {t("settings.postProcessing.systemPrompt.save", {
+                    defaultValue: "Save",
+                  })}
                 </Button>
                 <Button
                   onClick={() => setDraftSystemPrompt(systemPrompt)}
                   variant="secondary"
                   size="md"
                 >
-                  Cancel
+                  {t("settings.postProcessing.systemPrompt.cancel", {
+                    defaultValue: "Cancel",
+                  })}
                 </Button>
               </div>
             )}
