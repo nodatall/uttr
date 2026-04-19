@@ -20,6 +20,8 @@ const callOrder: string[] = [];
 let beginWebhookEventResult: "process" | "duplicate" | "in_progress" =
   "process";
 let upsertEntitlementStateShouldFail = false;
+let completeWebhookEventShouldFail = false;
+let sendTransactionalEmailShouldFail = false;
 let stripeWebhookEvent: StripeWebhookEvent = buildCompletedEvent();
 let stripeMock = buildStripeMock();
 
@@ -57,6 +59,9 @@ mock.module("@/lib/access", () => ({
 mock.module("@/lib/email", () => ({
   sendTransactionalEmail: async (params: Record<string, unknown>) => {
     callOrder.push("send_email");
+    if (sendTransactionalEmailShouldFail) {
+      throw new Error("email send failed");
+    }
     sendTransactionalEmailCalls.push(params);
   },
 }));
@@ -77,6 +82,9 @@ mock.module("@/lib/idempotency", () => ({
   },
   completeWebhookEvent: async (eventId: string) => {
     callOrder.push("complete_event");
+    if (completeWebhookEventShouldFail) {
+      throw new Error("completion write failed");
+    }
     completeWebhookEventCalls.push(eventId);
   },
   failWebhookEvent: async (eventId: string, error: unknown) => {
@@ -106,6 +114,8 @@ beforeEach(() => {
   callOrder.length = 0;
   beginWebhookEventResult = "process";
   upsertEntitlementStateShouldFail = false;
+  completeWebhookEventShouldFail = false;
+  sendTransactionalEmailShouldFail = false;
   stripeWebhookEvent = buildCompletedEvent();
   stripeMock = buildStripeMock();
 });
@@ -234,8 +244,8 @@ describe("stripe webhook pending checkout lifecycle", () => {
       "begin_event",
       "mark_pending_completed",
       "upsert_entitlement",
-      "send_email",
       "complete_event",
+      "send_email",
     ]);
     expect(markPendingCheckoutSessionCompletedCalls).toEqual([
       "cs_test_completed_123",
@@ -338,6 +348,52 @@ describe("stripe webhook pending checkout lifecycle", () => {
       "mark_pending_completed",
       "upsert_entitlement",
       "fail_event",
+    ]);
+  });
+
+  test("does not send post-commit email before completion bookkeeping succeeds", async () => {
+    stripeWebhookEvent = buildCompletedEvent();
+    completeWebhookEventShouldFail = true;
+
+    const response = await invokeWebhook();
+    const payload = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(400);
+    expect(payload).toEqual({ error: "Webhook processing failed." });
+    expect(beginWebhookEventCalls).toEqual([
+      ["evt_completed_123", "checkout.session.completed"],
+    ]);
+    expect(completeWebhookEventCalls).toHaveLength(0);
+    expect(failWebhookEventCalls).toEqual([
+      ["evt_completed_123", "completion write failed"],
+    ]);
+    expect(sendTransactionalEmailCalls).toHaveLength(0);
+    expect(callOrder).toEqual([
+      "begin_event",
+      "mark_pending_completed",
+      "upsert_entitlement",
+      "complete_event",
+      "fail_event",
+    ]);
+  });
+
+  test("logs post-commit email failures without reopening a processed event", async () => {
+    stripeWebhookEvent = buildCompletedEvent();
+    sendTransactionalEmailShouldFail = true;
+
+    const response = await invokeWebhook();
+    const payload = (await response.json()) as { received: boolean };
+
+    expect(response.status).toBe(200);
+    expect(payload).toEqual({ received: true });
+    expect(completeWebhookEventCalls).toEqual(["evt_completed_123"]);
+    expect(failWebhookEventCalls).toHaveLength(0);
+    expect(callOrder).toEqual([
+      "begin_event",
+      "mark_pending_completed",
+      "upsert_entitlement",
+      "complete_event",
+      "send_email",
     ]);
   });
 
