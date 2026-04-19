@@ -23,6 +23,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 - `marketing-site/lib/access/claim-eligibility.ts` - Claim token creation eligibility state machine.
 - `marketing-site/lib/access/supabase.ts` - Supabase REST persistence helpers.
 - `marketing-site/lib/access/types.ts` - Access, entitlement, and persistence row types.
+- `marketing-site/lib/idempotency.ts` - Durable webhook event processing state helper.
 - `marketing-site/lib/rate-limit.ts` - Existing in-memory rate-limit helper.
 - `marketing-site/supabase/migrations/` - Schema migrations for access/billing persistence.
 - `marketing-site/lib/*.test.ts` and `marketing-site/lib/access/*.test.ts` - Existing Bun unit test style.

@@ -12,18 +12,25 @@ const markPendingCheckoutSessionExpiredCalls: string[] = [];
 const upsertEntitlementStateCalls: Array<Record<string, unknown>> = [];
 const patchEntitlementByStripeSubscriptionIdCalls: Array<Record<string, unknown>> = [];
 const sendTransactionalEmailCalls: Array<Record<string, unknown>> = [];
-const registerWebhookEventCalls: Array<[string, string]> = [];
+const beginWebhookEventCalls: Array<[string, string]> = [];
+const completeWebhookEventCalls: string[] = [];
+const failWebhookEventCalls: Array<[string, string]> = [];
+const callOrder: string[] = [];
 
-let registerWebhookEventResult = true;
+let beginWebhookEventResult: "process" | "duplicate" | "in_progress" =
+  "process";
+let upsertEntitlementStateShouldFail = false;
 let stripeWebhookEvent: StripeWebhookEvent = buildCompletedEvent();
 let stripeMock = buildStripeMock();
 
 mock.module("@/lib/access", () => ({
   markPendingCheckoutSessionCompleted: async (stripeCheckoutSessionId: string) => {
+    callOrder.push("mark_pending_completed");
     markPendingCheckoutSessionCompletedCalls.push(stripeCheckoutSessionId);
     return null;
   },
   markPendingCheckoutSessionExpired: async (stripeCheckoutSessionId: string) => {
+    callOrder.push("mark_pending_expired");
     markPendingCheckoutSessionExpiredCalls.push(stripeCheckoutSessionId);
     return null;
   },
@@ -38,6 +45,10 @@ mock.module("@/lib/access", () => ({
     return null;
   },
   upsertEntitlementState: async (row: Record<string, unknown>) => {
+    callOrder.push("upsert_entitlement");
+    if (upsertEntitlementStateShouldFail) {
+      throw new Error("entitlement write failed");
+    }
     upsertEntitlementStateCalls.push(row);
     return row;
   },
@@ -45,6 +56,7 @@ mock.module("@/lib/access", () => ({
 
 mock.module("@/lib/email", () => ({
   sendTransactionalEmail: async (params: Record<string, unknown>) => {
+    callOrder.push("send_email");
     sendTransactionalEmailCalls.push(params);
   },
 }));
@@ -58,9 +70,21 @@ mock.module("@/lib/env", () => ({
 }));
 
 mock.module("@/lib/idempotency", () => ({
-  registerWebhookEvent: async (eventId: string, eventType: string) => {
-    registerWebhookEventCalls.push([eventId, eventType]);
-    return registerWebhookEventResult;
+  beginWebhookEvent: async (eventId: string, eventType: string) => {
+    callOrder.push("begin_event");
+    beginWebhookEventCalls.push([eventId, eventType]);
+    return beginWebhookEventResult;
+  },
+  completeWebhookEvent: async (eventId: string) => {
+    callOrder.push("complete_event");
+    completeWebhookEventCalls.push(eventId);
+  },
+  failWebhookEvent: async (eventId: string, error: unknown) => {
+    callOrder.push("fail_event");
+    failWebhookEventCalls.push([
+      eventId,
+      error instanceof Error ? error.message : "Unknown error",
+    ]);
   },
 }));
 
@@ -76,8 +100,12 @@ beforeEach(() => {
   upsertEntitlementStateCalls.length = 0;
   patchEntitlementByStripeSubscriptionIdCalls.length = 0;
   sendTransactionalEmailCalls.length = 0;
-  registerWebhookEventCalls.length = 0;
-  registerWebhookEventResult = true;
+  beginWebhookEventCalls.length = 0;
+  completeWebhookEventCalls.length = 0;
+  failWebhookEventCalls.length = 0;
+  callOrder.length = 0;
+  beginWebhookEventResult = "process";
+  upsertEntitlementStateShouldFail = false;
   stripeWebhookEvent = buildCompletedEvent();
   stripeMock = buildStripeMock();
 });
@@ -88,7 +116,10 @@ afterEach(() => {
   upsertEntitlementStateCalls.length = 0;
   patchEntitlementByStripeSubscriptionIdCalls.length = 0;
   sendTransactionalEmailCalls.length = 0;
-  registerWebhookEventCalls.length = 0;
+  beginWebhookEventCalls.length = 0;
+  completeWebhookEventCalls.length = 0;
+  failWebhookEventCalls.length = 0;
+  callOrder.length = 0;
 });
 
 function buildCompletedEvent(): StripeWebhookEvent {
@@ -194,8 +225,17 @@ describe("stripe webhook pending checkout lifecycle", () => {
 
     expect(response.status).toBe(200);
     expect(payload).toEqual({ received: true });
-    expect(registerWebhookEventCalls).toEqual([
+    expect(beginWebhookEventCalls).toEqual([
       ["evt_completed_123", "checkout.session.completed"],
+    ]);
+    expect(completeWebhookEventCalls).toEqual(["evt_completed_123"]);
+    expect(failWebhookEventCalls).toHaveLength(0);
+    expect(callOrder).toEqual([
+      "begin_event",
+      "mark_pending_completed",
+      "upsert_entitlement",
+      "send_email",
+      "complete_event",
     ]);
     expect(markPendingCheckoutSessionCompletedCalls).toEqual([
       "cs_test_completed_123",
@@ -222,9 +262,11 @@ describe("stripe webhook pending checkout lifecycle", () => {
 
     expect(response.status).toBe(200);
     expect(payload).toEqual({ received: true });
-    expect(registerWebhookEventCalls).toEqual([
+    expect(beginWebhookEventCalls).toEqual([
       ["evt_expired_123", "checkout.session.expired"],
     ]);
+    expect(completeWebhookEventCalls).toEqual(["evt_expired_123"]);
+    expect(failWebhookEventCalls).toHaveLength(0);
     expect(markPendingCheckoutSessionCompletedCalls).toEqual([]);
     expect(markPendingCheckoutSessionExpiredCalls).toEqual([
       "cs_test_expired_123",
@@ -234,7 +276,7 @@ describe("stripe webhook pending checkout lifecycle", () => {
   });
 
   test("keeps webhook idempotency intact for duplicate events", async () => {
-    registerWebhookEventResult = false;
+    beginWebhookEventResult = "duplicate";
     stripeWebhookEvent = buildCompletedEvent();
 
     const response = await invokeWebhook();
@@ -245,13 +287,58 @@ describe("stripe webhook pending checkout lifecycle", () => {
 
     expect(response.status).toBe(200);
     expect(payload).toEqual({ received: true, duplicate: true });
-    expect(registerWebhookEventCalls).toEqual([
+    expect(beginWebhookEventCalls).toEqual([
       ["evt_completed_123", "checkout.session.completed"],
     ]);
+    expect(completeWebhookEventCalls).toHaveLength(0);
+    expect(failWebhookEventCalls).toHaveLength(0);
     expect(markPendingCheckoutSessionCompletedCalls).toHaveLength(0);
     expect(markPendingCheckoutSessionExpiredCalls).toHaveLength(0);
     expect(upsertEntitlementStateCalls).toHaveLength(0);
     expect(sendTransactionalEmailCalls).toHaveLength(0);
+  });
+
+  test("asks Stripe to retry concurrent deliveries that are still processing", async () => {
+    beginWebhookEventResult = "in_progress";
+    stripeWebhookEvent = buildCompletedEvent();
+
+    const response = await invokeWebhook();
+    const payload = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(409);
+    expect(payload).toEqual({ error: "Webhook event is already processing." });
+    expect(beginWebhookEventCalls).toEqual([
+      ["evt_completed_123", "checkout.session.completed"],
+    ]);
+    expect(completeWebhookEventCalls).toHaveLength(0);
+    expect(failWebhookEventCalls).toHaveLength(0);
+    expect(markPendingCheckoutSessionCompletedCalls).toHaveLength(0);
+    expect(upsertEntitlementStateCalls).toHaveLength(0);
+    expect(sendTransactionalEmailCalls).toHaveLength(0);
+  });
+
+  test("marks failed processing as retryable instead of permanently registering the event", async () => {
+    stripeWebhookEvent = buildCompletedEvent();
+    upsertEntitlementStateShouldFail = true;
+
+    const response = await invokeWebhook();
+    const payload = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(400);
+    expect(payload).toEqual({ error: "Webhook processing failed." });
+    expect(beginWebhookEventCalls).toEqual([
+      ["evt_completed_123", "checkout.session.completed"],
+    ]);
+    expect(completeWebhookEventCalls).toHaveLength(0);
+    expect(failWebhookEventCalls).toEqual([
+      ["evt_completed_123", "entitlement write failed"],
+    ]);
+    expect(callOrder).toEqual([
+      "begin_event",
+      "mark_pending_completed",
+      "upsert_entitlement",
+      "fail_event",
+    ]);
   });
 
   test("returns success for unhandled events after idempotency registration", async () => {
@@ -262,9 +349,11 @@ describe("stripe webhook pending checkout lifecycle", () => {
 
     expect(response.status).toBe(200);
     expect(payload).toEqual({ received: true });
-    expect(registerWebhookEventCalls).toEqual([
+    expect(beginWebhookEventCalls).toEqual([
       ["evt_unknown_123", "customer.subscription.created"],
     ]);
+    expect(completeWebhookEventCalls).toEqual(["evt_unknown_123"]);
+    expect(failWebhookEventCalls).toHaveLength(0);
     expect(markPendingCheckoutSessionCompletedCalls).toHaveLength(0);
     expect(markPendingCheckoutSessionExpiredCalls).toHaveLength(0);
     expect(upsertEntitlementStateCalls).toHaveLength(0);

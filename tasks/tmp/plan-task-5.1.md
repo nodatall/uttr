@@ -23,6 +23,7 @@ Run final validation and local probes for the billing recovery hardening work, t
 
 - `marketing-site/app/api/checkout/route.ts`
 - `marketing-site/app/api/stripe/webhook/route.ts`
+- `marketing-site/lib/idempotency.ts`
 - `marketing-site/app/(site)/claim/claim-flow.tsx`
 - `marketing-site/app/api/trial/create-claim/route.ts`
 - `marketing-site/lib/checkout.ts`
@@ -61,7 +62,7 @@ No implementation code is expected in this slice. This is a verification/finaliz
 
 ## verification_result
 
-- `cd marketing-site && bun test` passed: 61 tests.
+- `cd marketing-site && bun test` passed: 65 tests after final review fixes.
 - `cd marketing-site && npm run lint` passed.
 - `cd marketing-site && npm run build` passed.
 - `bun run lint` passed.
@@ -69,6 +70,7 @@ No implementation code is expected in this slice. This is a verification/finaliz
 - `bun run check:translations` passed for all 16 non-English locales.
 - Focused API tests passed: `lib/checkout.test.ts`, `lib/access/claim-conversion-client.test.ts`, `app/api/trial/create-claim/route.test.ts`, and `app/api/stripe/webhook/route.test.ts`.
 - Local browser probe passed against `http://127.0.0.1:3211/claim?claim_token=probe-token&source=desktop`: desktop snapshot rendered account controls; mobile 390x844 screenshot rendered the same controls; console warning scan returned no warnings.
+- Final full-branch review found and fixes addressed two concurrency risks: webhook idempotency now records durable completion only after side effects succeed and marks failed/in-progress work retryable; checkout persistence failure no longer expires a deterministic Stripe session that another concurrent request may already have returned.
 
 ## residual_risk
 

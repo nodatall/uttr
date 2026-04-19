@@ -183,7 +183,7 @@ describe("checkout session helper", () => {
     });
   });
 
-  test("uses customer_email for first-time customers and fails safely when persistence fails", async () => {
+  test("uses customer_email for first-time customers and fails without expiring a shared idempotent session when persistence fails", async () => {
     let createCalls = 0;
     let expireCalls = 0;
     let capturedParams: unknown = null;
@@ -233,7 +233,7 @@ describe("checkout session helper", () => {
     ).rejects.toThrow("persistence failed");
 
     expect(createCalls).toBe(1);
-    expect(expireCalls).toBe(1);
+    expect(expireCalls).toBe(0);
     expect(capturedParams).toMatchObject({
       customer_email: "first@example.com",
     });
