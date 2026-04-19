@@ -57,7 +57,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - output: `marketing-site/supabase/migrations/`, `marketing-site/lib/access/types.ts`, `marketing-site/lib/access/supabase.ts`, focused tests
     - verify: `cd marketing-site && bun test`
     - done_when: helpers can find reusable open sessions, insert new pending sessions, enforce one open pending checkout per user/install context, and mark sessions completed/expired with mocked Supabase REST evidence.
-  - [ ] 2.2 Harden `/api/checkout` to reuse pending sessions, reuse Stripe customers, and create sessions with deterministic idempotency keys.
+  - [x] 2.2 Harden `/api/checkout` to reuse pending sessions, reuse Stripe customers, and create sessions with deterministic idempotency keys.
     - covers_prd: `FR-001`, `FR-003`, `FR-005`
     - covers_tdd: `TDR-003`, `TDR-004`, `TDR-005`, `TDR-010`, `TDR-011`
     - output: `marketing-site/app/api/checkout/route.ts`, `marketing-site/lib/stripe.ts` or route-local helpers, focused tests
