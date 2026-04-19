@@ -17,6 +17,10 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 - `marketing-site/app/api/trial/create-claim/route.ts` - Install-origin token creation endpoint.
 - `marketing-site/app/api/checkout/route.ts` - Stripe Checkout creation endpoint.
 - `marketing-site/app/api/stripe/webhook/route.ts` - Subscription and checkout webhook persistence.
+- `marketing-site/lib/checkout.ts` - Checkout session creation/reuse coordination.
+- `marketing-site/lib/access/claim-conversion.ts` - Server-side claim conversion outcome state machine.
+- `marketing-site/lib/access/claim-conversion-client.ts` - Browser claim conversion response gating.
+- `marketing-site/lib/access/claim-eligibility.ts` - Claim token creation eligibility state machine.
 - `marketing-site/lib/access/supabase.ts` - Supabase REST persistence helpers.
 - `marketing-site/lib/access/types.ts` - Access, entitlement, and persistence row types.
 - `marketing-site/lib/rate-limit.ts` - Existing in-memory rate-limit helper.
@@ -96,10 +100,10 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - verify: `cd marketing-site && bun test`
     - done_when: production mode no longer silently uses process-local memory, missing/unreachable durable storage returns a conservative retryable error, and tests cover durable-store success/failure plus local fallback.
 
-- [ ] 5.0 Final verification and production-path probes
+- [x] 5.0 Final verification and production-path probes
   - covers_prd: `FR-001`, `FR-002`, `FR-003`, `FR-004`, `FR-005`, `FR-006`, `FR-007`
   - covers_tdd: `TDR-001`, `TDR-002`, `TDR-003`, `TDR-004`, `TDR-005`, `TDR-006`, `TDR-007`, `TDR-008`, `TDR-009`, `TDR-010`, `TDR-011`
-  - [ ] 5.1 Run focused and broad validation, plus local browser/API probes for the changed user paths.
+  - [x] 5.1 Run focused and broad validation, plus local browser/API probes for the changed user paths.
     - covers_prd: `FR-001`, `FR-002`, `FR-003`, `FR-004`, `FR-005`, `FR-006`, `FR-007`
     - covers_tdd: `TDR-001`, `TDR-002`, `TDR-003`, `TDR-004`, `TDR-005`, `TDR-006`, `TDR-007`, `TDR-008`, `TDR-009`, `TDR-010`, `TDR-011`
     - output: validation evidence, preserved review/task artifacts as required by workflow
