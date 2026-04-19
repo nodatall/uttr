@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { registerWebhookEvent } from "./idempotency";
+import {
+  beginWebhookEvent,
+  completeWebhookEvent,
+  failWebhookEvent,
+} from "./idempotency";
 
 const originalEnv = {
   SUPABASE_URL: process.env.SUPABASE_URL,
@@ -23,34 +27,83 @@ afterEach(() => {
 });
 
 describe("webhook idempotency", () => {
-  test("returns false when the webhook event already exists", async () => {
-    globalThis.fetch = async () => new Response("", { status: 409 });
+  test("begins webhook processing through the durable state RPC", async () => {
+    let requestUrl = "";
+    let requestBody = "";
+    globalThis.fetch = async (input, init) => {
+      requestUrl = String(input);
+      requestBody = String(init?.body ?? "");
+      return Response.json("process");
+    };
 
-    await expect(registerWebhookEvent("evt_123", "invoice.paid")).resolves.toBe(
-      false,
+    await expect(
+      beginWebhookEvent("evt_456", "checkout.session.completed"),
+    ).resolves.toBe("process");
+    expect(requestUrl).toBe(
+      "https://supabase.test/rest/v1/rpc/begin_stripe_webhook_event",
+    );
+    expect(JSON.parse(requestBody)).toEqual({
+      p_event_id: "evt_456",
+      p_event_type: "checkout.session.completed",
+    });
+  });
+
+  test("parses duplicate and in-progress begin states", async () => {
+    globalThis.fetch = async () =>
+      Response.json([{ begin_stripe_webhook_event: "duplicate" }]);
+    await expect(beginWebhookEvent("evt_123", "invoice.paid")).resolves.toBe(
+      "duplicate",
+    );
+
+    globalThis.fetch = async () => Response.json("in_progress");
+    await expect(beginWebhookEvent("evt_124", "invoice.paid")).resolves.toBe(
+      "in_progress",
     );
   });
 
-  test("returns true when the webhook event is recorded", async () => {
+  test("completes webhook processing only after side effects finish", async () => {
+    let requestUrl = "";
     let requestBody = "";
-    globalThis.fetch = async (_input, init) => {
+    globalThis.fetch = async (input, init) => {
+      requestUrl = String(input);
       requestBody = String(init?.body ?? "");
-      return new Response("", { status: 201 });
+      return new Response(null, { status: 204 });
     };
 
-    await expect(registerWebhookEvent("evt_456", "checkout.session.completed")).resolves.toBe(
-      true,
+    await expect(completeWebhookEvent("evt_done")).resolves.toBeUndefined();
+    expect(requestUrl).toBe(
+      "https://supabase.test/rest/v1/rpc/complete_stripe_webhook_event",
     );
-    expect(requestBody).toContain("evt_456");
-    expect(requestBody).toContain("checkout.session.completed");
+    expect(JSON.parse(requestBody)).toEqual({ p_event_id: "evt_done" });
+  });
+
+  test("marks failed webhook processing so Stripe retries are not suppressed", async () => {
+    let requestUrl = "";
+    let requestBody = "";
+    globalThis.fetch = async (input, init) => {
+      requestUrl = String(input);
+      requestBody = String(init?.body ?? "");
+      return new Response(null, { status: 204 });
+    };
+
+    await expect(
+      failWebhookEvent("evt_failed", new Error("entitlement write failed")),
+    ).resolves.toBeUndefined();
+    expect(requestUrl).toBe(
+      "https://supabase.test/rest/v1/rpc/fail_stripe_webhook_event",
+    );
+    expect(JSON.parse(requestBody)).toEqual({
+      p_event_id: "evt_failed",
+      p_error: "entitlement write failed",
+    });
   });
 
   test("throws for unexpected persistence failures", async () => {
     globalThis.fetch = async () =>
       new Response("nope", { status: 500, statusText: "Internal Error" });
 
-    await expect(registerWebhookEvent("evt_789", "customer.subscription.deleted")).rejects.toThrow(
-      "Failed to register webhook event evt_789 (500): nope",
+    await expect(beginWebhookEvent("evt_789", "invoice.paid")).rejects.toThrow(
+      "Supabase RPC begin_stripe_webhook_event failed (500): nope",
     );
   });
 });

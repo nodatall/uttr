@@ -143,10 +143,6 @@ export async function createOrReuseCheckoutSession(params: {
       };
     }
 
-    await params.stripe.checkout.sessions.expire(checkoutSession.id).catch(() => {
-      // Best effort: the caller still fails rather than returning an untracked session.
-    });
-
     throw error instanceof Error
       ? error
       : new Error("Could not persist checkout session.");

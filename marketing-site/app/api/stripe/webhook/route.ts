@@ -9,7 +9,11 @@ import {
   type EntitlementState,
 } from "@/lib/access";
 import { readEmailConfig, readWebhookConfig } from "@/lib/env";
-import { registerWebhookEvent } from "@/lib/idempotency";
+import {
+  beginWebhookEvent,
+  completeWebhookEvent,
+  failWebhookEvent,
+} from "@/lib/idempotency";
 import { getStripe } from "@/lib/stripe";
 
 export const runtime = "nodejs";
@@ -290,6 +294,8 @@ export async function POST(request: Request) {
     );
   }
 
+  let processingEventId: string | null = null;
+
   try {
     const { stripeSecretKey, webhookSecret } = readWebhookConfig();
     const stripe = getStripe(stripeSecretKey);
@@ -297,9 +303,18 @@ export async function POST(request: Request) {
 
     const event = stripe.webhooks.constructEvent(payload, signature, webhookSecret);
 
-    if (!(await registerWebhookEvent(event.id, event.type))) {
+    const beginStatus = await beginWebhookEvent(event.id, event.type);
+    if (beginStatus === "duplicate") {
       return NextResponse.json({ received: true, duplicate: true });
     }
+    if (beginStatus === "in_progress") {
+      return NextResponse.json(
+        { error: "Webhook event is already processing." },
+        { status: 409 },
+      );
+    }
+
+    processingEventId = event.id;
 
     switch (event.type) {
       case "checkout.session.completed": {
@@ -340,6 +355,8 @@ export async function POST(request: Request) {
         break;
     }
 
+    await completeWebhookEvent(event.id);
+
     console.info(
       JSON.stringify({
         level: "info",
@@ -351,6 +368,20 @@ export async function POST(request: Request) {
 
     return NextResponse.json({ received: true });
   } catch (error) {
+    if (processingEventId) {
+      await failWebhookEvent(processingEventId, error).catch((failError) => {
+        console.error(
+          JSON.stringify({
+            level: "error",
+            event: "stripe_webhook_mark_failed_failed",
+            stripeEventId: processingEventId,
+            message:
+              failError instanceof Error ? failError.message : "Unknown error",
+          }),
+        );
+      });
+    }
+
     console.error(
       JSON.stringify({
         level: "error",
