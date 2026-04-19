@@ -184,7 +184,12 @@ async function handleCheckoutCompleted(
   stripe: Stripe,
 ) {
   await syncEntitlementFromCheckout(session, stripe);
+}
 
+async function sendCheckoutCompletedEmail(
+  session: Stripe.Checkout.Session,
+  stripe: Stripe,
+) {
   const email = session.customer_details?.email ||
     (await resolveCustomerEmail(stripe, session.customer));
 
@@ -200,6 +205,8 @@ async function handleCheckoutCompleted(
     html: `<p>Thanks for subscribing to Uttr Pro.</p><p>Your subscription is active at <strong>$5/month</strong>.</p><p>If you need anything, reply here or email <a href=\"mailto:${supportEmail}\">${supportEmail}</a>.</p>`,
   });
 }
+
+type PostCommitSideEffect = () => Promise<void>;
 
 async function handleInvoicePaid(invoice: Stripe.Invoice, stripe: Stripe) {
   const email =
@@ -233,12 +240,10 @@ async function handleInvoiceFailed(invoice: Stripe.Invoice, stripe: Stripe) {
   });
 }
 
-async function handleSubscriptionDeleted(
+async function sendSubscriptionDeletedEmail(
   subscription: Stripe.Subscription,
   stripe: Stripe,
 ) {
-  await syncEntitlementFromSubscription(subscription);
-
   const email = await resolveCustomerEmail(stripe, subscription.customer);
 
   if (!email) {
@@ -253,13 +258,11 @@ async function handleSubscriptionDeleted(
   });
 }
 
-async function handleSubscriptionUpdated(
+async function sendSubscriptionUpdatedEmail(
   event: Stripe.Event,
   subscription: Stripe.Subscription,
   stripe: Stripe,
 ) {
-  await syncEntitlementFromSubscription(subscription);
-
   const priorStatus =
     (event.data.previous_attributes as { status?: Stripe.Subscription.Status })
       ?.status || null;
@@ -315,12 +318,14 @@ export async function POST(request: Request) {
     }
 
     processingEventId = event.id;
+    let postCommitSideEffect: PostCommitSideEffect | null = null;
 
     switch (event.type) {
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
         await markPendingCheckoutSessionCompleted(session.id);
         await handleCheckoutCompleted(session, stripe);
+        postCommitSideEffect = () => sendCheckoutCompletedEmail(session, stripe);
         break;
       }
       case "checkout.session.expired": {
@@ -329,26 +334,27 @@ export async function POST(request: Request) {
         break;
       }
       case "invoice.paid": {
-        await handleInvoicePaid(event.data.object as Stripe.Invoice, stripe);
+        const invoice = event.data.object as Stripe.Invoice;
+        postCommitSideEffect = () => handleInvoicePaid(invoice, stripe);
         break;
       }
       case "invoice.payment_failed": {
-        await handleInvoiceFailed(event.data.object as Stripe.Invoice, stripe);
+        const invoice = event.data.object as Stripe.Invoice;
+        postCommitSideEffect = () => handleInvoiceFailed(invoice, stripe);
         break;
       }
       case "customer.subscription.deleted": {
-        await handleSubscriptionDeleted(
-          event.data.object as Stripe.Subscription,
-          stripe,
-        );
+        const subscription = event.data.object as Stripe.Subscription;
+        await syncEntitlementFromSubscription(subscription);
+        postCommitSideEffect = () =>
+          sendSubscriptionDeletedEmail(subscription, stripe);
         break;
       }
       case "customer.subscription.updated": {
-        await handleSubscriptionUpdated(
-          event,
-          event.data.object as Stripe.Subscription,
-          stripe,
-        );
+        const subscription = event.data.object as Stripe.Subscription;
+        await syncEntitlementFromSubscription(subscription);
+        postCommitSideEffect = () =>
+          sendSubscriptionUpdatedEmail(event, subscription, stripe);
         break;
       }
       default:
@@ -356,6 +362,21 @@ export async function POST(request: Request) {
     }
 
     await completeWebhookEvent(event.id);
+    processingEventId = null;
+
+    if (postCommitSideEffect) {
+      await postCommitSideEffect().catch((error) => {
+        console.error(
+          JSON.stringify({
+            level: "error",
+            event: "stripe_webhook_post_commit_side_effect_failed",
+            stripeEventId: event.id,
+            stripeType: event.type,
+            message: error instanceof Error ? error.message : "Unknown error",
+          }),
+        );
+      });
+    }
 
     console.info(
       JSON.stringify({
