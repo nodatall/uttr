@@ -11,8 +11,9 @@ import {
   type ClaimTokenPayload,
   verifyClaimToken,
 } from "@/lib/access";
+import { createOrReuseCheckoutSession } from "@/lib/checkout";
 import { readCheckoutConfig } from "@/lib/env";
-import { buildCheckoutMetadata, getStripe } from "@/lib/stripe";
+import { getStripe } from "@/lib/stripe";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -159,38 +160,19 @@ export async function POST(request: Request) {
     }
 
     const claimContext = await resolveClaimContext(claimToken, currentUser.id);
-
-    const checkoutSession = await stripe.checkout.sessions.create({
-      mode: "subscription",
-      line_items: [{ price: monthlyPriceId, quantity: 1 }],
-      success_url: `${siteUrl}/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `${siteUrl}/cancel`,
-      customer_email: currentUser.email,
-      client_reference_id: currentUser.id,
-      metadata: buildCheckoutMetadata({
-        source,
+    const checkoutSession = await createOrReuseCheckoutSession({
+      stripe,
+      context: {
         userId: currentUser.id,
-        anonymousTrialId: claimContext?.anonymousTrialId,
-        installId: claimContext?.installId,
-      }),
-      subscription_data: {
-        metadata: buildCheckoutMetadata({
-          source,
-          userId: currentUser.id,
-          anonymousTrialId: claimContext?.anonymousTrialId,
-          installId: claimContext?.installId,
-        }),
+        anonymousTrialId: claimContext.anonymousTrialId,
+        installId: claimContext.installId,
+        monthlyPriceId,
+        source,
+        siteUrl,
+        userEmail: currentUser.email,
+        stripeCustomerId: entitlement?.stripe_customer_id ?? null,
       },
-      billing_address_collection: "auto",
-      allow_promotion_codes: true,
     });
-
-    if (!checkoutSession.url) {
-      return NextResponse.json(
-        { error: "Stripe did not return a checkout URL." },
-        { status: 500 },
-      );
-    }
 
     return NextResponse.json({
       url: checkoutSession.url,
