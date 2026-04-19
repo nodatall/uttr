@@ -1,6 +1,7 @@
 import { readSupabaseConfig } from "@/lib/env";
 import type {
   AnonymousTrialRow,
+  CheckoutSessionRow,
   EntitlementRow,
   SupabaseUser,
   TrialClaimRow,
@@ -59,6 +60,44 @@ function firstOrNull<T>(rows: T[]) {
 
 async function parseJsonObject<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
+}
+
+export function buildPendingCheckoutSessionContextKey(params: {
+  userId: string;
+  anonymousTrialId: string | null;
+  installId: string | null;
+}) {
+  return [
+    `user_id:${params.userId}`,
+    `anonymous_trial_id:${params.anonymousTrialId ?? "null"}`,
+    `install_id:${params.installId ?? "null"}`,
+  ].join("|");
+}
+
+function isReusableCheckoutSession(row: CheckoutSessionRow) {
+  return row.status === "open" && new Date(row.expires_at).getTime() > Date.now();
+}
+
+function buildPendingCheckoutSessionRow(params: {
+  userId: string;
+  anonymousTrialId: string | null;
+  installId: string | null;
+  stripeCheckoutSessionId: string;
+  stripeCustomerId: string | null;
+  checkoutUrl: string;
+  expiresAt: string;
+}) {
+  return {
+    checkout_context_key: buildPendingCheckoutSessionContextKey(params),
+    user_id: params.userId,
+    anonymous_trial_id: params.anonymousTrialId,
+    install_id: params.installId,
+    stripe_checkout_session_id: params.stripeCheckoutSessionId,
+    stripe_customer_id: params.stripeCustomerId,
+    status: "open" as const,
+    checkout_url: params.checkoutUrl,
+    expires_at: params.expiresAt,
+  };
 }
 
 export async function fetchAnonymousTrialByInstallId(
@@ -290,6 +329,98 @@ export async function upsertEntitlementState(
   );
 
   return firstOrNull((await parseJsonArray(response)) as EntitlementRow[]);
+}
+
+export async function fetchReusableOpenCheckoutSession(params: {
+  userId: string;
+  anonymousTrialId: string | null;
+  installId: string | null;
+}) {
+  const response = await supabaseRequest(
+    "checkout_sessions",
+    { method: "GET" },
+    {
+      select: "*",
+      checkout_context_key: `eq.${buildPendingCheckoutSessionContextKey(params)}`,
+      status: "eq.open",
+      order: "updated_at.desc",
+      limit: "10",
+    },
+  );
+
+  return (
+    (await parseJsonArray(response))
+      .map((row) => row as CheckoutSessionRow)
+      .find((row) => isReusableCheckoutSession(row)) ?? null
+  );
+}
+
+export async function insertPendingCheckoutSession(params: {
+  userId: string;
+  anonymousTrialId: string | null;
+  installId: string | null;
+  stripeCheckoutSessionId: string;
+  stripeCustomerId: string | null;
+  checkoutUrl: string;
+  expiresAt: string;
+}) {
+  const response = await supabaseRequest(
+    "checkout_sessions",
+    {
+      method: "POST",
+      body: JSON.stringify(buildPendingCheckoutSessionRow(params)),
+      headers: {
+        prefer: "return=representation",
+      },
+    },
+    {
+      select: "*",
+    },
+  );
+
+  return firstOrNull(
+    (await parseJsonArray(response)) as CheckoutSessionRow[],
+  );
+}
+
+async function patchCheckoutSessionByStripeSessionId(
+  stripeCheckoutSessionId: string,
+  patch: Pick<CheckoutSessionRow, "status">,
+) {
+  const response = await supabaseRequest(
+    "checkout_sessions",
+    {
+      method: "PATCH",
+      body: JSON.stringify(patch),
+      headers: {
+        prefer: "return=representation",
+      },
+    },
+    {
+      stripe_checkout_session_id: `eq.${stripeCheckoutSessionId}`,
+      select: "*",
+    },
+  );
+
+  return firstOrNull(
+    (await parseJsonArray(response)) as CheckoutSessionRow[],
+  );
+}
+
+export async function markPendingCheckoutSessionCompleted(
+  stripeCheckoutSessionId: string,
+) {
+  return patchCheckoutSessionByStripeSessionId(stripeCheckoutSessionId, {
+    status: "completed",
+  });
+}
+
+export async function markPendingCheckoutSessionExpired(
+  stripeCheckoutSessionId: string,
+) {
+  return patchCheckoutSessionByStripeSessionId(stripeCheckoutSessionId, {
+    status: "expired",
+  });
 }
 
 export async function patchEntitlementByStripeSubscriptionId(

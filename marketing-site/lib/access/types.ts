@@ -13,6 +13,14 @@ export const entitlementStates = [
 ] as const;
 export type EntitlementState = (typeof entitlementStates)[number];
 
+export const checkoutSessionStatuses = [
+  "open",
+  "completed",
+  "expired",
+] as const;
+export type CheckoutSessionStatus =
+  (typeof checkoutSessionStatuses)[number];
+
 export const usageEventSources = [
   "cloud_default",
   "cloud_byok",
@@ -57,6 +65,21 @@ export interface EntitlementRow {
   stripe_customer_id: string | null;
   stripe_subscription_id: string | null;
   current_period_ends_at: string | null;
+  updated_at: string;
+}
+
+export interface CheckoutSessionRow {
+  id: string;
+  checkout_context_key: string;
+  user_id: string;
+  anonymous_trial_id: string | null;
+  install_id: string | null;
+  stripe_checkout_session_id: string;
+  stripe_customer_id: string | null;
+  status: CheckoutSessionStatus;
+  checkout_url: string;
+  expires_at: string;
+  created_at: string;
   updated_at: string;
 }
 
