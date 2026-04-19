@@ -86,10 +86,10 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - verify: `cd marketing-site && bun test && npm run lint`
     - done_when: claim flow proceeds only for fresh link, same-user retry, or already-entitled states and shows actionable errors for invalid/expired/wrong-user states.
 
-- [ ] 4.0 Make rate limiting production-durable
+- [x] 4.0 Make rate limiting production-durable
   - covers_prd: `FR-006`
   - covers_tdd: `TDR-008`, `TDR-009`
-  - [ ] 4.1 Add durable rate-limit storage and refactor route callers to use it in production.
+  - [x] 4.1 Add durable rate-limit storage and refactor route callers to use it in production.
     - covers_prd: `FR-006`
     - covers_tdd: `TDR-008`, `TDR-009`
     - output: `marketing-site/lib/rate-limit.ts`, `marketing-site/app/api/trial/bootstrap/route.ts`, `marketing-site/app/api/trial/create-claim/route.ts`, `marketing-site/app/api/transcribe/cloud/route.ts`, migration/tests
