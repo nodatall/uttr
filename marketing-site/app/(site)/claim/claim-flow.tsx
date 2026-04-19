@@ -3,6 +3,10 @@
 import { createClient, type Session } from "@supabase/supabase-js";
 import { useEffect, useState } from "react";
 import { getDownloadUrl } from "@/lib/download";
+import {
+  resolveClaimConversionClientDecision,
+  type ClaimConversionClientPayload,
+} from "@/lib/access/claim-conversion-client";
 
 type AuthMode = "signin" | "signup";
 
@@ -19,13 +23,6 @@ const DEV_ACCOUNT = {
 } as const;
 
 const SHOW_DEV_ACCOUNT_SHORTCUT = process.env.NODE_ENV !== "production";
-
-async function readJsonError(response: Response) {
-  const payload = (await response.json().catch(() => ({}))) as {
-    error?: string;
-  };
-  return payload.error || "Request failed.";
-}
 
 async function continueCheckoutFlow({
   session,
@@ -49,9 +46,18 @@ async function continueCheckoutFlow({
       },
       body: JSON.stringify({ claim_token: initialClaimToken }),
     });
+    const linkPayload = (await linkResponse
+      .json()
+      .catch(() => ({}))) as ClaimConversionClientPayload;
+    const linkDecision = resolveClaimConversionClientDecision(linkPayload);
 
-    if (!linkResponse.ok && linkResponse.status !== 409) {
-      throw new Error(await readJsonError(linkResponse));
+    if (linkDecision.kind === "redirect") {
+      window.location.assign(linkDecision.returnUrl);
+      return;
+    }
+
+    if (linkDecision.kind === "error") {
+      throw new Error(linkDecision.message);
     }
   }
 
@@ -74,13 +80,13 @@ async function continueCheckoutFlow({
     url?: string;
   };
 
-  if (!checkoutResponse.ok) {
-    throw new Error(payload.error || "Unable to start checkout right now.");
-  }
-
   if (payload.already_entitled && payload.return_url) {
     window.location.assign(payload.return_url);
     return;
+  }
+
+  if (!checkoutResponse.ok) {
+    throw new Error(payload.error || "Unable to start checkout right now.");
   }
 
   if (!payload.url) {

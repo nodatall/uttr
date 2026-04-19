@@ -70,7 +70,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - verify: `cd marketing-site && bun test`
     - done_when: completed checkout marks the matching pending row completed and expired sessions can no longer be reused.
 
-- [ ] 3.0 Make claim conversion and linked retry semantics explicit
+- [x] 3.0 Make claim conversion and linked retry semantics explicit
   - covers_prd: `FR-001`, `FR-002`, `FR-004`
   - covers_tdd: `TDR-002`, `TDR-007`, `TDR-010`
   - [x] 3.1 Update claim creation and conversion so linked same-user retry is allowed only through an install-origin token, while wrong-user, expired, and invalid token states stop with typed responses.
@@ -79,7 +79,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - output: `marketing-site/lib/access/claim-eligibility.ts`, `marketing-site/app/api/trial/create-claim/route.ts`, `marketing-site/app/api/auth/convert-anonymous/route.ts`, tests
     - verify: `cd marketing-site && bun test`
     - done_when: linked non-active installs can mint an install-origin retry token, active/subscribed linked installs cannot mint unnecessary checkout tokens, linked same-user conversion proceeds with an explicit typed status, and all unsafe 409 cases remain blocked.
-  - [ ] 3.2 Update the claim page to branch on typed conversion results and avoid treating every 409 as checkout-safe.
+  - [x] 3.2 Update the claim page to branch on typed conversion results and avoid treating every 409 as checkout-safe.
     - covers_prd: `FR-004`, `FR-007`
     - covers_tdd: `TDR-007`
     - output: `marketing-site/app/(site)/claim/claim-flow.tsx`
