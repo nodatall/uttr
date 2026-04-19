@@ -51,7 +51,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 - [ ] 2.0 Persist and reuse checkout attempts
   - covers_prd: `FR-001`, `FR-003`, `FR-005`
   - covers_tdd: `TDR-003`, `TDR-004`, `TDR-005`, `TDR-006`, `TDR-011`
-  - [ ] 2.1 Add Supabase schema and helper functions for pending checkout sessions.
+  - [x] 2.1 Add Supabase schema and helper functions for pending checkout sessions.
     - covers_prd: `FR-003`
     - covers_tdd: `TDR-003`, `TDR-006`, `TDR-011`
     - output: `marketing-site/supabase/migrations/`, `marketing-site/lib/access/types.ts`, `marketing-site/lib/access/supabase.ts`, focused tests
