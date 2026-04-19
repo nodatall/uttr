@@ -11,6 +11,10 @@ import {
   type ClaimTokenPayload,
   verifyClaimToken,
 } from "@/lib/access";
+import {
+  resolveClaimConversionOutcome,
+  type ClaimConversionStatus,
+} from "@/lib/access/claim-conversion";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,12 +23,18 @@ const requestSchema = z.object({
   claim_token: z.string().min(1).max(4096),
 });
 
-function isExpired(expiresAt: string) {
-  return new Date(expiresAt).getTime() <= Date.now();
-}
-
-function isRedeemableClaim(payload: ClaimTokenPayload, claimExpiresAt: string) {
-  return !isExpired(payload.expires_at) && !isExpired(claimExpiresAt);
+function claimConversionStatusCode(status: ClaimConversionStatus) {
+  switch (status) {
+    case "linked":
+    case "already_linked_same_user":
+      return 200;
+    case "already_linked_different_user":
+      return 403;
+    case "expired_claim":
+      return 410;
+    case "invalid_claim":
+      return 404;
+  }
 }
 
 export async function POST(request: Request) {
@@ -53,6 +63,8 @@ export async function POST(request: Request) {
     } catch (error) {
       return NextResponse.json(
         {
+          status: "invalid_claim",
+          checkout_safe: false,
           error:
             error instanceof Error ? error.message : "Invalid claim token.",
         },
@@ -64,7 +76,11 @@ export async function POST(request: Request) {
     const claim = await fetchTrialClaimByHash(claimTokenHash);
     if (!claim) {
       return NextResponse.json(
-        { error: "Claim token not found." },
+        {
+          status: "invalid_claim",
+          checkout_safe: false,
+          error: "Claim token not found.",
+        },
         { status: 404 },
       );
     }
@@ -74,56 +90,42 @@ export async function POST(request: Request) {
       claim.anonymous_trial_id !== tokenPayload.anonymous_trial_id
     ) {
       return NextResponse.json(
-        { error: "Claim token payload mismatch." },
-        { status: 409 },
-      );
-    }
-
-    if (!isRedeemableClaim(tokenPayload, claim.expires_at)) {
-      return NextResponse.json(
-        { error: "Claim token expired." },
-        { status: 409 },
-      );
-    }
-
-    if (claim.redeemed_at) {
-      return NextResponse.json(
-        { error: "Claim token already redeemed." },
-        { status: 409 },
+        {
+          status: "invalid_claim",
+          checkout_safe: false,
+          error: "Claim token payload mismatch.",
+        },
+        { status: 404 },
       );
     }
 
     const trial = await fetchAnonymousTrialById(claim.anonymous_trial_id);
-    if (
-      !trial ||
-      trial.install_id !== tokenPayload.install_id ||
-      trial.user_id
-    ) {
-      return NextResponse.json(
-        { error: "Anonymous trial is no longer eligible for claim redemption." },
-        { status: 409 },
-      );
-    }
-
-    const linkedTrial = await redeemTrialClaim({
-      claimTokenHash,
-      userId: currentUser.id,
+    const entitlement = await fetchEntitlementByUserId(currentUser.id);
+    const outcome = resolveClaimConversionOutcome({
+      currentUserId: currentUser.id,
+      tokenPayload,
+      claim,
+      trial,
+      entitlement,
     });
 
-    const entitlement = await fetchEntitlementByUserId(currentUser.id);
+    if (outcome.status === "linked") {
+      const linkedTrial = await redeemTrialClaim({
+        claimTokenHash,
+        userId: currentUser.id,
+      });
 
-    return NextResponse.json({
-      linked: true,
-      user_id: linkedTrial.user_id || currentUser.id,
-      has_active_entitlement:
-        entitlement?.subscription_status === "active",
+      return NextResponse.json({
+        ...outcome,
+        user_id: linkedTrial.user_id || currentUser.id,
+      });
+    }
+
+    return NextResponse.json(outcome, {
+      status: claimConversionStatusCode(outcome.status),
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
-    const status =
-      message.includes("already redeemed") || message.includes("different user")
-        ? 409
-        : 500;
 
     console.error(
       JSON.stringify({
@@ -135,7 +137,7 @@ export async function POST(request: Request) {
 
     return NextResponse.json(
       { error: "Could not link anonymous install." },
-      { status },
+      { status: 500 },
     );
   }
 }
