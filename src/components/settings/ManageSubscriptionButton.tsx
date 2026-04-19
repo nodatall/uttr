@@ -2,6 +2,10 @@ import React, { useCallback, useMemo, useState } from "react";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { useTranslation } from "react-i18next";
 import { useSettings } from "@/hooks/useSettings";
+import {
+  getDesktopBillingManagementMode,
+  getDesktopBillingSurface,
+} from "@/lib/utils/premiumFeatures";
 
 const LOCAL_MARKETING_ORIGIN = "http://localhost:4317";
 const PRODUCTION_ACCOUNT_URL =
@@ -22,7 +26,11 @@ export const ManageSubscriptionButton: React.FC = () => {
   const [isOpening, setIsOpening] = useState(false);
 
   const shouldShow = useMemo(
-    () => installAccess?.access_state === "subscribed",
+    () => getDesktopBillingSurface(installAccess) === "manage",
+    [installAccess],
+  );
+  const managementMode = useMemo(
+    () => getDesktopBillingManagementMode(installAccess),
     [installAccess],
   );
 
@@ -56,14 +64,22 @@ export const ManageSubscriptionButton: React.FC = () => {
           ? t("sidebar.manageSubscriptionOpening", {
               defaultValue: "Opening...",
             })
-          : t("sidebar.manageSubscription", {
-              defaultValue: "Manage subscription",
-            })}
+          : managementMode === "payment-update"
+            ? t("sidebar.updatePayment", {
+                defaultValue: "Update payment",
+              })
+            : t("sidebar.manageSubscription", {
+                defaultValue: "Manage subscription",
+              })}
       </span>
       <span className="mt-0.5 block text-xs leading-4 text-text/52">
-        {t("sidebar.manageSubscriptionCaption", {
-          defaultValue: "Billing, invoices, cancellation",
-        })}
+        {managementMode === "payment-update"
+          ? t("sidebar.manageSubscriptionPaymentCaption", {
+              defaultValue: "Billing, invoices, payment method",
+            })
+          : t("sidebar.manageSubscriptionCaption", {
+              defaultValue: "Billing, invoices, cancellation",
+            })}
       </span>
     </button>
   );
