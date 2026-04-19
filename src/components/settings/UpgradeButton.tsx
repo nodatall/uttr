@@ -4,7 +4,12 @@ import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import { commands } from "@/bindings";
 import { useSettings } from "@/hooks/useSettings";
-import { isDevPlanSimulationActive } from "@/lib/utils/premiumFeatures";
+import {
+  getDesktopBillingCheckoutMode,
+  getDesktopBillingCheckoutStatus,
+  getDesktopBillingSurface,
+  isDevPlanSimulationActive,
+} from "@/lib/utils/premiumFeatures";
 
 const LOCAL_MARKETING_ORIGIN = "http://localhost:4317";
 
@@ -26,36 +31,55 @@ export const UpgradeButton: React.FC = () => {
   const { installAccess, refreshInstallAccess } = useSettings();
   const [isOpening, setIsOpening] = useState(false);
 
-  const shouldShow = useMemo(() => {
-    const isPlanSimulationActive = isDevPlanSimulationActive(installAccess);
+  const billingSurface = useMemo(
+    () => getDesktopBillingSurface(installAccess),
+    [installAccess],
+  );
+  const checkoutMode = useMemo(
+    () => getDesktopBillingCheckoutMode(installAccess),
+    [installAccess],
+  );
 
-    return (
+  const shouldShow = useMemo(
+    () =>
       installAccess !== null &&
-      (isPlanSimulationActive || !installAccess.has_byok_secret) &&
-      installAccess.access_state !== "subscribed"
-    );
-  }, [installAccess]);
+      (!installAccess.has_byok_secret ||
+        isDevPlanSimulationActive(installAccess)) &&
+      billingSurface === "checkout",
+    [billingSurface, installAccess],
+  );
 
   const statusText = useMemo(() => {
-    if (!installAccess) {
-      return "";
-    }
+    const status = getDesktopBillingCheckoutStatus(installAccess);
 
-    if (installAccess.trial_state === "trialing") {
-      return t("sidebar.upgradeStatusTrial", {
-        defaultValue: "2-day trial active",
-      });
+    switch (status) {
+      case "canceled":
+        return t("sidebar.upgradeStatusCanceled", {
+          defaultValue: "Subscription canceled",
+        });
+      case "access-expired":
+        return t("sidebar.upgradeStatusAccessExpired", {
+          defaultValue: "Access expired",
+        });
+      case "linked-account":
+        return t("sidebar.upgradeStatusLinkedAccount", {
+          defaultValue: "Linked account",
+        });
+      case "trialing":
+        return t("sidebar.upgradeStatusTrial", {
+          defaultValue: "2-day trial active",
+        });
+      case "trial-expired":
+        return t("sidebar.upgradeStatusExpired", {
+          defaultValue: "Trial ended",
+        });
+      case "free":
+        return t("sidebar.upgradeStatusFree", {
+          defaultValue: "Free plan",
+        });
+      default:
+        return "";
     }
-
-    if (installAccess.trial_state === "expired") {
-      return t("sidebar.upgradeStatusExpired", {
-        defaultValue: "Trial ended",
-      });
-    }
-
-    return t("sidebar.upgradeStatusFree", {
-      defaultValue: "Free plan",
-    });
   }, [installAccess, t]);
 
   const openUpgrade = useCallback(async () => {
@@ -102,7 +126,13 @@ export const UpgradeButton: React.FC = () => {
       <span className="block text-sm font-semibold text-text">
         {isOpening
           ? t("sidebar.upgradeOpening", { defaultValue: "Opening..." })
-          : t("sidebar.upgradeToPro", { defaultValue: "Upgrade to Pro" })}
+          : checkoutMode === "reactivate"
+            ? t("sidebar.reactivatePro", {
+                defaultValue: "Reactivate Pro",
+              })
+            : t("sidebar.upgradeToPro", {
+                defaultValue: "Upgrade to Pro",
+              })}
       </span>
       <span className="mt-0.5 block text-xs leading-4 text-text/52">
         {t("sidebar.upgradeCaption", {

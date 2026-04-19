@@ -38,10 +38,10 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 
 ## Tasks
 
-- [ ] 1.0 Make billing state decisions explicit
+- [x] 1.0 Make billing state decisions explicit
   - covers_prd: `FR-002`, `FR-007`
   - covers_tdd: `TDR-001`, `TDR-002`
-  - [ ] 1.1 Add shared desktop billing action logic and update billing buttons so linked non-active states have one actionable path instead of conflicting or dead actions.
+  - [x] 1.1 Add shared desktop billing action logic and update billing buttons so linked non-active states have one actionable path instead of conflicting or dead actions.
     - covers_prd: `FR-002`, `FR-007`
     - covers_tdd: `TDR-001`, `TDR-002`
     - output: `src/components/settings/UpgradeButton.tsx`, `src/components/settings/ManageSubscriptionButton.tsx`, likely a small shared helper under `src/lib/utils/`
