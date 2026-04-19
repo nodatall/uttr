@@ -48,7 +48,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - verify: focused frontend logic test if repo pattern exists, otherwise `bun run lint`
     - done_when: `past_due` shows account/payment update without calling `createTrialClaim()`, `canceled`/entitlement `expired` shows reactivation checkout, linked inactive shows app-origin checkout retry, subscribed shows account management, and first-purchase unlinked states still can start app-origin checkout.
 
-- [ ] 2.0 Persist and reuse checkout attempts
+- [x] 2.0 Persist and reuse checkout attempts
   - covers_prd: `FR-001`, `FR-003`, `FR-005`
   - covers_tdd: `TDR-003`, `TDR-004`, `TDR-005`, `TDR-006`, `TDR-011`
   - [x] 2.1 Add Supabase schema and helper functions for pending checkout sessions.
@@ -63,7 +63,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
     - output: `marketing-site/app/api/checkout/route.ts`, `marketing-site/lib/stripe.ts` or route-local helpers, focused tests
     - verify: `cd marketing-site && bun test`
     - done_when: repeated checkout requests for the same user/install return the existing open checkout URL or already-entitled state, existing entitlements use Stripe `customer`, first-time customers use `customer_email`, and no-token checkout still fails.
-  - [ ] 2.3 Update Stripe webhook handling to complete or expire pending checkout rows.
+  - [x] 2.3 Update Stripe webhook handling to complete or expire pending checkout rows.
     - covers_prd: `FR-003`, `FR-005`
     - covers_tdd: `TDR-006`
     - output: `marketing-site/app/api/stripe/webhook/route.ts`, Supabase helper tests

@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import Stripe from "stripe";
 import { sendTransactionalEmail } from "@/lib/email";
 import {
+  markPendingCheckoutSessionCompleted,
+  markPendingCheckoutSessionExpired,
   patchEntitlementByStripeSubscriptionId,
   upsertEntitlementState,
   type EntitlementState,
@@ -301,7 +303,14 @@ export async function POST(request: Request) {
 
     switch (event.type) {
       case "checkout.session.completed": {
-        await handleCheckoutCompleted(event.data.object as Stripe.Checkout.Session, stripe);
+        const session = event.data.object as Stripe.Checkout.Session;
+        await markPendingCheckoutSessionCompleted(session.id);
+        await handleCheckoutCompleted(session, stripe);
+        break;
+      }
+      case "checkout.session.expired": {
+        const session = event.data.object as Stripe.Checkout.Session;
+        await markPendingCheckoutSessionExpired(session.id);
         break;
       }
       case "invoice.paid": {
