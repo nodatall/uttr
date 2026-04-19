@@ -7,7 +7,12 @@ import {
   signInstallToken,
   upsertAnonymousTrialHeartbeat,
 } from "@/lib/access";
-import { checkRateLimit, rateLimitKeyFromRequest } from "@/lib/rate-limit";
+import {
+  checkRateLimit,
+  rateLimitKeyFromRequest,
+  type RateLimitBlockedDecision,
+  resolveRateLimitFailure,
+} from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -18,22 +23,34 @@ const requestSchema = z.object({
   app_version: z.string().min(1).max(100),
 });
 
+function respondToRateLimit(
+  rateLimit: RateLimitBlockedDecision,
+  exhaustedMessage: string,
+) {
+  const failure = resolveRateLimitFailure(rateLimit, exhaustedMessage);
+
+  return NextResponse.json(
+    { error: failure.error },
+    {
+      status: failure.status,
+      headers: {
+        "retry-after": String(failure.retryAfterSeconds),
+      },
+    },
+  );
+}
+
 export async function POST(request: Request) {
   try {
-    const rateLimit = checkRateLimit({
+    const rateLimit = await checkRateLimit({
       key: rateLimitKeyFromRequest(request, "trial-bootstrap"),
       limit: 30,
       windowMs: 60_000,
     });
     if (!rateLimit.allowed) {
-      return NextResponse.json(
-        { error: "Too many trial bootstrap requests." },
-        {
-          status: 429,
-          headers: {
-            "retry-after": String(rateLimit.retryAfterSeconds),
-          },
-        },
+      return respondToRateLimit(
+        rateLimit,
+        "Too many trial bootstrap requests.",
       );
     }
 

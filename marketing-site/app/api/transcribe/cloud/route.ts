@@ -21,7 +21,12 @@ import {
   verifyInstallToken,
 } from "@/lib/access";
 import { evaluateCloudTranscriptionPreflight } from "@/lib/access/cloud-transcription-policy";
-import { checkRateLimit, rateLimitKeyFromRequest } from "@/lib/rate-limit";
+import {
+  checkRateLimit,
+  rateLimitKeyFromRequest,
+  type RateLimitBlockedDecision,
+  resolveRateLimitFailure,
+} from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -59,6 +64,23 @@ function isFileEntry(value: FormDataEntryValue | null): value is File {
   return typeof File !== "undefined" && value instanceof File;
 }
 
+function respondToRateLimit(
+  rateLimit: RateLimitBlockedDecision,
+  exhaustedMessage: string,
+) {
+  const failure = resolveRateLimitFailure(rateLimit, exhaustedMessage);
+
+  return NextResponse.json(
+    { error: failure.error },
+    {
+      status: failure.status,
+      headers: {
+        "retry-after": String(failure.retryAfterSeconds),
+      },
+    },
+  );
+}
+
 function resolvePostTranscriptionAccessState(
   trialState: string,
   accessState: string,
@@ -70,20 +92,15 @@ export async function POST(request: Request) {
   const startMs = performance.now();
 
   try {
-    const rateLimit = checkRateLimit({
+    const rateLimit = await checkRateLimit({
       key: rateLimitKeyFromRequest(request, "cloud-transcribe"),
       limit: 60,
       windowMs: 60_000,
     });
     if (!rateLimit.allowed) {
-      return NextResponse.json(
-        { error: "Too many transcription requests." },
-        {
-          status: 429,
-          headers: {
-            "retry-after": String(rateLimit.retryAfterSeconds),
-          },
-        },
+      return respondToRateLimit(
+        rateLimit,
+        "Too many transcription requests.",
       );
     }
 

@@ -16,7 +16,12 @@ import {
 } from "@/lib/access";
 import { trialCanCreateClaim } from "@/lib/access/claim-eligibility";
 import { readSiteConfig } from "@/lib/env";
-import { checkRateLimit, rateLimitKeyFromRequest } from "@/lib/rate-limit";
+import {
+  checkRateLimit,
+  rateLimitKeyFromRequest,
+  type RateLimitBlockedDecision,
+  resolveRateLimitFailure,
+} from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -32,6 +37,23 @@ function buildClaimUrl(claimToken: string) {
   const url = new URL("/claim", siteUrl);
   url.searchParams.set("claim_token", claimToken);
   return url.toString();
+}
+
+function respondToRateLimit(
+  rateLimit: RateLimitBlockedDecision,
+  exhaustedMessage: string,
+) {
+  const failure = resolveRateLimitFailure(rateLimit, exhaustedMessage);
+
+  return NextResponse.json(
+    { error: failure.error },
+    {
+      status: failure.status,
+      headers: {
+        "retry-after": String(failure.retryAfterSeconds),
+      },
+    },
+  );
 }
 
 async function readInstallTokenFromBodyOrRequest(request: Request) {
@@ -50,21 +72,13 @@ async function readInstallTokenFromBodyOrRequest(request: Request) {
 
 export async function POST(request: Request) {
   try {
-    const rateLimit = checkRateLimit({
+    const rateLimit = await checkRateLimit({
       key: rateLimitKeyFromRequest(request, "trial-create-claim"),
       limit: 20,
       windowMs: 60_000,
     });
     if (!rateLimit.allowed) {
-      return NextResponse.json(
-        { error: "Too many claim requests." },
-        {
-          status: 429,
-          headers: {
-            "retry-after": String(rateLimit.retryAfterSeconds),
-          },
-        },
-      );
+      return respondToRateLimit(rateLimit, "Too many claim requests.");
     }
 
     const installToken = await readInstallTokenFromBodyOrRequest(request);
