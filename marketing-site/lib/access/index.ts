@@ -37,6 +37,14 @@ export {
   upsertEntitlementState,
 } from "./supabase";
 export {
+  claimConversionStatuses,
+  resolveClaimConversionOutcome,
+} from "./claim-conversion";
+export type {
+  ClaimConversionOutcome,
+  ClaimConversionStatus,
+} from "./claim-conversion";
+export {
   hashClaimToken,
   signClaimToken,
   signInstallToken,

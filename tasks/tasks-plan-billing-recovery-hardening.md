@@ -73,7 +73,7 @@ See `skills/shared/references/execution/task-management.md` for execution workfl
 - [ ] 3.0 Make claim conversion and linked retry semantics explicit
   - covers_prd: `FR-001`, `FR-002`, `FR-004`
   - covers_tdd: `TDR-002`, `TDR-007`, `TDR-010`
-  - [ ] 3.1 Update claim creation and conversion so linked same-user retry is allowed only through an install-origin token, while wrong-user, expired, and invalid token states stop with typed responses.
+  - [x] 3.1 Update claim creation and conversion so linked same-user retry is allowed only through an install-origin token, while wrong-user, expired, and invalid token states stop with typed responses.
     - covers_prd: `FR-001`, `FR-002`, `FR-004`
     - covers_tdd: `TDR-002`, `TDR-007`, `TDR-010`
     - output: `marketing-site/lib/access/claim-eligibility.ts`, `marketing-site/app/api/trial/create-claim/route.ts`, `marketing-site/app/api/auth/convert-anonymous/route.ts`, tests

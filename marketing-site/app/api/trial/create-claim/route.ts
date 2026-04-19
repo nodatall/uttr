@@ -106,16 +106,11 @@ export async function POST(request: Request) {
       : null;
     const accessDecision = resolveAccessDecision(refreshedTrial, entitlement);
 
-    if (refreshedTrial.user_id) {
-      return NextResponse.json(
-        { error: "This install is already linked to an account." },
-        { status: 409 },
-      );
-    }
-
     if (!trialCanCreateClaim(refreshedTrial, accessDecision)) {
       return NextResponse.json(
-        { error: "Claim tokens are only available for unlinked installs." },
+        {
+          error: "Claim tokens are only available for non-active installs.",
+        },
         { status: 409 },
       );
     }

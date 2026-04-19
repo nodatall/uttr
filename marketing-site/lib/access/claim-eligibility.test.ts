@@ -30,9 +30,25 @@ describe("claim eligibility", () => {
     }
   });
 
-  test("blocks linked installs", () => {
+  test("allows linked installs that are not subscribed", () => {
     expect(
       trialCanCreateClaim(trial({ user_id: "user_123" }), {
+        accessState: "blocked",
+      }),
+    ).toBe(true);
+  });
+
+  test("blocks subscribed installs even when linked", () => {
+    expect(
+      trialCanCreateClaim(trial({ user_id: "user_123" }), {
+        accessState: "subscribed",
+      }),
+    ).toBe(false);
+  });
+
+  test("blocks unlinked subscribed installs", () => {
+    expect(
+      trialCanCreateClaim(trial(), {
         accessState: "subscribed",
       }),
     ).toBe(false);

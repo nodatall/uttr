@@ -4,14 +4,13 @@ export function trialCanCreateClaim(
   trial: AnonymousTrialRow,
   accessDecision: Pick<AccessDecision, "accessState">,
 ) {
-  if (trial.user_id) {
+  if (accessDecision.accessState === "subscribed") {
     return false;
   }
 
-  return (
-    trial.status === "new" ||
-    trial.status === "trialing" ||
-    trial.status === "expired" ||
-    accessDecision.accessState === "blocked"
-  );
+  if (trial.user_id) {
+    return true;
+  }
+
+  return trial.status === "new" || trial.status === "trialing" || trial.status === "expired";
 }
