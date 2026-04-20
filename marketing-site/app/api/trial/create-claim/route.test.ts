@@ -1,14 +1,10 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { setDbExecutorForTests } from "@/lib/db";
 import { POST } from "./route";
 
 const originalEnv = {
   NODE_ENV: process.env.NODE_ENV,
-  SUPABASE_URL: process.env.SUPABASE_URL,
-  SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
-  SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
 };
-
-const originalFetch = globalThis.fetch;
 
 function restoreEnv(name: keyof typeof originalEnv) {
   const value = originalEnv[name];
@@ -22,18 +18,11 @@ function restoreEnv(name: keyof typeof originalEnv) {
 
 beforeEach(() => {
   process.env.NODE_ENV = "production";
-  process.env.SUPABASE_URL = "https://supabase.test";
-  process.env.SUPABASE_ANON_KEY = "anon-key-test";
-  process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-test";
-  globalThis.fetch = originalFetch;
 });
 
 afterEach(() => {
+  setDbExecutorForTests(null);
   restoreEnv("NODE_ENV");
-  restoreEnv("SUPABASE_URL");
-  restoreEnv("SUPABASE_ANON_KEY");
-  restoreEnv("SUPABASE_SERVICE_ROLE_KEY");
-  globalThis.fetch = originalFetch;
 });
 
 function buildThrowingRequest() {
@@ -56,17 +45,14 @@ function buildThrowingRequest() {
 
 describe("/api/trial/create-claim rate limiting", () => {
   test("returns 429 for normal exhaustion without reading the body", async () => {
-    globalThis.fetch = async () =>
-      new Response(
-        JSON.stringify([
-          {
-            allowed: false,
-            remaining: 0,
-            retry_after_seconds: 9,
-          },
-        ]),
-        { status: 200 },
-      );
+    setDbExecutorForTests({
+      async query() {
+        return {
+          rows: [{ count: 21, reset_at: new Date(Date.now() + 9_000) }],
+          rowCount: 1,
+        };
+      },
+    });
 
     const response = await POST(buildThrowingRequest());
 
@@ -78,9 +64,11 @@ describe("/api/trial/create-claim rate limiting", () => {
   });
 
   test("returns a conservative retryable error when durable storage is unavailable", async () => {
-    globalThis.fetch = async () => {
-      throw new Error("durable rate limit store unavailable");
-    };
+    setDbExecutorForTests({
+      async query() {
+        throw new Error("durable rate limit store unavailable");
+      },
+    });
 
     const response = await POST(buildThrowingRequest());
 

@@ -1,15 +1,10 @@
 "use client";
 
-import { createClient, type Session } from "@supabase/supabase-js";
 import { useEffect, useState } from "react";
+import { createAuthClient, type AuthSession } from "@/lib/auth/client";
 import { getDownloadUrl } from "@/lib/download";
 
-type AccountFlowProps = {
-  supabaseUrl: string;
-  supabaseAnonKey: string;
-};
-
-async function openBillingPortal(session: Session) {
+async function openBillingPortal(session: AuthSession) {
   const response = await fetch("/api/billing/portal", {
     method: "POST",
     headers: {
@@ -30,20 +25,9 @@ async function openBillingPortal(session: Session) {
   window.location.assign(payload.url);
 }
 
-export function AccountFlow({
-  supabaseUrl,
-  supabaseAnonKey,
-}: AccountFlowProps) {
+export function AccountFlow() {
   const downloadUrl = getDownloadUrl();
-  const [supabase] = useState(() =>
-    createClient(supabaseUrl, supabaseAnonKey, {
-      auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: true,
-      },
-    }),
-  );
+  const [auth] = useState(() => createAuthClient());
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
@@ -77,13 +61,13 @@ export function AccountFlow({
 
     const syncSession = async () => {
       scheduleSignedOutFallback();
-      const { data } = await supabase.auth.getSession();
+      const session = await auth.getSession();
       if (cancelled) {
         return;
       }
 
       clearFallbackTimeout();
-      setSignedInEmail(data.session?.user.email ?? null);
+      setSignedInEmail(session?.user.email ?? null);
       setHasCheckedSession(true);
     };
 
@@ -99,17 +83,6 @@ export function AccountFlow({
 
     void syncSession();
 
-    const {
-      data: { subscription },
-    } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (cancelled) {
-        return;
-      }
-
-      setSignedInEmail(session?.user.email ?? null);
-      setHasCheckedSession(true);
-    });
-
     window.addEventListener("pageshow", refreshSession);
     window.addEventListener("focus", refreshSession);
     document.addEventListener("visibilitychange", refreshSession);
@@ -117,12 +90,11 @@ export function AccountFlow({
     return () => {
       cancelled = true;
       clearFallbackTimeout();
-      subscription.unsubscribe();
       window.removeEventListener("pageshow", refreshSession);
       window.removeEventListener("focus", refreshSession);
       document.removeEventListener("visibilitychange", refreshSession);
     };
-  }, [supabase]);
+  }, [auth]);
 
   const signIn = async () => {
     if (!canSubmitCredentials) {
@@ -133,15 +105,10 @@ export function AccountFlow({
     setError(null);
 
     try {
-      const result = await supabase.auth.signInWithPassword({
+      const session = await auth.signInWithPassword({
         email,
         password,
       });
-
-      const session = result.data.session;
-      if (!session) {
-        throw new Error(result.error?.message || "Unable to sign in.");
-      }
 
       setSignedInEmail(session.user.email ?? email);
       setHasCheckedSession(true);
@@ -158,12 +125,12 @@ export function AccountFlow({
     setError(null);
 
     try {
-      const { data } = await supabase.auth.getSession();
-      if (!data.session) {
+      const session = await auth.getSession();
+      if (!session) {
         throw new Error("Sign in to manage your subscription.");
       }
 
-      await openBillingPortal(data.session);
+      await openBillingPortal(session);
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Unable to open billing portal.",
@@ -177,10 +144,7 @@ export function AccountFlow({
     setError(null);
 
     try {
-      const { error: signOutError } = await supabase.auth.signOut();
-      if (signOutError) {
-        throw signOutError;
-      }
+      await auth.signOut();
 
       setSignedInEmail(null);
       setEmail("");

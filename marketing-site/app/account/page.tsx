@@ -1,13 +1,10 @@
 import { SiteFooter } from "@/components/site-footer";
 import { SiteNav } from "@/components/site-nav";
-import { readSupabaseConfig } from "@/lib/env";
 import { AccountFlow } from "./account-flow";
 
 export const dynamic = "force-dynamic";
 
 export default function AccountPage() {
-  const { url, anonKey } = readSupabaseConfig();
-
   return (
     <div className="flex min-h-screen flex-col bg-cosmic-950 text-cosmic-50">
       <SiteNav showPricingLink={false} />
@@ -21,7 +18,7 @@ export default function AccountPage() {
             Manage your Uttr subscription.
           </h1>
 
-          <AccountFlow supabaseUrl={url} supabaseAnonKey={anonKey} />
+          <AccountFlow />
         </div>
       </main>
 

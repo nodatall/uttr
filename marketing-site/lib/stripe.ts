@@ -2,10 +2,12 @@ import Stripe from "stripe";
 
 let stripeClient: Stripe | null = null;
 
+export const STRIPE_API_VERSION = "2026-03-25.dahlia";
+
 export function getStripe(secretKey: string) {
   if (!stripeClient) {
     stripeClient = new Stripe(secretKey, {
-      apiVersion: "2026-01-28.clover",
+      apiVersion: STRIPE_API_VERSION,
     });
   }
 

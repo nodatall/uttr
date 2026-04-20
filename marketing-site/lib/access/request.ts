@@ -25,14 +25,14 @@ function readCookieValue(cookieHeader: string | null, name: string) {
   return match ? decodeURIComponent(match[1]) : null;
 }
 
-export function readSupabaseAccessTokenFromRequest(request: Request) {
+export function readAccessTokenFromRequest(request: Request) {
   const authorization = request.headers.get("authorization");
   if (authorization?.toLowerCase().startsWith("bearer ")) {
     return authorization.slice("bearer ".length).trim() || null;
   }
 
   const cookieHeader = request.headers.get("cookie");
-  const cookieToken = readCookieValue(cookieHeader, "sb-access-token");
+  const cookieToken = readCookieValue(cookieHeader, "uttr_session");
   if (cookieToken) {
     return cookieToken;
   }

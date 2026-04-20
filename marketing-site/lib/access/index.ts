@@ -8,7 +8,7 @@ export type {
   EntitlementRow,
   EntitlementState,
   InstallTokenPayload,
-  SupabaseUser,
+  AuthenticatedUser,
   TrialState,
   TrialClaimRow,
   UsageEventRow,
@@ -20,7 +20,7 @@ export {
   fetchAnonymousTrialByInstallId,
   fetchEntitlementByUserId,
   fetchReusableOpenCheckoutSession,
-  fetchSupabaseUser,
+  fetchAuthenticatedUser,
   fetchTrialClaimByHash,
   fetchUsageEventsSince,
   insertPendingCheckoutSession,
@@ -35,7 +35,7 @@ export {
   buildPendingCheckoutSessionContextKey,
   upsertAnonymousTrialHeartbeat,
   upsertEntitlementState,
-} from "./supabase";
+} from "./postgres";
 export {
   claimConversionStatuses,
   resolveClaimConversionOutcome,
@@ -53,5 +53,5 @@ export {
 } from "./tokens";
 export {
   readInstallTokenFromRequest,
-  readSupabaseAccessTokenFromRequest,
+  readAccessTokenFromRequest,
 } from "./request";

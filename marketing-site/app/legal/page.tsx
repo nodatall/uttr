@@ -132,7 +132,7 @@ export default function LegalPage() {
         <h3>4. Sharing</h3>
         <p>
           We share information with service providers only as needed to operate
-          Uttr, such as Stripe for billing, Supabase for account and entitlement
+          Uttr, such as Stripe for billing, Postgres for account and entitlement
           storage, email providers for transactional messages, hosting
           providers, and transcription providers for cloud transcription. We may
           also disclose information if required by law or to protect Uttr,

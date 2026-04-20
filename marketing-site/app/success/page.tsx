@@ -2,7 +2,7 @@ import Link from "next/link";
 import { BillingPortalButton } from "@/components/billing-portal-button";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteNav } from "@/components/site-nav";
-import { readCheckoutConfig, readSupabaseConfig } from "@/lib/env";
+import { readCheckoutConfig } from "@/lib/env";
 import { getStripe } from "@/lib/stripe";
 
 export const dynamic = "force-dynamic";
@@ -28,7 +28,6 @@ export default async function SuccessPage({
   const params = await searchParams;
   const sessionId = params.session_id || null;
   const status = params.status || "paid";
-  const { url: supabaseUrl, anonKey: supabaseAnonKey } = readSupabaseConfig();
 
   const session = sessionId ? await loadCheckoutSession(sessionId) : null;
   const customerEmail = session?.customer_details?.email || "your email";
@@ -71,8 +70,6 @@ export default async function SuccessPage({
               Back to homepage
             </Link>
             <BillingPortalButton
-              supabaseUrl={supabaseUrl}
-              supabaseAnonKey={supabaseAnonKey}
               className="rounded-full border border-white/25 px-6 py-3 text-sm text-cosmic-100 transition hover:border-white/45 hover:text-cosmic-50"
             >
               Manage billing

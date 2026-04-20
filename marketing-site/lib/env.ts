@@ -56,14 +56,6 @@ export function readEmailConfig() {
   };
 }
 
-export function readSupabaseConfig() {
-  return {
-    url: readEnv("SUPABASE_URL"),
-    anonKey: readEnv("SUPABASE_ANON_KEY"),
-    serviceRoleKey: readEnv("SUPABASE_SERVICE_ROLE_KEY"),
-  };
-}
-
 export function readCloudProxyConfig() {
   return {
     groqApiKey: readEnv("GROQ_API_KEY"),
@@ -75,5 +67,11 @@ export function readAccessTokenConfig() {
   return {
     installTokenSecret: readEnv("UTTR_INSTALL_TOKEN_SECRET"),
     claimTokenSecret: readEnv("UTTR_CLAIM_TOKEN_SECRET"),
+  };
+}
+
+export function readSessionConfig() {
+  return {
+    sessionSecret: readEnv("UTTR_SESSION_SECRET"),
   };
 }

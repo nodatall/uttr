@@ -1,4 +1,4 @@
-import { readEnv } from "@/lib/env";
+import { dbQuery } from "@/lib/db";
 
 type Bucket = {
   count: number;
@@ -118,59 +118,63 @@ function checkInMemoryRateLimit(
   );
 }
 
-type DurableRateLimitRow = {
-  allowed: boolean;
-  remaining: number;
-  retry_after_seconds: number;
-};
-
 async function checkWithDurableRateLimit(
   policy: RateLimitPolicy,
 ): Promise<RateLimitDecision> {
-  const url = readEnv("SUPABASE_URL");
-  const serviceRoleKey = readEnv("SUPABASE_SERVICE_ROLE_KEY");
-  const response = await fetch(new URL("/rest/v1/rpc/consume_rate_limit", url), {
-    method: "POST",
-    headers: {
-      apikey: serviceRoleKey,
-      authorization: `Bearer ${serviceRoleKey}`,
-      accept: "application/json",
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      p_rate_limit_key: policy.key,
-      p_limit: policy.limit,
-      p_window_ms: policy.windowMs,
-    }),
-  });
-
-  if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(
-      `Supabase rate-limit RPC failed (${response.status}): ${body || response.statusText}`,
-    );
+  if (policy.limit <= 0) {
+    return buildDeniedDecision(buildRetryAfterSeconds(policy.windowMs), "durable");
   }
 
-  const payload = (await response.json()) as DurableRateLimitRow | DurableRateLimitRow[];
-  const row = Array.isArray(payload) ? payload[0] : payload;
+  const result = await dbQuery<{
+    count: number;
+    reset_at: string | Date;
+  }>(
+    `insert into public.rate_limit_buckets as rate_limit_buckets (
+       rate_limit_key,
+       count,
+       reset_at,
+       updated_at
+     )
+     values (
+       $1,
+       1,
+       now() + ($2::double precision * interval '1 millisecond'),
+       now()
+     )
+     on conflict (rate_limit_key) do update
+       set count = case
+         when rate_limit_buckets.reset_at <= now() then 1
+         else rate_limit_buckets.count + 1
+       end,
+       reset_at = case
+         when rate_limit_buckets.reset_at <= now()
+           then now() + ($2::double precision * interval '1 millisecond')
+         else rate_limit_buckets.reset_at
+       end,
+       updated_at = now()
+     returning count, reset_at`,
+    [policy.key, policy.windowMs],
+  );
+
+  const row = result.rows[0];
 
   if (
     !row ||
-    typeof row.allowed !== "boolean" ||
-    typeof row.remaining !== "number" ||
-    typeof row.retry_after_seconds !== "number"
+    typeof row.count !== "number" ||
+    !row.reset_at
   ) {
-    throw new Error("Supabase rate-limit RPC returned an invalid payload.");
+    throw new Error("Durable rate-limit store returned an invalid payload.");
   }
 
-  if (!row.allowed) {
+  if (row.count > policy.limit) {
+    const resetAtMs = new Date(row.reset_at).getTime();
     return buildDeniedDecision(
-      Math.max(1, Math.ceil(row.retry_after_seconds)),
+      Math.max(1, Math.ceil((resetAtMs - Date.now()) / 1000)),
       "durable",
     );
   }
 
-  return buildAllowedDecision(Math.max(0, Math.floor(row.remaining)), "durable");
+  return buildAllowedDecision(Math.max(policy.limit - row.count, 0), "durable");
 }
 
 function failClosedRateLimit(policy: RateLimitPolicy): RateLimitDecision {

@@ -1,7 +1,7 @@
 "use client";
 
-import { createClient, type Session } from "@supabase/supabase-js";
 import { useEffect, useState } from "react";
+import { createAuthClient, type AuthSession } from "@/lib/auth/client";
 import { getDownloadUrl } from "@/lib/download";
 import {
   resolveClaimConversionClientDecision,
@@ -11,8 +11,6 @@ import {
 type AuthMode = "signin" | "signup";
 
 type ClaimFlowProps = {
-  supabaseUrl: string;
-  supabaseAnonKey: string;
   initialClaimToken: string | null;
   initialSource: string;
 };
@@ -29,12 +27,12 @@ async function continueCheckoutFlow({
   initialClaimToken,
   initialSource,
 }: {
-  session: Session;
+  session: AuthSession;
   initialClaimToken: string | null;
   initialSource: string;
 }) {
   if (!session.access_token) {
-    throw new Error("Supabase session is missing an access token.");
+    throw new Error("Session is missing an access token.");
   }
 
   if (initialClaimToken) {
@@ -97,21 +95,11 @@ async function continueCheckoutFlow({
 }
 
 export function ClaimFlow({
-  supabaseUrl,
-  supabaseAnonKey,
   initialClaimToken,
   initialSource,
 }: ClaimFlowProps) {
   const downloadUrl = getDownloadUrl();
-  const [supabase] = useState(() =>
-    createClient(supabaseUrl, supabaseAnonKey, {
-      auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: true,
-      },
-    }),
-  );
+  const [auth] = useState(() => createAuthClient());
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [authMode, setAuthMode] = useState<AuthMode>("signup");
@@ -120,12 +108,12 @@ export function ClaimFlow({
   );
   const [error, setError] = useState<string | null>(null);
   const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
-  const [activeSession, setActiveSession] = useState<Session | null>(null);
+  const [activeSession, setActiveSession] = useState<AuthSession | null>(null);
   const canSubmitCredentials =
     status === "idle" && email.trim().length > 0 && password.length > 0;
 
   const finishAuthenticatedSession = async (
-    session: Session,
+    session: AuthSession,
     fallbackEmail: string,
   ) => {
     setActiveSession(session);
@@ -139,40 +127,39 @@ export function ClaimFlow({
   };
 
   const signInOrCreateDevAccount = async () => {
-    const signInResult = await supabase.auth.signInWithPassword(DEV_ACCOUNT);
-    if (signInResult.data.session) {
-      return signInResult.data.session;
+    try {
+      return await auth.signInWithPassword(DEV_ACCOUNT);
+    } catch (signInError) {
+      try {
+        return await auth.signUp(DEV_ACCOUNT);
+      } catch (signUpError) {
+        try {
+          return await auth.signInWithPassword(DEV_ACCOUNT);
+        } catch (retryError) {
+          throw new Error(
+            signInError instanceof Error
+              ? signInError.message
+              : signUpError instanceof Error
+                ? signUpError.message
+                : retryError instanceof Error
+                  ? retryError.message
+                  : "Unable to create the development account.",
+          );
+        }
+      }
     }
-
-    const signUpResult = await supabase.auth.signUp(DEV_ACCOUNT);
-    if (signUpResult.data.session) {
-      return signUpResult.data.session;
-    }
-
-    const retrySignInResult =
-      await supabase.auth.signInWithPassword(DEV_ACCOUNT);
-    if (retrySignInResult.data.session) {
-      return retrySignInResult.data.session;
-    }
-
-    throw new Error(
-      signInResult.error?.message ||
-        signUpResult.error?.message ||
-        retrySignInResult.error?.message ||
-        "Unable to create the development account.",
-    );
   };
 
   useEffect(() => {
     let cancelled = false;
 
-    void supabase.auth.getSession().then(async ({ data }) => {
-      if (cancelled || !data.session) {
+    void auth.getSession().then(async (session) => {
+      if (cancelled || !session) {
         return;
       }
 
-      setActiveSession(data.session);
-      setSignedInEmail(data.session.user.email ?? null);
+      setActiveSession(session);
+      setSignedInEmail(session.user.email ?? null);
       setError(null);
       setStatus("idle");
     });
@@ -180,7 +167,7 @@ export function ClaimFlow({
     return () => {
       cancelled = true;
     };
-  }, [supabase, initialClaimToken, initialSource]);
+  }, [auth, initialClaimToken, initialSource]);
 
   const submit = async (mode: AuthMode) => {
     if (!canSubmitCredentials) {
@@ -192,24 +179,16 @@ export function ClaimFlow({
     setError(null);
 
     try {
-      const result =
+      const session =
         mode === "signup"
-          ? await supabase.auth.signUp({
+          ? await auth.signUp({
               email,
               password,
             })
-          : await supabase.auth.signInWithPassword({
+          : await auth.signInWithPassword({
               email,
               password,
             });
-
-      const session = result.data.session;
-      if (!session) {
-        throw new Error(
-          result.error?.message ||
-            "Supabase did not return an active session for this account.",
-        );
-      }
 
       await finishAuthenticatedSession(session, email);
     } catch (err) {
@@ -261,7 +240,7 @@ export function ClaimFlow({
   };
 
   const handleDifferentAccount = async () => {
-    await supabase.auth.signOut();
+    await auth.signOut();
     setActiveSession(null);
     setSignedInEmail(null);
     setEmail("");
