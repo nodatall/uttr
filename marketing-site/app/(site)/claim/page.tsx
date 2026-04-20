@@ -1,6 +1,5 @@
 import { SiteFooter } from "@/components/site-footer";
 import { SiteNav } from "@/components/site-nav";
-import { readSupabaseConfig } from "@/lib/env";
 import { ClaimFlow } from "./claim-flow";
 
 export const dynamic = "force-dynamic";
@@ -11,7 +10,6 @@ export default async function ClaimPage({
   searchParams: Promise<{ claim_token?: string; source?: string }>;
 }) {
   const params = await searchParams;
-  const { url, anonKey } = readSupabaseConfig();
 
   return (
     <div className="flex min-h-screen flex-col bg-cosmic-950 text-cosmic-50">
@@ -24,8 +22,6 @@ export default async function ClaimPage({
           </p>
 
           <ClaimFlow
-            supabaseUrl={url}
-            supabaseAnonKey={anonKey}
             initialClaimToken={params.claim_token || null}
             initialSource={params.source || "direct"}
           />

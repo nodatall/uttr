@@ -4,7 +4,7 @@ import type {
   EntitlementRow,
   TrialState,
 } from "./types";
-import { isAnonymousTrialExpired, patchAnonymousTrialById } from "./supabase";
+import { isAnonymousTrialExpired, patchAnonymousTrialById } from "./postgres";
 
 export function normalizeTrialState(trial: AnonymousTrialRow): TrialState {
   if (trial.status === "trialing" && isAnonymousTrialExpired(trial)) {

@@ -1,8 +1,8 @@
 import { NextResponse } from "next/server";
 import {
   fetchEntitlementByUserId,
-  fetchSupabaseUser,
-  readSupabaseAccessTokenFromRequest,
+  fetchAuthenticatedUser,
+  readAccessTokenFromRequest,
 } from "@/lib/access";
 import { readCheckoutConfig } from "@/lib/env";
 import { getStripe } from "@/lib/stripe";
@@ -12,20 +12,20 @@ export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
   try {
-    const accessToken = readSupabaseAccessTokenFromRequest(request);
+    const accessToken = readAccessTokenFromRequest(request);
     if (!accessToken) {
       return NextResponse.json(
-        { error: "Missing Supabase access token." },
+        { error: "Missing session." },
         { status: 401 },
       );
     }
 
     let currentUser;
     try {
-      currentUser = await fetchSupabaseUser(accessToken);
+      currentUser = await fetchAuthenticatedUser(accessToken);
     } catch {
       return NextResponse.json(
-        { error: "Invalid or expired Supabase session." },
+        { error: "Invalid or expired session." },
         { status: 401 },
       );
     }

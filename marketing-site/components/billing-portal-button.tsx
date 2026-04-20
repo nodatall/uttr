@@ -1,41 +1,29 @@
 "use client";
 
-import { createClient } from "@supabase/supabase-js";
 import type { ReactNode } from "react";
 import { useState } from "react";
+import { createAuthClient } from "@/lib/auth/client";
 
 type BillingPortalButtonProps = {
-  supabaseUrl: string;
-  supabaseAnonKey: string;
   className?: string;
   children?: ReactNode;
 };
 
 export function BillingPortalButton({
-  supabaseUrl,
-  supabaseAnonKey,
   className,
   children = "Manage billing",
 }: BillingPortalButtonProps) {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [supabase] = useState(() =>
-    createClient(supabaseUrl, supabaseAnonKey, {
-      auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: true,
-      },
-    }),
-  );
+  const [auth] = useState(() => createAuthClient());
 
   const onClick = async () => {
     setIsLoading(true);
     setError(null);
 
     try {
-      const { data } = await supabase.auth.getSession();
-      const accessToken = data.session?.access_token;
+      const session = await auth.getSession();
+      const accessToken = session?.access_token;
       if (!accessToken) {
         throw new Error("Sign in to manage billing.");
       }

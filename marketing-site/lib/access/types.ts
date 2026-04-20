@@ -91,7 +91,7 @@ export interface InstallTokenPayload {
   issued_at: string;
 }
 
-export interface SupabaseUser {
+export interface AuthenticatedUser {
   id: string;
   email: string | null;
 }

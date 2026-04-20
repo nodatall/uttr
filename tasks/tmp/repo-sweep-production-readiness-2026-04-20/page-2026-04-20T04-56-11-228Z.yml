@@ -1,0 +1,38 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - link "Uttr home" [ref=e5] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e6]:
+            - img "Uttr" [ref=e7]
+            - generic [ref=e8]: UTTR
+        - navigation
+    - main [ref=e9]:
+      - generic [ref=e10]:
+        - paragraph [ref=e11]: Account
+        - generic [ref=e13]:
+          - generic [ref=e14]:
+            - generic [ref=e15]: Email
+            - textbox "Email" [ref=e16]:
+              - /placeholder: you@example.com
+          - generic [ref=e17]:
+            - generic [ref=e18]: Password
+            - textbox "Password" [ref=e19]:
+              - /placeholder: Use at least 6 characters
+          - generic [ref=e20]:
+            - button "Create account" [disabled] [ref=e21]
+            - button "Sign in" [disabled] [ref=e22]
+    - contentinfo [ref=e23]:
+      - generic [ref=e24]:
+        - link "Uttr home" [ref=e25] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e26]:
+            - img "Uttr" [ref=e27]
+            - generic [ref=e28]: UTTR
+        - generic [ref=e29]:
+          - link "Terms & Privacy" [ref=e30] [cursor=pointer]:
+            - /url: /legal
+          - link "support@uttr.pro" [ref=e31] [cursor=pointer]:
+            - /url: mailto:support@uttr.pro
+  - alert [ref=e32]

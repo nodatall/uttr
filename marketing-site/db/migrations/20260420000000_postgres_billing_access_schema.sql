@@ -10,44 +10,17 @@ begin
 end;
 $$;
 
-create or replace function public.handle_auth_user_insert()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  insert into public.profiles (id, email)
-  values (new.id, coalesce(new.email, ''))
-  on conflict (id) do update
-    set email = excluded.email;
-
-  return new;
-end;
-$$;
-
-create or replace function public.handle_auth_user_email_update()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  update public.profiles
-    set email = coalesce(new.email, '')
-  where id = new.id;
-
-  return new;
-end;
-$$;
-
 create table if not exists public.profiles (
-  id uuid primary key references auth.users (id) on delete cascade,
-  email text not null default '',
+  id uuid primary key default gen_random_uuid(),
+  email text not null,
+  password_hash text not null,
   byok_unlocked boolean not null default false,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+
+create unique index if not exists profiles_email_lower_idx
+  on public.profiles (lower(email));
 
 create table if not exists public.anonymous_trials (
   id uuid primary key default gen_random_uuid(),
@@ -124,45 +97,63 @@ create index if not exists usage_events_user_id_idx
 create index if not exists usage_events_created_at_idx
   on public.usage_events (created_at desc);
 
+create table if not exists public.checkout_sessions (
+  id uuid primary key default gen_random_uuid(),
+  checkout_context_key text not null,
+  user_id uuid not null references public.profiles (id) on delete cascade,
+  anonymous_trial_id uuid null references public.anonymous_trials (id) on delete set null,
+  install_id text null,
+  stripe_checkout_session_id text not null unique,
+  stripe_customer_id text null,
+  status text not null default 'open',
+  checkout_url text not null,
+  expires_at timestamptz not null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint checkout_sessions_status_check
+    check (status in ('open', 'completed', 'expired'))
+);
+
+create unique index if not exists checkout_sessions_open_context_key_idx
+  on public.checkout_sessions (checkout_context_key)
+  where status = 'open';
+
+create index if not exists checkout_sessions_user_id_idx
+  on public.checkout_sessions (user_id);
+
+create index if not exists checkout_sessions_anonymous_trial_id_idx
+  on public.checkout_sessions (anonymous_trial_id);
+
+create index if not exists checkout_sessions_install_id_idx
+  on public.checkout_sessions (install_id);
+
+create index if not exists checkout_sessions_status_idx
+  on public.checkout_sessions (status);
+
+create index if not exists checkout_sessions_expires_at_idx
+  on public.checkout_sessions (expires_at);
+
+create table if not exists public.rate_limit_buckets (
+  rate_limit_key text primary key,
+  count integer not null,
+  reset_at timestamptz not null,
+  updated_at timestamptz not null default now()
+);
+
 create table if not exists public.stripe_webhook_events (
   id text primary key,
   event_type text not null,
-  processed_at timestamptz not null default now()
+  status text not null default 'processed',
+  processed_at timestamptz null,
+  processing_started_at timestamptz null,
+  last_error text null,
+  updated_at timestamptz not null default now(),
+  constraint stripe_webhook_events_status_check
+    check (status in ('processing', 'processed', 'failed'))
 );
 
 create index if not exists stripe_webhook_events_event_type_idx
   on public.stripe_webhook_events (event_type);
-
-alter table public.profiles enable row level security;
-alter table public.anonymous_trials enable row level security;
-alter table public.trial_claims enable row level security;
-alter table public.entitlements enable row level security;
-alter table public.usage_events enable row level security;
-alter table public.stripe_webhook_events enable row level security;
-
-drop policy if exists "profiles_select_own" on public.profiles;
-create policy "profiles_select_own"
-  on public.profiles
-  for select
-  using (auth.uid() = id);
-
-drop policy if exists "entitlements_select_own" on public.entitlements;
-create policy "entitlements_select_own"
-  on public.entitlements
-  for select
-  using (auth.uid() = user_id);
-
-drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row
-  execute function public.handle_auth_user_insert();
-
-drop trigger if exists on_auth_user_email_updated on auth.users;
-create trigger on_auth_user_email_updated
-  after update of email on auth.users
-  for each row
-  execute function public.handle_auth_user_email_update();
 
 drop trigger if exists set_profiles_updated_at on public.profiles;
 create trigger set_profiles_updated_at
@@ -179,5 +170,23 @@ create trigger set_anonymous_trials_updated_at
 drop trigger if exists set_entitlements_updated_at on public.entitlements;
 create trigger set_entitlements_updated_at
   before update on public.entitlements
+  for each row
+  execute function public.touch_updated_at();
+
+drop trigger if exists set_checkout_sessions_updated_at on public.checkout_sessions;
+create trigger set_checkout_sessions_updated_at
+  before update on public.checkout_sessions
+  for each row
+  execute function public.touch_updated_at();
+
+drop trigger if exists set_rate_limit_buckets_updated_at on public.rate_limit_buckets;
+create trigger set_rate_limit_buckets_updated_at
+  before update on public.rate_limit_buckets
+  for each row
+  execute function public.touch_updated_at();
+
+drop trigger if exists set_stripe_webhook_events_updated_at on public.stripe_webhook_events;
+create trigger set_stripe_webhook_events_updated_at
+  before update on public.stripe_webhook_events
   for each row
   execute function public.touch_updated_at();

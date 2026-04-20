@@ -4,15 +4,11 @@ import {
   rateLimitKeyFromRequest,
   resetRateLimitForTests,
 } from "./rate-limit";
+import { setDbExecutorForTests } from "./db";
 
 const originalEnv = {
   NODE_ENV: process.env.NODE_ENV,
-  SUPABASE_URL: process.env.SUPABASE_URL,
-  SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
-  SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
 };
-
-const originalFetch = globalThis.fetch;
 
 function restoreEnv(name: keyof typeof originalEnv) {
   const value = originalEnv[name];
@@ -26,19 +22,12 @@ function restoreEnv(name: keyof typeof originalEnv) {
 
 beforeEach(() => {
   process.env.NODE_ENV = "test";
-  process.env.SUPABASE_URL = "https://supabase.test";
-  process.env.SUPABASE_ANON_KEY = "anon-key-test";
-  process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-test";
-  globalThis.fetch = originalFetch;
 });
 
 afterEach(() => {
   resetRateLimitForTests();
+  setDbExecutorForTests(null);
   restoreEnv("NODE_ENV");
-  restoreEnv("SUPABASE_URL");
-  restoreEnv("SUPABASE_ANON_KEY");
-  restoreEnv("SUPABASE_SERVICE_ROLE_KEY");
-  globalThis.fetch = originalFetch;
 });
 
 describe("rate limiting", () => {
@@ -93,21 +82,18 @@ describe("rate limiting", () => {
 
   test("uses durable storage in production and surfaces retry-after values", async () => {
     process.env.NODE_ENV = "production";
-    let requestBody = "";
-    globalThis.fetch = async (input, init) => {
-      expect(String(input)).toContain("/rest/v1/rpc/consume_rate_limit");
-      requestBody = String(init?.body ?? "");
-      return new Response(
-        JSON.stringify([
-          {
-            allowed: false,
-            remaining: 0,
-            retry_after_seconds: 17,
-          },
-        ]),
-        { status: 200 },
-      );
-    };
+    const resetAt = new Date(Date.now() + 17_000).toISOString();
+    let queryValues: readonly unknown[] | undefined;
+
+    setDbExecutorForTests({
+      async query(_sql, values) {
+        queryValues = values;
+        return {
+          rows: [{ count: 21, reset_at: resetAt }],
+          rowCount: 1,
+        };
+      },
+    });
 
     await expect(
       checkRateLimit({ key: "trial-create-claim:ip", limit: 20, windowMs: 60_000 }),
@@ -118,18 +104,16 @@ describe("rate limiting", () => {
       source: "durable",
     });
 
-    expect(JSON.parse(requestBody)).toEqual({
-      p_rate_limit_key: "trial-create-claim:ip",
-      p_limit: 20,
-      p_window_ms: 60_000,
-    });
+    expect(queryValues).toEqual(["trial-create-claim:ip", 60_000]);
   });
 
   test("fails closed in production when durable storage is unavailable", async () => {
     process.env.NODE_ENV = "production";
-    globalThis.fetch = async () => {
-      throw new Error("supabase unavailable");
-    };
+    setDbExecutorForTests({
+      async query() {
+        throw new Error("database unavailable");
+      },
+    });
 
     await expect(
       checkRateLimit({ key: "cloud-transcribe:ip", limit: 60, windowMs: 60_000 }),

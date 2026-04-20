@@ -3,10 +3,10 @@ import { z } from "zod";
 import {
   fetchAnonymousTrialById,
   fetchEntitlementByUserId,
-  fetchSupabaseUser,
+  fetchAuthenticatedUser,
   fetchTrialClaimByHash,
   hashClaimToken,
-  readSupabaseAccessTokenFromRequest,
+  readAccessTokenFromRequest,
   redeemTrialClaim,
   type ClaimTokenPayload,
   verifyClaimToken,
@@ -47,15 +47,23 @@ export async function POST(request: Request) {
       );
     }
 
-    const accessToken = readSupabaseAccessTokenFromRequest(request);
+    const accessToken = readAccessTokenFromRequest(request);
     if (!accessToken) {
       return NextResponse.json(
-        { error: "Missing Supabase access token." },
+        { error: "Missing session." },
         { status: 401 },
       );
     }
 
-    const currentUser = await fetchSupabaseUser(accessToken);
+    let currentUser;
+    try {
+      currentUser = await fetchAuthenticatedUser(accessToken);
+    } catch {
+      return NextResponse.json(
+        { error: "Invalid or expired session." },
+        { status: 401 },
+      );
+    }
 
     let tokenPayload: ClaimTokenPayload;
     try {

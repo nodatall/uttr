@@ -7,6 +7,7 @@ Standalone Next.js marketing + subscription site for Uttr.
 - Tailwind CSS
 - Procedural canvas-based galaxy renderer for hero
 - Stripe Checkout + webhooks
+- Postgres for account, access, rate-limit, and webhook state
 - Resend for transactional email notifications
 
 ## Deployment
@@ -46,18 +47,24 @@ The site expects these runtime variables:
 - `NEXT_PUBLIC_STRIPE_PRICE_ID_MONTHLY` - Stripe monthly subscription price ID.
 - `STRIPE_SECRET_KEY` - Stripe server secret for checkout and billing operations.
 - `STRIPE_WEBHOOK_SECRET` - Stripe webhook signing secret.
-- `SUPABASE_URL` - Supabase project URL for billing and access storage.
-- `SUPABASE_ANON_KEY` - Supabase anon key for browser-safe reads where needed.
-- `SUPABASE_SERVICE_ROLE_KEY` - Supabase service-role key for privileged backend writes.
+- `DATABASE_URL` - Postgres connection string for accounts, billing access, rate limits, and webhook state.
+- `DATABASE_POOL_MAX` - optional Postgres pool size; defaults to `5`.
 - `GROQ_API_KEY` - server-held Groq key for default cloud transcription proxying.
 - `GROQ_TRANSCRIPTION_MODEL_DEFAULT` - default Groq transcription model name.
 - `UTTR_INSTALL_TOKEN_SECRET` - signing secret for install tokens.
 - `UTTR_CLAIM_TOKEN_SECRET` - signing secret for claim tokens.
+- `UTTR_SESSION_SECRET` - signing secret for account sessions.
 - `RESEND_API_KEY` - optional email provider secret for transactional mail.
 - `EMAIL_FROM` - optional sender identity for transactional mail.
 - `EMAIL_SUPPORT` - optional support mailbox override for transactional mail.
 
 Copy `.env.example` to `.env.local` for development. Production should provide the same variables through Fly secrets and app configuration.
+
+Apply database migrations with `psql` before running the purchase/account routes:
+
+```bash
+psql "$DATABASE_URL" -f db/migrations/20260420000000_postgres_billing_access_schema.sql
+```
 
 ## Stripe Setup
 
@@ -93,5 +100,5 @@ Copy the emitted signing secret to `STRIPE_WEBHOOK_SECRET`.
 
 ## Notes
 - The app is purchase-enabled and does not enforce in-app entitlement checks.
-- Webhook idempotency is implemented in-memory for this deployment unit.
+- Webhook idempotency and production rate limiting are durable Postgres writes.
 - The backend proxy and entitlement work will add additional routes under `/api/*` in later tasks.

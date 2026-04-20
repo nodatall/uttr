@@ -1,5 +1,11 @@
 import { describe, expect, test } from "bun:test";
-import { buildCheckoutMetadata } from "./stripe";
+import { buildCheckoutMetadata, STRIPE_API_VERSION } from "./stripe";
+
+describe("Stripe client configuration", () => {
+  test("uses the current pinned API version", () => {
+    expect(STRIPE_API_VERSION).toBe("2026-03-25.dahlia");
+  });
+});
 
 describe("checkout metadata", () => {
   test("includes install linkage when present", () => {

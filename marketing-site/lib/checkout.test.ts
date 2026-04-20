@@ -1,29 +1,9 @@
-import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { describe, expect, test } from "bun:test";
 import {
   buildCheckoutSessionIdempotencyKey,
   createOrReuseCheckoutSession,
 } from "./checkout";
 import type { CheckoutSessionRow } from "./access";
-
-const originalEnv = {
-  SUPABASE_URL: process.env.SUPABASE_URL,
-  SUPABASE_ANON_KEY: process.env.SUPABASE_ANON_KEY,
-  SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY,
-};
-const originalFetch = globalThis.fetch;
-
-beforeEach(() => {
-  process.env.SUPABASE_URL = "https://supabase.test";
-  process.env.SUPABASE_ANON_KEY = "anon-key-test";
-  process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-test";
-});
-
-afterEach(() => {
-  process.env.SUPABASE_URL = originalEnv.SUPABASE_URL;
-  process.env.SUPABASE_ANON_KEY = originalEnv.SUPABASE_ANON_KEY;
-  process.env.SUPABASE_SERVICE_ROLE_KEY = originalEnv.SUPABASE_SERVICE_ROLE_KEY;
-  globalThis.fetch = originalFetch;
-});
 
 function buildReusableSession(
   overrides: Partial<CheckoutSessionRow> = {},
