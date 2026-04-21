@@ -1,13 +1,18 @@
+import { cookies } from "next/headers";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteNav } from "@/components/site-nav";
+import { readSessionCookieName } from "@/lib/auth/server";
 import { AccountFlow } from "./account-flow";
 
 export const dynamic = "force-dynamic";
 
-export default function AccountPage() {
+export default async function AccountPage() {
+  const cookieStore = await cookies();
+  const initialSessionChecked = !cookieStore.has(readSessionCookieName());
+
   return (
     <div className="flex min-h-screen flex-col bg-cosmic-950 text-cosmic-50">
-      <SiteNav showPricingLink={false} />
+      <SiteNav sectionLinks="home" />
 
       <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col justify-center px-6 py-12">
         <div className="section-shell relative w-full rounded-3xl p-8 text-center md:p-10">
@@ -18,7 +23,7 @@ export default function AccountPage() {
             Manage your Uttr subscription.
           </h1>
 
-          <AccountFlow />
+          <AccountFlow initialSessionChecked={initialSessionChecked} />
         </div>
       </main>
 

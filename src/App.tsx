@@ -13,6 +13,7 @@ import Footer from "./components/footer";
 import { AccessibilityOnboarding } from "./components/onboarding";
 import { Sidebar, SidebarSection, SECTIONS_CONFIG } from "./components/Sidebar";
 import { HistorySettings } from "./components/settings";
+import { RoseThreeLoader } from "./components/shared";
 import { useSettings } from "./hooks/useSettings";
 import { useSettingsStore } from "./stores/settingsStore";
 import { commands } from "@/bindings";
@@ -244,7 +245,10 @@ function App() {
   if (onboardingStep === null) {
     return (
       <div className="flex h-screen items-center justify-center bg-[linear-gradient(180deg,rgba(10,15,25,0.985),rgba(6,10,18,0.96))] text-text">
-        <div className="h-8 w-8 rounded-lg bg-background-ui/80 shadow-[0_0_34px_rgba(29,155,100,0.28)]" />
+        <RoseThreeLoader
+          className="h-28 w-28 text-logo-primary drop-shadow-[0_0_28px_rgba(103,215,163,0.28)]"
+          ariaLabel="Loading settings"
+        />
       </div>
     );
   }

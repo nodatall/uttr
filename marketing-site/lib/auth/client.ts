@@ -64,6 +64,10 @@ async function requestSession(
 
 export function createAuthClient() {
   return {
+    hasStoredSessionToken() {
+      return readStoredToken() !== null;
+    },
+
     async getSession() {
       const token = readStoredToken();
       const response = await fetch("/api/auth/session", {

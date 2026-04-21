@@ -1,0 +1,132 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - link "Uttr home" [ref=e5] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e6]:
+            - img "Uttr" [ref=e7]
+            - generic [ref=e8]: UTTR
+        - navigation [ref=e9]:
+          - link "Features" [ref=e10] [cursor=pointer]:
+            - /url: "#features"
+          - link "Pricing" [ref=e11] [cursor=pointer]:
+            - /url: "#pricing"
+          - link "Account" [ref=e12] [cursor=pointer]:
+            - /url: /account
+    - main [ref=e13]:
+      - generic [ref=e14]:
+        - generic:
+          - generic: UTTR
+        - generic [ref=e17]:
+          - generic [ref=e18]:
+            - generic [ref=e19]:
+              - paragraph [ref=e20]: Speech-to-text for desktop
+              - heading "Type less. Say more." [level=1] [ref=e21]:
+                - text: Type less.
+                - generic [ref=e22]: Say more.
+              - paragraph [ref=e23]: Press a shortcut. Speak. Your words appear instantly.
+              - link "Download for macOS" [ref=e25] [cursor=pointer]:
+                - /url: https://github.com/nodatall/uttr/releases/latest
+            - generic [ref=e27]:
+              - paragraph [ref=e28]: Uttr at a glance
+              - generic [ref=e29]:
+                - generic [ref=e30]:
+                  - paragraph [ref=e31]: Instant capture
+                  - paragraph [ref=e32]: fast voice-to-text loop
+                - generic [ref=e33]:
+                  - paragraph [ref=e34]: File transcription
+                  - paragraph [ref=e35]: turn audio files into clean text
+                - generic [ref=e36]:
+                  - paragraph [ref=e37]: Full-system audio
+                  - paragraph [ref=e38]: record meetings in any app
+                - generic [ref=e39]:
+                  - paragraph [ref=e40]: Custom prompts
+                  - paragraph [ref=e41]: edit post-processing instructions
+          - generic [ref=e42]:
+            - generic [ref=e43]: 01 Trigger
+            - generic [ref=e44]: 02 Speak
+            - generic [ref=e45]: 03 Insert
+          - generic [ref=e46]:
+            - generic [ref=e47]: Fast, accurate transcription
+            - generic [ref=e48]: Quiet, minimal interface
+            - generic [ref=e49]: Works where you write
+      - generic [ref=e52]:
+        - generic [ref=e53]:
+          - paragraph [ref=e54]: Features
+          - heading "Built for the moments typing gets in the way." [level=2] [ref=e55]
+        - generic [ref=e56]:
+          - article [ref=e57]:
+            - paragraph [ref=e58]: Dictation
+            - heading "Speak into any text field." [level=3] [ref=e59]
+            - paragraph [ref=e60]: Use one shortcut to capture your words and insert the transcript where you were already writing.
+          - article [ref=e62]:
+            - paragraph [ref=e63]: Files
+            - heading "Transcribe recordings later." [level=3] [ref=e64]
+            - paragraph [ref=e65]: Drop in an audio file when the meeting, interview, or voice memo already happened.
+          - article [ref=e67]:
+            - paragraph [ref=e68]: System audio
+            - heading "Record meetings in any app." [level=3] [ref=e69]
+            - paragraph [ref=e70]: Capture microphone and system audio together for calls, demos, and long-form desktop sessions.
+          - article [ref=e72]:
+            - paragraph [ref=e73]: Post-processing
+            - heading "Control the final text." [level=3] [ref=e74]
+            - paragraph [ref=e75]: Edit the prompt that cleans up punctuation, formatting, tone, and structure after transcription.
+      - generic [ref=e78]:
+        - generic [ref=e79]:
+          - generic [ref=e80]:
+            - paragraph [ref=e81]: Pricing
+            - heading "Start free. Upgrade when voice becomes your workflow." [level=2] [ref=e82]
+          - paragraph [ref=e83]: Two simple options for macOS. Pro unlocks the deeper capture and cleanup tools.
+        - generic [ref=e84]:
+          - generic [ref=e85]:
+            - generic [ref=e87]:
+              - paragraph [ref=e88]: Free
+              - generic [ref=e90]: $0
+            - paragraph [ref=e91]: For trying Uttr and lightweight dictation.
+            - list [ref=e92]:
+              - listitem [ref=e93]:
+                - generic [ref=e95]: Desktop speech-to-text
+              - listitem [ref=e96]:
+                - generic [ref=e98]: Quick shortcut capture
+              - listitem [ref=e99]:
+                - generic [ref=e101]: Transcript history
+              - listitem [ref=e102]:
+                - generic [ref=e104]: Local app experience
+            - link "Download for macOS" [ref=e106] [cursor=pointer]:
+              - /url: https://github.com/nodatall/uttr/releases/latest
+          - generic [ref=e107]:
+            - generic [ref=e109]:
+              - paragraph [ref=e110]: Pro
+              - generic [ref=e111]:
+                - generic [ref=e112]: $5
+                - generic [ref=e113]: /month
+            - paragraph [ref=e114]: For using voice as a serious writing and meeting tool.
+            - list [ref=e115]:
+              - listitem [ref=e116]:
+                - generic [ref=e118]: Everything in Free
+              - listitem [ref=e119]:
+                - generic [ref=e121]: Full-system audio capture
+              - listitem [ref=e122]:
+                - generic [ref=e124]: File transcription
+              - listitem [ref=e125]:
+                - generic [ref=e127]: Editable post-processing prompt
+              - listitem [ref=e128]:
+                - generic [ref=e130]: Longer recordings and meeting workflows
+            - link "Download for macOS" [ref=e132] [cursor=pointer]:
+              - /url: https://github.com/nodatall/uttr/releases/latest
+    - contentinfo [ref=e133]:
+      - generic [ref=e134]:
+        - link "Uttr home" [ref=e135] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e136]:
+            - img "Uttr" [ref=e137]
+            - generic [ref=e138]: UTTR
+        - generic [ref=e139]:
+          - link "Terms & Privacy" [ref=e140] [cursor=pointer]:
+            - /url: /legal
+          - link "support@uttr.pro" [ref=e141] [cursor=pointer]:
+            - /url: mailto:support@uttr.pro
+  - button "Open Next.js Dev Tools" [ref=e147] [cursor=pointer]:
+    - img [ref=e148]
+  - alert [ref=e151]

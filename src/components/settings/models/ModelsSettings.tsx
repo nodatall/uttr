@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { ChevronDown, Globe } from "lucide-react";
 import type { ModelCardStatus } from "@/components/onboarding";
 import { ModelCard } from "@/components/onboarding";
+import { RoseThreeLoader } from "@/components/shared";
 import { useModelStore } from "@/stores/modelStore";
 import {
   getLocalizedLanguages,
@@ -240,7 +241,12 @@ export const ModelsSettings: React.FC = () => {
     return (
       <div className="max-w-3xl w-full mx-auto">
         <div className="flex items-center justify-center py-16">
-          <div className="w-8 h-8 border-2 border-logo-primary border-t-transparent rounded-full animate-spin" />
+          <RoseThreeLoader
+            className="h-24 w-24 text-logo-primary drop-shadow-[0_0_24px_rgba(103,215,163,0.24)]"
+            ariaLabel={t("settings.models.loading", {
+              defaultValue: "Loading models",
+            })}
+          />
         </div>
       </div>
     );
