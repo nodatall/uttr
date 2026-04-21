@@ -1,0 +1,200 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - link "Uttr home" [ref=e5] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e6]:
+            - img "Uttr" [ref=e7]
+            - generic [ref=e8]: UTTR
+        - navigation
+    - main [ref=e9]:
+      - article [ref=e10]:
+        - paragraph [ref=e11]: Last updated April 17, 2026
+        - heading "Terms & Privacy" [level=1] [ref=e12]
+        - generic [ref=e13]:
+          - generic [ref=e14]:
+            - heading "Terms of Service" [level=2] [ref=e15]
+            - heading "1. Using Uttr" [level=3] [ref=e16]
+            - paragraph [ref=e17]: Uttr is a desktop speech-to-text app and related website services. You may use Uttr only if you can form a binding agreement and you follow these terms and applicable law.
+            - heading "2. Accounts and access" [level=3] [ref=e18]
+            - paragraph [ref=e19]: Some features require an account, subscription, install token, or trial access. You are responsible for keeping your account credentials and device access secure. We may limit, suspend, or end access if we believe the service is being abused, attacked, resold without permission, or used in a way that harms Uttr or other users.
+            - heading "3. Subscriptions and billing" [level=3] [ref=e20]
+            - paragraph [ref=e21]: Paid plans are billed through Stripe. Subscription prices, billing intervals, and included features are shown before checkout. Unless cancelled, subscriptions renew automatically. You can cancel through the account or billing portal where available, or by contacting us.
+            - paragraph [ref=e22]: Fees are generally non-refundable except where required by law or where we choose to provide a refund. Stripe may collect and process billing information under its own terms and privacy policy.
+            - heading "4. Your content" [level=3] [ref=e23]
+            - paragraph [ref=e24]: You keep ownership of the audio, transcripts, prompts, and other content you use with Uttr. You give us permission to process that content only as needed to provide, secure, troubleshoot, and improve the service features you use.
+            - heading "5. Acceptable use" [level=3] [ref=e25]
+            - paragraph [ref=e26]: "You agree not to use Uttr to:"
+            - list [ref=e27]:
+              - listitem [ref=e28]: break the law or violate someone else's rights;
+              - listitem [ref=e29]: submit content you do not have the right to process;
+              - listitem [ref=e30]: reverse engineer, overload, scrape, or disrupt the service;
+              - listitem [ref=e31]: share access tokens, bypass usage limits, or resell the service without permission.
+            - heading "6. Third-party services" [level=3] [ref=e32]
+            - paragraph [ref=e33]: Uttr may use third-party providers for payments, account infrastructure, email, hosting, analytics, and cloud transcription. Those providers are responsible for their own services, and their terms may apply when you use features that depend on them.
+            - heading "7. No warranty" [level=3] [ref=e34]
+            - paragraph [ref=e35]: Uttr is provided as is and as available. Transcription output may be incomplete, inaccurate, delayed, or unavailable. You are responsible for reviewing transcripts before relying on them, especially for professional, legal, medical, financial, or safety-sensitive uses.
+            - heading "8. Limitation of liability" [level=3] [ref=e36]
+            - paragraph [ref=e37]: To the maximum extent allowed by law, Uttr will not be liable for indirect, incidental, special, consequential, exemplary, or punitive damages, or for lost profits, lost data, lost goodwill, or service interruption.
+            - heading "9. Changes" [level=3] [ref=e38]
+            - paragraph [ref=e39]: We may update these terms as the product changes. If a change is material, we will make reasonable efforts to provide notice. Continued use of Uttr after an update means you accept the updated terms.
+          - generic [ref=e40]:
+            - heading "Privacy Policy" [level=2] [ref=e41]
+            - heading "1. Information we collect" [level=3] [ref=e42]
+            - paragraph [ref=e43]: We collect the information needed to run Uttr, including account email, subscription and entitlement status, Stripe customer and subscription identifiers, install or trial identifiers, hashed device fingerprints, usage event metadata such as feature source and audio duration, support messages, and basic server logs.
+            - heading "2. Audio, transcripts, and prompts" [level=3] [ref=e44]
+            - paragraph [ref=e45]: Uttr's desktop app is designed to keep local app history on your device. When you use cloud transcription or related hosted features, audio and request metadata are sent to Uttr's server and transcription provider so the request can be processed. We do not sell your audio, transcripts, or prompts.
+            - heading "3. How we use information" [level=3] [ref=e46]
+            - paragraph [ref=e47]: "We use information to:"
+            - list [ref=e48]:
+              - listitem [ref=e49]: provide transcription, account, trial, and paid access features;
+              - listitem [ref=e50]: process payments and subscription status;
+              - listitem [ref=e51]: prevent abuse, debug errors, and keep the service secure;
+              - listitem [ref=e52]: respond to support requests;
+              - listitem [ref=e53]: understand aggregate usage so we can improve Uttr.
+            - heading "4. Sharing" [level=3] [ref=e54]
+            - paragraph [ref=e55]: We share information with service providers only as needed to operate Uttr, such as Stripe for billing, Postgres for account and entitlement storage, email providers for transactional messages, hosting providers, and transcription providers for cloud transcription. We may also disclose information if required by law or to protect Uttr, users, or others.
+            - heading "5. Retention" [level=3] [ref=e56]
+            - paragraph [ref=e57]: We keep account, billing, entitlement, support, usage, and log data for as long as needed to provide the service, meet legal and accounting obligations, resolve disputes, prevent abuse, and maintain security. Local transcripts stored by the desktop app remain under your control on your device unless you delete or export them.
+            - heading "6. Security" [level=3] [ref=e58]
+            - paragraph [ref=e59]: We use reasonable technical and organizational measures to protect the service. No internet or desktop software can be guaranteed perfectly secure, so you should use strong account credentials and keep your device protected.
+            - heading "7. Your choices" [level=3] [ref=e60]
+            - paragraph [ref=e61]: You can cancel a paid subscription, stop using cloud transcription features, delete local app history from your device where the app provides that control, or contact us to request access, correction, deletion, or export of personal information.
+            - heading "8. Children" [level=3] [ref=e62]
+            - paragraph [ref=e63]: Uttr is not intended for children under 13, and we do not knowingly collect personal information from children under 13.
+            - heading "9. Contact" [level=3] [ref=e64]
+            - paragraph [ref=e65]:
+              - text: Questions about these terms or this privacy policy can be sent to
+              - link "support@uttr.pro" [ref=e66] [cursor=pointer]:
+                - /url: mailto:support@uttr.pro
+              - text: .
+    - contentinfo [ref=e67]:
+      - generic [ref=e68]:
+        - link "Uttr home" [ref=e69] [cursor=pointer]:
+          - /url: /
+          - generic [ref=e70]:
+            - img "Uttr" [ref=e71]
+            - generic [ref=e72]: UTTR
+        - generic [ref=e73]:
+          - link "Terms & Privacy" [ref=e74] [cursor=pointer]:
+            - /url: /legal
+          - link "support@uttr.pro" [ref=e75] [cursor=pointer]:
+            - /url: mailto:support@uttr.pro
+  - button "Open Next.js Dev Tools" [ref=e81] [cursor=pointer]:
+    - img [ref=e82]
+  - alert [ref=e85]
+  - button "v3.0.2 Output Detail Standard React Components Hide Until Restart Marker Color Clear on copy/send Block page interactions Manage MCP & Webhooks Manage MCP & Webhooks MCP Connection MCP connection allows agents to receive and act on annotations. Learn more Webhooks Auto-Send The webhook URL will receive live annotation changes and annotation data." [ref=e87] [cursor=pointer]:
+    - img [ref=e89]
+    - generic:
+      - generic:
+        - button:
+          - img
+      - generic:
+        - button:
+          - img
+      - generic:
+        - button [disabled]:
+          - img
+      - generic:
+        - button [disabled]:
+          - img
+      - generic:
+        - button [disabled]:
+          - img
+      - generic:
+        - button [disabled]:
+          - img
+      - generic:
+        - button:
+          - img
+      - generic:
+        - button:
+          - img
+    - generic:
+      - generic:
+        - generic:
+          - generic:
+            - link:
+              - /url: https://agentation.com
+              - img
+            - paragraph: v3.0.2
+            - button "Switch to light mode":
+              - generic:
+                - generic:
+                  - img
+          - generic:
+            - generic:
+              - generic:
+                - text: Output Detail
+                - generic:
+                  - img
+              - button "Standard":
+                - generic: Standard
+            - generic:
+              - generic:
+                - text: React Components
+                - generic:
+                  - img
+              - generic:
+                - checkbox [checked]
+            - generic:
+              - generic:
+                - text: Hide Until Restart
+                - generic:
+                  - img
+              - generic:
+                - checkbox
+          - generic:
+            - generic: Marker Color
+            - generic:
+              - button "Indigo"
+              - button "Blue"
+              - button "Cyan"
+              - button "Green"
+              - button "Yellow"
+              - button "Orange"
+              - button "Red"
+          - generic:
+            - generic:
+              - generic:
+                - checkbox "Clear on copy/send"
+                - img
+              - generic: Clear on copy/send
+              - generic:
+                - img
+            - generic:
+              - generic:
+                - checkbox "Block page interactions" [checked]
+                - img
+              - generic: Block page interactions
+          - button "Manage MCP & Webhooks":
+            - generic: Manage MCP & Webhooks
+            - generic:
+              - img
+        - generic:
+          - button "Manage MCP & Webhooks":
+            - img
+            - generic: Manage MCP & Webhooks
+          - generic:
+            - generic:
+              - generic:
+                - text: MCP Connection
+                - generic:
+                  - img
+            - paragraph:
+              - text: MCP connection allows agents to receive and act on annotations.
+              - link "Learn more":
+                - /url: https://agentation.dev/mcp
+          - generic:
+            - generic:
+              - generic:
+                - text: Webhooks
+                - generic:
+                  - img
+              - generic:
+                - generic: Auto-Send
+                - generic:
+                  - checkbox "Auto-Send" [checked] [disabled]
+            - paragraph: The webhook URL will receive live annotation changes and annotation data.
+            - textbox "Webhook URL"

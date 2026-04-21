@@ -25,13 +25,19 @@ async function openBillingPortal(session: AuthSession) {
   window.location.assign(payload.url);
 }
 
-export function AccountFlow() {
+export function AccountFlow({
+  initialSessionChecked = false,
+}: {
+  initialSessionChecked?: boolean;
+}) {
   const downloadUrl = getDownloadUrl();
   const [auth] = useState(() => createAuthClient());
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
-  const [hasCheckedSession, setHasCheckedSession] = useState(false);
+  const [hasCheckedSession, setHasCheckedSession] = useState(
+    initialSessionChecked,
+  );
   const [status, setStatus] = useState<"idle" | "auth" | "portal" | "logout">(
     "idle",
   );
@@ -60,6 +66,13 @@ export function AccountFlow() {
     };
 
     const syncSession = async () => {
+      if (initialSessionChecked && !auth.hasStoredSessionToken()) {
+        clearFallbackTimeout();
+        setSignedInEmail(null);
+        setHasCheckedSession(true);
+        return;
+      }
+
       scheduleSignedOutFallback();
       const session = await auth.getSession();
       if (cancelled) {
@@ -94,7 +107,7 @@ export function AccountFlow() {
       window.removeEventListener("focus", refreshSession);
       document.removeEventListener("visibilitychange", refreshSession);
     };
-  }, [auth]);
+  }, [auth, initialSessionChecked]);
 
   const signIn = async () => {
     if (!canSubmitCredentials) {

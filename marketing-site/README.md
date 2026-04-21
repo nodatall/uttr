@@ -45,6 +45,7 @@ The site expects these runtime variables:
 - `NEXT_PUBLIC_DOWNLOAD_URL` - public macOS download URL used by marketing and account CTAs.
 - `NEXT_PUBLIC_SUPPORT_EMAIL` - public support address shown in site UI.
 - `NEXT_PUBLIC_STRIPE_PRICE_ID_MONTHLY` - Stripe monthly subscription price ID.
+- `NEXT_PUBLIC_AGENTATION_DEV_TOOLBAR` - optional development-only Agentation toolbar toggle; set to `true` when annotating UI.
 - `STRIPE_SECRET_KEY` - Stripe server secret for checkout and billing operations.
 - `STRIPE_WEBHOOK_SECRET` - Stripe webhook signing secret.
 - `DATABASE_URL` - Postgres connection string for accounts, billing access, rate limits, and webhook state.

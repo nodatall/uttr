@@ -8,7 +8,10 @@ const Agentation = dynamic(
 );
 
 export function AgentationDevToolbar() {
-  if (process.env.NODE_ENV !== "development") {
+  if (
+    process.env.NODE_ENV !== "development" ||
+    process.env.NEXT_PUBLIC_AGENTATION_DEV_TOOLBAR !== "true"
+  ) {
     return null;
   }
 

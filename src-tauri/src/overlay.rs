@@ -419,10 +419,7 @@ fn apply_overlay_dimensions(app_handle: &AppHandle, width: f64, height: f64) {
     }
 }
 
-fn apply_overlay_z_order_for_state(
-    overlay_window: &tauri::webview::WebviewWindow,
-    state: &str,
-) {
+fn apply_overlay_z_order_for_state(overlay_window: &tauri::webview::WebviewWindow, state: &str) {
     let should_float = state != "full_system_progress";
 
     #[cfg(target_os = "macos")]
@@ -448,8 +445,13 @@ fn apply_overlay_z_order_for_state(
     }
 }
 
+fn overlay_session_epoch_is_current(epoch: u64) -> bool {
+    OVERLAY_SESSION_EPOCH.load(Ordering::Relaxed) == epoch
+}
+
 fn show_overlay_state(app_handle: &AppHandle, state: &str, width: f64, height: f64) {
     let show_start = std::time::Instant::now();
+    let show_epoch = current_overlay_session_epoch();
     log::info!("[latency] overlay show requested state={}", state);
 
     // Check if overlay should be shown based on position setting
@@ -476,8 +478,19 @@ fn show_overlay_state(app_handle: &AppHandle, state: &str, width: f64, height: f
         let state_for_retry = state_for_show.clone();
         std::thread::spawn(move || {
             let app = app_for_show.clone();
+            let epoch_for_show = show_epoch;
             let _ = app_for_show.run_on_main_thread(move || {
-                debug!("[overlay] macos show_overlay_state state={}", state_for_show);
+                if !overlay_session_epoch_is_current(epoch_for_show) {
+                    debug!(
+                        "[overlay] skipping stale macos show_overlay_state state={}",
+                        state_for_show
+                    );
+                    return;
+                }
+                debug!(
+                    "[overlay] macos show_overlay_state state={}",
+                    state_for_show
+                );
                 create_recording_overlay(&app);
                 apply_overlay_dimensions(&app, width, height);
                 if let Some(overlay_window) = app.get_webview_window(OVERLAY_LABEL_BASE) {
@@ -496,12 +509,16 @@ fn show_overlay_state(app_handle: &AppHandle, state: &str, width: f64, height: f
             });
 
             std::thread::sleep(std::time::Duration::from_millis(90));
-            if let Some(window) = app_for_show.get_webview_window(OVERLAY_LABEL_BASE) {
-                let _ = window.emit("show-overlay", &state_for_retry);
+            if overlay_session_epoch_is_current(show_epoch) {
+                if let Some(window) = app_for_show.get_webview_window(OVERLAY_LABEL_BASE) {
+                    let _ = window.emit("show-overlay", &state_for_retry);
+                }
             }
             std::thread::sleep(std::time::Duration::from_millis(180));
-            if let Some(window) = app_for_show.get_webview_window(OVERLAY_LABEL_BASE) {
-                let _ = window.emit("show-overlay", &state_for_retry);
+            if overlay_session_epoch_is_current(show_epoch) {
+                if let Some(window) = app_for_show.get_webview_window(OVERLAY_LABEL_BASE) {
+                    let _ = window.emit("show-overlay", &state_for_retry);
+                }
             }
         });
         return;
@@ -555,16 +572,18 @@ pub fn show_processing_overlay(app_handle: &AppHandle) {
     show_overlay_state(app_handle, "processing", OVERLAY_WIDTH, OVERLAY_HEIGHT);
 }
 
-fn emit_full_system_progress_payload(
-    app_handle: &AppHandle,
-    payload: &FullSystemProgressPayload,
-) {
+fn emit_full_system_progress_payload(app_handle: &AppHandle, payload: &FullSystemProgressPayload) {
     #[cfg(target_os = "macos")]
     {
+        let emit_epoch = current_overlay_session_epoch();
         let payload = payload.clone();
         let payload_for_retry = payload.clone();
         let app = app_handle.clone();
+        let epoch_for_emit = emit_epoch;
         let _ = app_handle.run_on_main_thread(move || {
+            if !overlay_session_epoch_is_current(epoch_for_emit) {
+                return;
+            }
             if let Some(overlay_window) = app.get_webview_window(OVERLAY_LABEL_BASE) {
                 let _ = overlay_window.emit("overlay-full-system-progress", &payload);
             }
@@ -573,8 +592,10 @@ fn emit_full_system_progress_payload(
         let app_retry = app_handle.clone();
         std::thread::spawn(move || {
             std::thread::sleep(std::time::Duration::from_millis(90));
-            if let Some(window) = app_retry.get_webview_window(OVERLAY_LABEL_BASE) {
-                let _ = window.emit("overlay-full-system-progress", &payload_for_retry);
+            if overlay_session_epoch_is_current(emit_epoch) {
+                if let Some(window) = app_retry.get_webview_window(OVERLAY_LABEL_BASE) {
+                    let _ = window.emit("overlay-full-system-progress", &payload_for_retry);
+                }
             }
         });
         return;
@@ -613,9 +634,13 @@ pub fn emit_overlay_alert(app_handle: &AppHandle, kind: &str) {
     apply_overlay_dimensions(app_handle, OVERLAY_ALERT_WIDTH, OVERLAY_ALERT_HEIGHT);
     #[cfg(target_os = "macos")]
     {
+        let emit_epoch = current_overlay_session_epoch();
         let kind = kind.to_string();
         let app = app_handle.clone();
         let _ = app_handle.run_on_main_thread(move || {
+            if !overlay_session_epoch_is_current(emit_epoch) {
+                return;
+            }
             if let Some(overlay_window) = app.get_webview_window(OVERLAY_LABEL_BASE) {
                 let _ = overlay_window.emit("overlay-alert", &kind);
             }
@@ -717,6 +742,27 @@ pub fn current_overlay_session_epoch() -> u64 {
 
 pub fn cancel_pending_overlay_transitions() {
     OVERLAY_SESSION_EPOCH.fetch_add(1, Ordering::Relaxed);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        cancel_pending_overlay_transitions, current_overlay_session_epoch,
+        overlay_session_epoch_is_current,
+    };
+
+    #[test]
+    fn stale_overlay_session_epoch_is_rejected() {
+        let epoch = current_overlay_session_epoch();
+        assert!(overlay_session_epoch_is_current(epoch));
+
+        cancel_pending_overlay_transitions();
+
+        assert!(!overlay_session_epoch_is_current(epoch));
+        assert!(overlay_session_epoch_is_current(
+            current_overlay_session_epoch()
+        ));
+    }
 }
 
 pub fn emit_levels(app_handle: &AppHandle, levels: &Vec<f32>) {

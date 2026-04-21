@@ -1,11 +1,41 @@
 import Link from "next/link";
+import type { ReactNode } from "react";
 import { Logo } from "@/components/logo";
 
+type SectionLinkTarget = "current" | "home";
+
+function SectionLink({
+  hash,
+  target,
+  children,
+}: {
+  hash: string;
+  target: SectionLinkTarget;
+  children: ReactNode;
+}) {
+  const className =
+    "hidden cursor-pointer transition hover:text-cosmic-50 md:inline";
+
+  if (target === "home") {
+    return (
+      <Link href={`/#${hash}`} className={className}>
+        {children}
+      </Link>
+    );
+  }
+
+  return (
+    <a href={`#${hash}`} className={className}>
+      {children}
+    </a>
+  );
+}
+
 export function SiteNav({
-  showPricingLink = true,
+  sectionLinks = "current",
   overlay = false,
 }: {
-  showPricingLink?: boolean;
+  sectionLinks?: SectionLinkTarget;
   overlay?: boolean;
 }) {
   const headerClass = overlay
@@ -24,28 +54,18 @@ export function SiteNav({
         </Link>
 
         <nav className="flex items-center gap-4 text-sm text-cosmic-100/90">
-          {showPricingLink ? (
-            <>
-              <a
-                href="#features"
-                className="hidden cursor-pointer transition hover:text-cosmic-50 md:inline"
-              >
-                Features
-              </a>
-              <a
-                href="#pricing"
-                className="hidden cursor-pointer transition hover:text-cosmic-50 md:inline"
-              >
-                Pricing
-              </a>
-              <Link
-                href="/account"
-                className="hidden cursor-pointer transition hover:text-cosmic-50 md:inline"
-              >
-                Account
-              </Link>
-            </>
-          ) : null}
+          <SectionLink hash="features" target={sectionLinks}>
+            Features
+          </SectionLink>
+          <SectionLink hash="pricing" target={sectionLinks}>
+            Pricing
+          </SectionLink>
+          <Link
+            href="/account"
+            className="hidden cursor-pointer transition hover:text-cosmic-50 md:inline"
+          >
+            Account
+          </Link>
         </nav>
       </div>
     </header>

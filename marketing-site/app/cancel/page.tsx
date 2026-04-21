@@ -8,7 +8,7 @@ export default function CancelPage() {
 
   return (
     <div className="min-h-screen bg-cosmic-950 text-cosmic-50">
-      <SiteNav showPricingLink={false} />
+      <SiteNav sectionLinks="home" />
 
       <main className="mx-auto flex w-full max-w-3xl flex-col px-6 py-12">
         <div className="section-shell rounded-3xl p-8 md:p-10">
