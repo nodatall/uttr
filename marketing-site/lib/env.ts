@@ -14,7 +14,8 @@ export function readOptionalEnv(name: string): string | null {
 export function readSiteConfig() {
   return {
     siteUrl: readEnv("NEXT_PUBLIC_SITE_URL"),
-    supportEmail: readOptionalEnv("NEXT_PUBLIC_SUPPORT_EMAIL") || "support@uttr.app",
+    supportEmail:
+      readOptionalEnv("NEXT_PUBLIC_SUPPORT_EMAIL") || "support@uttr.app",
   };
 }
 
@@ -59,7 +60,8 @@ export function readEmailConfig() {
 export function readCloudProxyConfig() {
   return {
     groqApiKey: readEnv("GROQ_API_KEY"),
-    groqModelDefault: readOptionalEnv("GROQ_TRANSCRIPTION_MODEL_DEFAULT") || "whisper-large-v3",
+    groqModelDefault:
+      readOptionalEnv("GROQ_TRANSCRIPTION_MODEL_DEFAULT") || "whisper-large-v3",
   };
 }
 

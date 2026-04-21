@@ -15,31 +15,17 @@ type ClaimFlowProps = {
   initialSource: string;
 };
 
-const DEV_ACCOUNT = {
-  email: "dev@dev.com",
-  password: "123456",
-} as const;
-
-const SHOW_DEV_ACCOUNT_SHORTCUT = process.env.NODE_ENV !== "production";
-
 async function continueCheckoutFlow({
-  session,
   initialClaimToken,
   initialSource,
 }: {
-  session: AuthSession;
   initialClaimToken: string | null;
   initialSource: string;
 }) {
-  if (!session.access_token) {
-    throw new Error("Session is missing an access token.");
-  }
-
   if (initialClaimToken) {
     const linkResponse = await fetch("/api/auth/convert-anonymous", {
       method: "POST",
       headers: {
-        authorization: `Bearer ${session.access_token}`,
         "content-type": "application/json",
       },
       body: JSON.stringify({ claim_token: initialClaimToken }),
@@ -62,7 +48,6 @@ async function continueCheckoutFlow({
   const checkoutResponse = await fetch("/api/checkout", {
     method: "POST",
     headers: {
-      authorization: `Bearer ${session.access_token}`,
       "content-type": "application/json",
     },
     body: JSON.stringify({
@@ -120,34 +105,9 @@ export function ClaimFlow({
     setSignedInEmail(session.user.email ?? fallbackEmail);
     setStatus(initialClaimToken ? "link" : "checkout");
     await continueCheckoutFlow({
-      session,
       initialClaimToken,
       initialSource,
     });
-  };
-
-  const signInOrCreateDevAccount = async () => {
-    try {
-      return await auth.signInWithPassword(DEV_ACCOUNT);
-    } catch (signInError) {
-      try {
-        return await auth.signUp(DEV_ACCOUNT);
-      } catch (signUpError) {
-        try {
-          return await auth.signInWithPassword(DEV_ACCOUNT);
-        } catch (retryError) {
-          throw new Error(
-            signInError instanceof Error
-              ? signInError.message
-              : signUpError instanceof Error
-                ? signUpError.message
-                : retryError instanceof Error
-                  ? retryError.message
-                  : "Unable to create the development account.",
-          );
-        }
-      }
-    }
   };
 
   useEffect(() => {
@@ -199,24 +159,6 @@ export function ClaimFlow({
     }
   };
 
-  const handleDevAccount = async () => {
-    setEmail(DEV_ACCOUNT.email);
-    setPassword(DEV_ACCOUNT.password);
-    setAuthMode("signin");
-    setStatus("auth");
-    setError(null);
-
-    try {
-      const session = await signInOrCreateDevAccount();
-      await finishAuthenticatedSession(session, DEV_ACCOUNT.email);
-    } catch (err) {
-      const message =
-        err instanceof Error ? err.message : "Development login failed.";
-      setError(message);
-      setStatus("idle");
-    }
-  };
-
   const continueWithCurrentAccount = async () => {
     if (!activeSession) {
       setError("Sign in or create an account before checkout.");
@@ -228,7 +170,6 @@ export function ClaimFlow({
 
     try {
       await continueCheckoutFlow({
-        session: activeSession,
         initialClaimToken,
         initialSource,
       });
@@ -348,28 +289,7 @@ export function ClaimFlow({
                 ? "Signing in..."
                 : "Sign in"}
             </button>
-            {SHOW_DEV_ACCOUNT_SHORTCUT ? (
-              <button
-                type="button"
-                onClick={() => void handleDevAccount()}
-                disabled={status !== "idle"}
-                className="rounded-full border border-galaxy-blue/40 bg-galaxy-blue/10 px-6 py-3 text-sm text-galaxy-blue transition hover:border-galaxy-blue/70 hover:bg-galaxy-blue/20 disabled:cursor-not-allowed disabled:opacity-70"
-              >
-                {status === "auth" &&
-                authMode === "signin" &&
-                email === DEV_ACCOUNT.email
-                  ? "Opening dev account..."
-                  : "Use dev account"}
-              </button>
-            ) : null}
           </div>
-          {SHOW_DEV_ACCOUNT_SHORTCUT ? (
-            <p className="text-xs text-cosmic-300">
-              Local dev shortcut: <strong>{DEV_ACCOUNT.email}</strong> /{" "}
-              <strong>{DEV_ACCOUNT.password}</strong>. The account is created on
-              first use.
-            </p>
-          ) : null}
         </div>
       )}
 

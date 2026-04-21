@@ -10,7 +10,9 @@ type StripeWebhookEvent = Stripe.Event & {
 const markPendingCheckoutSessionCompletedCalls: string[] = [];
 const markPendingCheckoutSessionExpiredCalls: string[] = [];
 const upsertEntitlementStateCalls: Array<Record<string, unknown>> = [];
-const patchEntitlementByStripeSubscriptionIdCalls: Array<Record<string, unknown>> = [];
+const patchEntitlementByStripeSubscriptionIdCalls: Array<
+  Record<string, unknown>
+> = [];
 const sendTransactionalEmailCalls: Array<Record<string, unknown>> = [];
 const beginWebhookEventCalls: Array<[string, string]> = [];
 const completeWebhookEventCalls: string[] = [];
@@ -26,12 +28,16 @@ let stripeWebhookEvent: StripeWebhookEvent = buildCompletedEvent();
 let stripeMock = buildStripeMock();
 
 mock.module("@/lib/access", () => ({
-  markPendingCheckoutSessionCompleted: async (stripeCheckoutSessionId: string) => {
+  markPendingCheckoutSessionCompleted: async (
+    stripeCheckoutSessionId: string,
+  ) => {
     callOrder.push("mark_pending_completed");
     markPendingCheckoutSessionCompletedCalls.push(stripeCheckoutSessionId);
     return null;
   },
-  markPendingCheckoutSessionExpired: async (stripeCheckoutSessionId: string) => {
+  markPendingCheckoutSessionExpired: async (
+    stripeCheckoutSessionId: string,
+  ) => {
     callOrder.push("mark_pending_expired");
     markPendingCheckoutSessionExpiredCalls.push(stripeCheckoutSessionId);
     return null;

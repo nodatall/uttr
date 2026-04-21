@@ -14,10 +14,7 @@ export async function POST(request: Request) {
   try {
     const accessToken = readAccessTokenFromRequest(request);
     if (!accessToken) {
-      return NextResponse.json(
-        { error: "Missing session." },
-        { status: 401 },
-      );
+      return NextResponse.json({ error: "Missing session." }, { status: 401 });
     }
 
     let currentUser;

@@ -98,10 +98,7 @@ export async function POST(request: Request) {
       windowMs: 60_000,
     });
     if (!rateLimit.allowed) {
-      return respondToRateLimit(
-        rateLimit,
-        "Too many transcription requests.",
-      );
+      return respondToRateLimit(rateLimit, "Too many transcription requests.");
     }
 
     const installToken = readInstallTokenFromRequest(request);
@@ -247,17 +244,6 @@ export async function POST(request: Request) {
       persistedTrial = touchedTrial;
     }
 
-    const usageEvent = await insertUsageEvent({
-      anonymous_trial_id: persistedTrial.id,
-      user_id: persistedTrial.user_id,
-      source: "cloud_default",
-      audio_seconds: audioSeconds,
-    });
-
-    if (!usageEvent) {
-      throw new Error("Unable to record usage event.");
-    }
-
     const fileBytes = Buffer.from(await fileEntry.arrayBuffer());
     const groqStartMs = performance.now();
     const groqResult = await transcribeWithGroq({
@@ -269,6 +255,17 @@ export async function POST(request: Request) {
       translateToEnglish,
     });
     const groqEndMs = performance.now();
+
+    const usageEvent = await insertUsageEvent({
+      anonymous_trial_id: persistedTrial.id,
+      user_id: persistedTrial.user_id,
+      source: "cloud_default",
+      audio_seconds: audioSeconds,
+    });
+
+    if (!usageEvent) {
+      throw new Error("Unable to record usage event.");
+    }
 
     const endMs = performance.now();
 

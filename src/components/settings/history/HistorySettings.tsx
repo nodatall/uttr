@@ -241,7 +241,9 @@ export const HistorySettings: React.FC<HistorySettingsProps> = ({
             {t("settings.history.title")}
           </h1>
           <p className="text-sm text-text/50">
-            {t("settings.history.showingLatest", { count: MAX_VISIBLE_HISTORY })}
+            {t("settings.history.showingLatest", {
+              count: MAX_VISIBLE_HISTORY,
+            })}
           </p>
         </div>
         <OpenRecordingsButton

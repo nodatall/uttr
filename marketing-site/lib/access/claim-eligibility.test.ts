@@ -2,9 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { trialCanCreateClaim } from "./claim-eligibility";
 import type { AnonymousTrialRow } from "./types";
 
-function trial(
-  overrides: Partial<AnonymousTrialRow> = {},
-): AnonymousTrialRow {
+function trial(overrides: Partial<AnonymousTrialRow> = {}): AnonymousTrialRow {
   const now = new Date().toISOString();
   return {
     id: "trial_123",

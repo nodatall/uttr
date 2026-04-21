@@ -132,9 +132,9 @@ export async function createOrReuseCheckoutSession(params: {
       reused: false,
     };
   } catch (error) {
-    const reusableAfterInsertFailure = await fetchReusableSession(pendingContext).catch(
-      () => null,
-    );
+    const reusableAfterInsertFailure = await fetchReusableSession(
+      pendingContext,
+    ).catch(() => null);
     if (reusableAfterInsertFailure) {
       return {
         url: reusableAfterInsertFailure.checkout_url,

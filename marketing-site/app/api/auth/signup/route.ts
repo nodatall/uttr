@@ -4,6 +4,7 @@ import {
   buildSessionCookie,
   createAuthSession,
   createUserWithPassword,
+  publicAuthSession,
 } from "@/lib/auth/server";
 import {
   checkRateLimit,
@@ -56,7 +57,9 @@ export async function POST(request: Request) {
     return respondToRateLimit(rateLimit);
   }
 
-  const parsedBody = requestSchema.safeParse(await request.json().catch(() => ({})));
+  const parsedBody = requestSchema.safeParse(
+    await request.json().catch(() => ({})),
+  );
   if (!parsedBody.success) {
     return NextResponse.json(
       { error: "Use a valid email and a password with at least 6 characters." },
@@ -69,7 +72,7 @@ export async function POST(request: Request) {
     const session = await createAuthSession(user);
 
     return NextResponse.json(
-      { session },
+      { session: publicAuthSession(session) },
       {
         headers: {
           "set-cookie": buildSessionCookie(session),

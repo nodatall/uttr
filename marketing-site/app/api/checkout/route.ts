@@ -36,10 +36,7 @@ class CheckoutRouteError extends Error {
   }
 }
 
-async function resolveClaimContext(
-  claimToken: string,
-  userId: string,
-) {
+async function resolveClaimContext(claimToken: string, userId: string) {
   let tokenPayload: ClaimTokenPayload;
   try {
     tokenPayload = verifyClaimToken(claimToken);
@@ -105,10 +102,7 @@ export async function POST(request: Request) {
 
     const accessToken = readAccessTokenFromRequest(request);
     if (!accessToken) {
-      return NextResponse.json(
-        { error: "Missing session." },
-        { status: 401 },
-      );
+      return NextResponse.json({ error: "Missing session." }, { status: 401 });
     }
 
     let currentUser;

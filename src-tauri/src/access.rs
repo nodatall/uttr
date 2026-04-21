@@ -12,8 +12,7 @@ use std::time::Duration;
 use tauri::AppHandle;
 
 const BACKEND_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-const PREMIUM_FEATURE_ACCESS_MESSAGE: &str =
-    "Upgrade to Pro to use this feature.";
+const PREMIUM_FEATURE_ACCESS_MESSAGE: &str = "Upgrade to Pro to use this feature.";
 const TRANSCRIPTION_ACCESS_MESSAGE: &str =
     "Your trial has ended. Upgrade to Pro to keep using transcription.";
 

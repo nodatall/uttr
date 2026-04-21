@@ -4,11 +4,10 @@ import { useEffect, useRef, useState } from "react";
 import { createAuthClient, type AuthSession } from "@/lib/auth/client";
 import { getDownloadUrl } from "@/lib/download";
 
-async function openBillingPortal(session: AuthSession) {
+async function openBillingPortal() {
   const response = await fetch("/api/billing/portal", {
     method: "POST",
     headers: {
-      authorization: `Bearer ${session.access_token}`,
       "content-type": "application/json",
     },
   });
@@ -29,17 +28,10 @@ export function AccountFlow() {
   const downloadUrl = getDownloadUrl();
   const [auth] = useState(() => createAuthClient());
   const sessionCheckRef = useRef<Promise<AuthSession | null> | null>(null);
-  const [initialSessionPreview] = useState(() =>
-    auth.getStoredSessionPreview(),
-  );
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [signedInEmail, setSignedInEmail] = useState<string | null>(
-    initialSessionPreview?.user.email ?? null,
-  );
-  const [hasCheckedSession, setHasCheckedSession] = useState(
-    () => !auth.hasStoredSessionToken() || initialSessionPreview !== null,
-  );
+  const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
+  const [hasCheckedSession, setHasCheckedSession] = useState(false);
   const [status, setStatus] = useState<"idle" | "auth" | "portal" | "logout">(
     "idle",
   );
@@ -68,27 +60,16 @@ export function AccountFlow() {
     };
 
     const getVerifiedSession = () => {
-      sessionCheckRef.current ??= auth
-        .getSession()
-        .finally(() => {
-          sessionCheckRef.current = null;
-        });
+      sessionCheckRef.current ??= auth.getSession().finally(() => {
+        sessionCheckRef.current = null;
+      });
 
       return sessionCheckRef.current;
     };
 
     const syncSession = async () => {
-      if (!auth.hasStoredSessionToken()) {
-        clearFallbackTimeout();
-        setSignedInEmail(null);
-        setHasCheckedSession(true);
-        return;
-      }
-
-      if (!initialSessionPreview) {
-        setHasCheckedSession(false);
-        scheduleSignedOutFallback();
-      }
+      setHasCheckedSession(false);
+      scheduleSignedOutFallback();
 
       const session = await getVerifiedSession();
       if (cancelled) {
@@ -122,7 +103,7 @@ export function AccountFlow() {
       window.removeEventListener("focus", refreshSession);
       document.removeEventListener("visibilitychange", refreshSession);
     };
-  }, [auth, initialSessionPreview]);
+  }, [auth]);
 
   const signIn = async () => {
     if (!canSubmitCredentials) {
@@ -141,7 +122,7 @@ export function AccountFlow() {
       setSignedInEmail(session.user.email ?? email);
       setHasCheckedSession(true);
       setStatus("portal");
-      await openBillingPortal(session);
+      await openBillingPortal();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unable to sign in.");
       setStatus("idle");
@@ -158,7 +139,7 @@ export function AccountFlow() {
         throw new Error("Sign in to manage your subscription.");
       }
 
-      await openBillingPortal(session);
+      await openBillingPortal();
     } catch (err) {
       setError(
         err instanceof Error ? err.message : "Unable to open billing portal.",

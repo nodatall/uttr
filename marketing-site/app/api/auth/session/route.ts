@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import {
   buildSessionCookie,
   createAuthSession,
+  publicAuthSession,
   readUserById,
   verifySessionToken,
 } from "@/lib/auth/server";
@@ -25,7 +26,7 @@ export async function GET(request: Request) {
 
     const session = await createAuthSession(user);
     return NextResponse.json(
-      { session },
+      { session: publicAuthSession(session) },
       {
         headers: {
           "set-cookie": buildSessionCookie(session),

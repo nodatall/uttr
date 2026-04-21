@@ -168,17 +168,18 @@ const RecordingOverlay: React.FC = () => {
         },
       );
 
-      const unlistenFullSystemProgress = await listen<FullSystemProgressPayload>(
-        "overlay-full-system-progress",
-        (event) => {
-          isVisibleRef.current = true;
-          setOverlayAlert(null);
-          setOverlayActionPending(false);
-          setState("full_system_progress");
-          setFullSystemProgress(event.payload);
-          setIsVisible(true);
-        },
-      );
+      const unlistenFullSystemProgress =
+        await listen<FullSystemProgressPayload>(
+          "overlay-full-system-progress",
+          (event) => {
+            isVisibleRef.current = true;
+            setOverlayAlert(null);
+            setOverlayActionPending(false);
+            setState("full_system_progress");
+            setFullSystemProgress(event.payload);
+            setIsVisible(true);
+          },
+        );
 
       // Listen for mic-level updates
       const unlistenLevel = await listen<number[]>("mic-level", (event) => {
@@ -382,12 +383,7 @@ const RecordingOverlay: React.FC = () => {
       siriWaveRef.current?.dispose();
       siriWaveRef.current = null;
     };
-  }, [
-    isVisible,
-    waveHostWidth,
-    waveHostHeight,
-    devicePixelRatio,
-  ]);
+  }, [isVisible, waveHostWidth, waveHostHeight, devicePixelRatio]);
 
   const averageLevel = useMemo(
     () => levels.reduce((sum, level) => sum + level, 0) / levels.length,
@@ -566,7 +562,7 @@ const RecordingOverlay: React.FC = () => {
       ? "overlay-alert-pane-warning overlay-alert-pane-trial-ended"
       : overlayAlert === "no_input"
         ? "overlay-alert-pane-warning"
-      : "";
+        : "";
   const warmingTitle = i18n.t("overlay.warmingMic", {
     defaultValue: "Warming mic...",
   });

@@ -17,9 +17,12 @@ type SessionPayload = {
 };
 
 export type AuthSession = {
-  access_token: string;
   expires_at: string;
   user: AuthenticatedUser;
+};
+
+type IssuedAuthSession = AuthSession & {
+  token: string;
 };
 
 function base64UrlEncode(value: Buffer | string) {
@@ -54,10 +57,7 @@ async function verifyPassword(password: string, passwordHash: string) {
   )) as Buffer;
   const expected = Buffer.from(expectedHash, "base64url");
 
-  return (
-    actual.length === expected.length &&
-    timingSafeEqual(actual, expected)
-  );
+  return actual.length === expected.length && timingSafeEqual(actual, expected);
 }
 
 function signPayload(encodedPayload: string) {
@@ -94,7 +94,9 @@ export function verifySessionToken(token: string): SessionPayload {
     throw new Error("Invalid session token signature.");
   }
 
-  const payload = JSON.parse(base64UrlDecode(encodedPayload)) as Partial<SessionPayload>;
+  const payload = JSON.parse(
+    base64UrlDecode(encodedPayload),
+  ) as Partial<SessionPayload>;
   if (
     typeof payload.sub !== "string" ||
     typeof payload.iat !== "number" ||
@@ -167,25 +169,42 @@ export async function authenticateUserWithPassword(params: {
   } satisfies AuthenticatedUser;
 }
 
-export async function createAuthSession(user: AuthenticatedUser): Promise<AuthSession> {
+export async function createAuthSession(
+  user: AuthenticatedUser,
+): Promise<IssuedAuthSession> {
   const accessToken = createSessionToken(user);
   const payload = verifySessionToken(accessToken);
 
   return {
-    access_token: accessToken,
+    token: accessToken,
     expires_at: new Date(payload.exp * 1000).toISOString(),
     user,
   };
 }
 
-export function buildSessionCookie(session: AuthSession) {
+export function publicAuthSession(session: IssuedAuthSession): AuthSession {
+  return {
+    expires_at: session.expires_at,
+    user: session.user,
+  };
+}
+
+function shouldUseSecureSessionCookie() {
+  return (
+    process.env.NODE_ENV === "production" ||
+    process.env.VERCEL === "1" ||
+    process.env.NEXT_PUBLIC_SITE_URL?.startsWith("https://") === true
+  );
+}
+
+export function buildSessionCookie(session: IssuedAuthSession) {
   return [
-    `${SESSION_COOKIE_NAME}=${encodeURIComponent(session.access_token)}`,
+    `${SESSION_COOKIE_NAME}=${encodeURIComponent(session.token)}`,
     "Path=/",
     "HttpOnly",
     "SameSite=Lax",
     `Max-Age=${SESSION_MAX_AGE_SECONDS}`,
-    process.env.NODE_ENV === "production" ? "Secure" : "",
+    shouldUseSecureSessionCookie() ? "Secure" : "",
   ]
     .filter(Boolean)
     .join("; ");
@@ -198,7 +217,7 @@ export function buildClearSessionCookie() {
     "HttpOnly",
     "SameSite=Lax",
     "Max-Age=0",
-    process.env.NODE_ENV === "production" ? "Secure" : "",
+    shouldUseSecureSessionCookie() ? "Secure" : "",
   ]
     .filter(Boolean)
     .join("; ");

@@ -3,6 +3,7 @@
 Standalone Next.js marketing + subscription site for Uttr.
 
 ## Stack
+
 - Next.js App Router
 - Tailwind CSS
 - Procedural canvas-based galaxy renderer for hero
@@ -78,6 +79,7 @@ http://localhost:3000/api/stripe/webhook
 ```
 
 4. Subscribe webhook events:
+
 - `checkout.session.completed`
 - `invoice.paid`
 - `invoice.payment_failed`
@@ -93,6 +95,7 @@ stripe listen --forward-to localhost:3000/api/stripe/webhook
 Copy the emitted signing secret to `STRIPE_WEBHOOK_SECRET`.
 
 ## Routes
+
 - `/` landing page
 - `/success` checkout success page
 - `/cancel` checkout cancellation page
@@ -100,6 +103,7 @@ Copy the emitted signing secret to `STRIPE_WEBHOOK_SECRET`.
 - `POST /api/stripe/webhook` process Stripe webhooks
 
 ## Notes
+
 - The app is purchase-enabled and does not enforce in-app entitlement checks.
 - Webhook idempotency and production rate limiting are durable Postgres writes.
 - The backend proxy and entitlement work will add additional routes under `/api/*` in later tasks.

@@ -12,5 +12,9 @@ export function trialCanCreateClaim(
     return true;
   }
 
-  return trial.status === "new" || trial.status === "trialing" || trial.status === "expired";
+  return (
+    trial.status === "new" ||
+    trial.status === "trialing" ||
+    trial.status === "expired"
+  );
 }

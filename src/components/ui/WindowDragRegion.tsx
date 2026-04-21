@@ -8,9 +8,11 @@ interface WindowDragRegionProps {
 const WindowDragRegion: FC<WindowDragRegionProps> = ({ className }) => {
   const handleMouseDown = (event: MouseEvent<HTMLDivElement>) => {
     if (event.button !== 0) return;
-    void getCurrentWindow().startDragging().catch((error) => {
-      console.warn("Window drag failed:", error);
-    });
+    void getCurrentWindow()
+      .startDragging()
+      .catch((error) => {
+        console.warn("Window drag failed:", error);
+      });
   };
 
   return (

@@ -79,7 +79,7 @@ describe("Postgres-backed auth", () => {
       email: "user@example.com",
     });
 
-    const payload = verifySessionToken(session.access_token);
+    const payload = verifySessionToken(session.token);
     expect(payload.sub).toBe("user_123");
     expect(payload.email).toBe("user@example.com");
     expect(new Date(session.expires_at).getTime()).toBeGreaterThan(Date.now());

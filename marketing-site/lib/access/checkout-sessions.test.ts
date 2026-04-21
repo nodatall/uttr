@@ -157,10 +157,14 @@ describe("pending checkout session helpers", () => {
       rowCount: 1,
     }));
 
-    await expect(markPendingCheckoutSessionCompleted("cs_test_123")).resolves.toMatchObject({
+    await expect(
+      markPendingCheckoutSessionCompleted("cs_test_123"),
+    ).resolves.toMatchObject({
       status: "completed",
     });
-    await expect(markPendingCheckoutSessionExpired("cs_test_456")).resolves.toMatchObject({
+    await expect(
+      markPendingCheckoutSessionExpired("cs_test_456"),
+    ).resolves.toMatchObject({
       status: "expired",
     });
 

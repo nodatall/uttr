@@ -73,8 +73,7 @@ pub struct FullSystemAudioCapturedPcm {
 }
 
 type LiveLevelCallback = Arc<dyn Fn(Vec<f32>) + Send + Sync + 'static>;
-static LIVE_LEVEL_CALLBACK: Lazy<Mutex<Option<LiveLevelCallback>>> =
-    Lazy::new(|| Mutex::new(None));
+static LIVE_LEVEL_CALLBACK: Lazy<Mutex<Option<LiveLevelCallback>>> = Lazy::new(|| Mutex::new(None));
 
 #[repr(C)]
 #[derive(Debug, Default, PartialEq, Eq)]

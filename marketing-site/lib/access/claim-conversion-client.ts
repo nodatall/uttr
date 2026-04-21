@@ -42,7 +42,9 @@ export type ClaimConversionClientDecision =
       message: string;
     };
 
-function isKnownClaimConversionStatus(status: string): status is ClaimConversionStatus {
+function isKnownClaimConversionStatus(
+  status: string,
+): status is ClaimConversionStatus {
   return claimConversionStatuses.includes(status as ClaimConversionStatus);
 }
 
@@ -53,7 +55,9 @@ function isUsableReturnUrl(value: unknown): value is string {
 function buildErrorMessage(payload: ClaimConversionClientPayload) {
   if (payload.status && isKnownClaimConversionStatus(payload.status)) {
     if (payload.status in unsafeStatusMessages) {
-      return unsafeStatusMessages[payload.status as keyof typeof unsafeStatusMessages];
+      return unsafeStatusMessages[
+        payload.status as keyof typeof unsafeStatusMessages
+      ];
     }
   }
 

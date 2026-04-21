@@ -4,6 +4,7 @@ import {
   authenticateUserWithPassword,
   buildSessionCookie,
   createAuthSession,
+  publicAuthSession,
 } from "@/lib/auth/server";
 import {
   checkRateLimit,
@@ -47,7 +48,9 @@ export async function POST(request: Request) {
     return respondToRateLimit(rateLimit);
   }
 
-  const parsedBody = requestSchema.safeParse(await request.json().catch(() => ({})));
+  const parsedBody = requestSchema.safeParse(
+    await request.json().catch(() => ({})),
+  );
   if (!parsedBody.success) {
     return NextResponse.json(
       { error: "Invalid sign-in payload." },
@@ -65,7 +68,7 @@ export async function POST(request: Request) {
 
   const session = await createAuthSession(user);
   return NextResponse.json(
-    { session },
+    { session: publicAuthSession(session) },
     {
       headers: {
         "set-cookie": buildSessionCookie(session),

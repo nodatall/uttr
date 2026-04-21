@@ -5,6 +5,7 @@ This folder contains the built-in cleaning prompt presets available in Uttr's po
 ## Presets
 
 ### Strict (`strict.md`)
+
 **Recommended for: small models (8B and up)**
 
 Rule-based. Follows explicit instructions to fix mechanical errors: spelling, punctuation, number conversion, filler word removal. Preserves exact word order and meaning. Does not paraphrase or interpret.
@@ -12,6 +13,7 @@ Rule-based. Follows explicit instructions to fix mechanical errors: spelling, pu
 Use this when speed matters more than nuance, or when running a smaller/faster model.
 
 ### Nuanced (`nuanced.md`)
+
 **Recommended for: large models (70B recommended)**
 
 Judgment-based. Gives the model a philosophical brief rather than a rule list. Understands the difference between the human speaker's fingerprint (rhythm, natural phrasing) and the transcription model's artifacts (mishearings, machine-like errors). Can substitute a better word when the transcription clearly got it wrong, while still preserving the speaker's voice.

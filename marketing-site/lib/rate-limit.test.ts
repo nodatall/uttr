@@ -96,7 +96,11 @@ describe("rate limiting", () => {
     });
 
     await expect(
-      checkRateLimit({ key: "trial-create-claim:ip", limit: 20, windowMs: 60_000 }),
+      checkRateLimit({
+        key: "trial-create-claim:ip",
+        limit: 20,
+        windowMs: 60_000,
+      }),
     ).resolves.toEqual({
       allowed: false,
       remaining: 0,
@@ -116,7 +120,11 @@ describe("rate limiting", () => {
     });
 
     await expect(
-      checkRateLimit({ key: "cloud-transcribe:ip", limit: 60, windowMs: 60_000 }),
+      checkRateLimit({
+        key: "cloud-transcribe:ip",
+        limit: 60,
+        windowMs: 60_000,
+      }),
     ).resolves.toEqual({
       allowed: false,
       remaining: 0,

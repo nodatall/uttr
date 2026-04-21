@@ -100,9 +100,7 @@ export function getDesktopBillingManagementMode(
     return null;
   }
 
-  return isPastDue(installAccess)
-    ? "payment-update"
-    : "subscription";
+  return isPastDue(installAccess) ? "payment-update" : "subscription";
 }
 
 export function getDesktopBillingCheckoutMode(

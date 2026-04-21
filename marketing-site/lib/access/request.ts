@@ -19,9 +19,7 @@ function readCookieValue(cookieHeader: string | null, name: string) {
     return null;
   }
 
-  const match = cookieHeader.match(
-    new RegExp(`(?:^|;\\s*)${name}=([^;]+)`),
-  );
+  const match = cookieHeader.match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`));
   return match ? decodeURIComponent(match[1]) : null;
 }
 

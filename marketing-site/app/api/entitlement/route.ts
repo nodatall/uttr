@@ -35,7 +35,9 @@ export async function GET(request: Request) {
       );
     }
 
-    const trial = await fetchAnonymousTrialById(tokenPayload.anonymous_trial_id);
+    const trial = await fetchAnonymousTrialById(
+      tokenPayload.anonymous_trial_id,
+    );
 
     if (
       !trial ||

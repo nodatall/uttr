@@ -68,7 +68,11 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
     ) {
       void setPostProcessProvider(groqProvider.id);
     }
-  }, [groqProvider, setPostProcessProvider, settings?.post_process_provider_id]);
+  }, [
+    groqProvider,
+    setPostProcessProvider,
+    settings?.post_process_provider_id,
+  ]);
 
   const selectedProvider = useMemo(() => {
     return (
@@ -181,12 +185,20 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
 
     // Exclude models not suited for text cleanup: speech-to-text, safety classifiers,
     // TTS, agentic compound models, and non-English focused models.
-    const EXCLUDED_PATTERNS = ["whisper", "guard", "safeguard", "orpheus", "compound", "kimi"];
+    const EXCLUDED_PATTERNS = [
+      "whisper",
+      "guard",
+      "safeguard",
+      "orpheus",
+      "compound",
+      "kimi",
+    ];
     const isExcluded = (id: string) =>
       EXCLUDED_PATTERNS.some((p) => id.toLowerCase().includes(p));
 
     // Strip provider prefix for display (e.g. "meta-llama/llama-4-scout" → "llama-4-scout")
-    const displayLabel = (id: string) => id.includes("/") ? id.split("/").pop()! : id;
+    const displayLabel = (id: string) =>
+      id.includes("/") ? id.split("/").pop()! : id;
 
     // Extract model size in billions for sorting (e.g. "70b" → 70, "22m" → 0.022, missing → Infinity)
     const modelSizeB = (id: string): number => {
@@ -210,7 +222,10 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
     const currentTrimmed = model?.trim();
     if (currentTrimmed && !seen.has(currentTrimmed)) {
       seen.add(currentTrimmed);
-      options.push({ value: currentTrimmed, label: displayLabel(currentTrimmed) });
+      options.push({
+        value: currentTrimmed,
+        label: displayLabel(currentTrimmed),
+      });
     }
 
     return options;
