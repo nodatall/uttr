@@ -1065,7 +1065,10 @@ fn handle_transcription_stop(
 impl ShortcutAction for TranscribeAction {
     fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
         let start_time = Instant::now();
-        log::info!("[latency] transcribe action start begin binding={}", binding_id);
+        log::info!(
+            "[latency] transcribe action start begin binding={}",
+            binding_id
+        );
         debug!("TranscribeAction::start called for binding: {}", binding_id);
         utils::cancel_pending_overlay_transitions();
 
@@ -1094,22 +1097,7 @@ impl ShortcutAction for TranscribeAction {
         let tm = app.state::<Arc<TranscriptionManager>>();
         tm.clear_cancel_request();
         let settings = get_settings(app);
-        let preload_model_id = if settings.selected_model.is_empty() {
-            tm.get_current_model().unwrap_or_default()
-        } else {
-            settings.selected_model.clone()
-        };
         let use_incremental = should_use_incremental_transcription(&settings, &tm);
-        // Cloud models do not load a local engine, so skip preload
-        // to avoid adding loading-wait overhead on short recordings.
-        if preload_model_id.is_empty() || !is_cloud_model_id(&preload_model_id) {
-            tm.initiate_model_load();
-        } else {
-            debug!(
-                "Skipping preload for cloud model '{}' in hot path",
-                preload_model_id
-            );
-        }
 
         let binding_id = binding_id.to_string();
         let rm = app.state::<Arc<AudioRecordingManager>>();
@@ -1195,6 +1183,21 @@ impl ShortcutAction for TranscribeAction {
 
         tm.cancel_incremental_session();
         start_transcription_session(app, &binding_id, recording_started);
+        let preload_model_id = if settings.selected_model.is_empty() {
+            tm.get_current_model().unwrap_or_default()
+        } else {
+            settings.selected_model.clone()
+        };
+        // Keep visual recording feedback on the hot path. Local model preload
+        // is useful, but it can wait until after the overlay has been requested.
+        if preload_model_id.is_empty() || !is_cloud_model_id(&preload_model_id) {
+            tm.initiate_model_load();
+        } else {
+            debug!(
+                "Skipping preload for cloud model '{}' in hot path",
+                preload_model_id
+            );
+        }
         if recording_started && use_incremental {
             if let Err(e) = tm.start_incremental_session(&binding_id, Arc::clone(&rm)) {
                 warn!("Failed to start incremental transcription session: {}", e);
@@ -1218,7 +1221,10 @@ impl ShortcutAction for TranscribeAction {
         shortcut::unregister_cancel_shortcut(app);
 
         let stop_time = Instant::now();
-        log::info!("[latency] transcribe action stop begin binding={}", binding_id);
+        log::info!(
+            "[latency] transcribe action stop begin binding={}",
+            binding_id
+        );
         debug!("TranscribeAction::stop called for binding: {}", binding_id);
 
         let rm = Arc::clone(&app.state::<Arc<AudioRecordingManager>>());
@@ -1298,20 +1304,6 @@ impl ShortcutAction for FullSystemTranscribeAction {
         let tm = app.state::<Arc<TranscriptionManager>>();
         tm.clear_cancel_request();
         let settings = get_settings(app);
-        let preload_model_id = if settings.selected_model.is_empty() {
-            tm.get_current_model().unwrap_or_default()
-        } else {
-            settings.selected_model.clone()
-        };
-        if preload_model_id.is_empty() || !is_cloud_model_id(&preload_model_id) {
-            tm.initiate_model_load();
-        } else {
-            debug!(
-                "Skipping preload for cloud model '{}' in hot path",
-                preload_model_id
-            );
-        }
-
         tm.cancel_incremental_session();
         let binding_id = binding_id.to_string();
         let full_system_audio = app.state::<Arc<FullSystemAudioSessionManager>>();
@@ -1395,6 +1387,19 @@ impl ShortcutAction for FullSystemTranscribeAction {
         }
 
         start_transcription_session(app, binding_id.as_str(), recording_started);
+        let preload_model_id = if settings.selected_model.is_empty() {
+            tm.get_current_model().unwrap_or_default()
+        } else {
+            settings.selected_model.clone()
+        };
+        if preload_model_id.is_empty() || !is_cloud_model_id(&preload_model_id) {
+            tm.initiate_model_load();
+        } else {
+            debug!(
+                "Skipping preload for cloud model '{}' in hot path",
+                preload_model_id
+            );
+        }
 
         debug!(
             "FullSystemTranscribeAction::start completed in {:?}",

@@ -14,6 +14,11 @@ type AuthResponse = {
   error?: string;
 };
 
+type StoredSessionPreview = {
+  expires_at: string;
+  user: AuthSession["user"];
+};
+
 const STORAGE_KEY = "uttr.session";
 
 function readStoredToken() {
@@ -35,6 +40,48 @@ function storeSession(session: AuthSession | null) {
   }
 
   window.localStorage.setItem(STORAGE_KEY, session.access_token);
+}
+
+function decodeBase64Url(value: string) {
+  const base64 = value.replace(/-/g, "+").replace(/_/g, "/");
+  const padded = base64.padEnd(
+    base64.length + ((4 - (base64.length % 4)) % 4),
+    "=",
+  );
+  return window.atob(padded);
+}
+
+function readStoredSessionPreview(): StoredSessionPreview | null {
+  const token = readStoredToken();
+  const encodedPayload = token?.split(".")[0];
+  if (!encodedPayload) {
+    return null;
+  }
+
+  try {
+    const payload = JSON.parse(decodeBase64Url(encodedPayload)) as {
+      sub?: unknown;
+      email?: unknown;
+      exp?: unknown;
+    };
+    if (
+      typeof payload.sub !== "string" ||
+      typeof payload.exp !== "number" ||
+      payload.exp <= Math.floor(Date.now() / 1000)
+    ) {
+      return null;
+    }
+
+    return {
+      expires_at: new Date(payload.exp * 1000).toISOString(),
+      user: {
+        id: payload.sub,
+        email: typeof payload.email === "string" ? payload.email : null,
+      },
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function readJson(response: Response) {
@@ -66,6 +113,10 @@ export function createAuthClient() {
   return {
     hasStoredSessionToken() {
       return readStoredToken() !== null;
+    },
+
+    getStoredSessionPreview() {
+      return readStoredSessionPreview();
     },
 
     async getSession() {
