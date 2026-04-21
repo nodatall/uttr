@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { createAuthClient, type AuthSession } from "@/lib/auth/client";
 import { getDownloadUrl } from "@/lib/download";
 
@@ -25,18 +25,20 @@ async function openBillingPortal(session: AuthSession) {
   window.location.assign(payload.url);
 }
 
-export function AccountFlow({
-  initialSessionChecked = false,
-}: {
-  initialSessionChecked?: boolean;
-}) {
+export function AccountFlow() {
   const downloadUrl = getDownloadUrl();
   const [auth] = useState(() => createAuthClient());
+  const sessionCheckRef = useRef<Promise<AuthSession | null> | null>(null);
+  const [initialSessionPreview] = useState(() =>
+    auth.getStoredSessionPreview(),
+  );
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
+  const [signedInEmail, setSignedInEmail] = useState<string | null>(
+    initialSessionPreview?.user.email ?? null,
+  );
   const [hasCheckedSession, setHasCheckedSession] = useState(
-    initialSessionChecked,
+    () => !auth.hasStoredSessionToken() || initialSessionPreview !== null,
   );
   const [status, setStatus] = useState<"idle" | "auth" | "portal" | "logout">(
     "idle",
@@ -65,16 +67,30 @@ export function AccountFlow({
       }, 900);
     };
 
+    const getVerifiedSession = () => {
+      sessionCheckRef.current ??= auth
+        .getSession()
+        .finally(() => {
+          sessionCheckRef.current = null;
+        });
+
+      return sessionCheckRef.current;
+    };
+
     const syncSession = async () => {
-      if (initialSessionChecked && !auth.hasStoredSessionToken()) {
+      if (!auth.hasStoredSessionToken()) {
         clearFallbackTimeout();
         setSignedInEmail(null);
         setHasCheckedSession(true);
         return;
       }
 
-      scheduleSignedOutFallback();
-      const session = await auth.getSession();
+      if (!initialSessionPreview) {
+        setHasCheckedSession(false);
+        scheduleSignedOutFallback();
+      }
+
+      const session = await getVerifiedSession();
       if (cancelled) {
         return;
       }
@@ -85,7 +101,6 @@ export function AccountFlow({
     };
 
     const refreshSession = () => {
-      setHasCheckedSession(false);
       setStatus((currentStatus) =>
         currentStatus === "auth" || currentStatus === "portal"
           ? "idle"
@@ -107,7 +122,7 @@ export function AccountFlow({
       window.removeEventListener("focus", refreshSession);
       document.removeEventListener("visibilitychange", refreshSession);
     };
-  }, [auth, initialSessionChecked]);
+  }, [auth, initialSessionPreview]);
 
   const signIn = async () => {
     if (!canSubmitCredentials) {

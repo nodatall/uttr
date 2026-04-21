@@ -1,15 +1,8 @@
-import { cookies } from "next/headers";
 import { SiteFooter } from "@/components/site-footer";
 import { SiteNav } from "@/components/site-nav";
-import { readSessionCookieName } from "@/lib/auth/server";
 import { AccountFlow } from "./account-flow";
 
-export const dynamic = "force-dynamic";
-
-export default async function AccountPage() {
-  const cookieStore = await cookies();
-  const initialSessionChecked = !cookieStore.has(readSessionCookieName());
-
+export default function AccountPage() {
   return (
     <div className="flex min-h-screen flex-col bg-cosmic-950 text-cosmic-50">
       <SiteNav sectionLinks="home" />
@@ -23,7 +16,7 @@ export default async function AccountPage() {
             Manage your Uttr subscription.
           </h1>
 
-          <AccountFlow initialSessionChecked={initialSessionChecked} />
+          <AccountFlow />
         </div>
       </main>
 
