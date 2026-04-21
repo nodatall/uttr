@@ -307,32 +307,44 @@ export async function insertPendingCheckoutSession(params: {
   expiresAt: string;
 }) {
   const row = buildPendingCheckoutSessionRow(params);
-  const rows = await queryRows<CheckoutSessionRow>(
-    `insert into public.checkout_sessions (
-       checkout_context_key,
-       user_id,
-       anonymous_trial_id,
-       install_id,
-       stripe_checkout_session_id,
-       stripe_customer_id,
-       status,
-       checkout_url,
-       expires_at
-     )
-     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-     returning *`,
-    [
-      row.checkout_context_key,
-      row.user_id,
-      row.anonymous_trial_id,
-      row.install_id,
-      row.stripe_checkout_session_id,
-      row.stripe_customer_id,
-      row.status,
-      row.checkout_url,
-      row.expires_at,
-    ],
-  );
+  const rows = await dbTransaction(async (executor) => {
+    await executor.query(
+      `update public.checkout_sessions
+          set status = 'expired'
+        where checkout_context_key = $1
+          and status = 'open'
+          and expires_at <= now()`,
+      [row.checkout_context_key],
+    );
+
+    return queryRows<CheckoutSessionRow>(
+      `insert into public.checkout_sessions (
+         checkout_context_key,
+         user_id,
+         anonymous_trial_id,
+         install_id,
+         stripe_checkout_session_id,
+         stripe_customer_id,
+         status,
+         checkout_url,
+         expires_at
+       )
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+       returning *`,
+      [
+        row.checkout_context_key,
+        row.user_id,
+        row.anonymous_trial_id,
+        row.install_id,
+        row.stripe_checkout_session_id,
+        row.stripe_customer_id,
+        row.status,
+        row.checkout_url,
+        row.expires_at,
+      ],
+      executor,
+    );
+  });
 
   return firstOrNull(rows);
 }

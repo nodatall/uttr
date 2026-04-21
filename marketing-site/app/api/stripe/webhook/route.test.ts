@@ -153,6 +153,46 @@ function buildCompletedEvent(): StripeWebhookEvent {
   } as StripeWebhookEvent;
 }
 
+function buildMalformedCompletedEvent(): StripeWebhookEvent {
+  return {
+    id: "evt_completed_malformed_123",
+    type: "checkout.session.completed",
+    data: {
+      object: {
+        id: "cs_test_completed_malformed_123",
+        client_reference_id: null,
+        customer: "cus_test_123",
+        customer_details: {
+          email: "user@example.com",
+        },
+        metadata: {},
+        subscription: "sub_test_123",
+      } as Stripe.Checkout.Session,
+    },
+  } as StripeWebhookEvent;
+}
+
+function buildMissingStripeIdsCompletedEvent(): StripeWebhookEvent {
+  return {
+    id: "evt_completed_missing_ids_123",
+    type: "checkout.session.completed",
+    data: {
+      object: {
+        id: "cs_test_completed_missing_ids_123",
+        client_reference_id: "user_123",
+        customer: null,
+        customer_details: {
+          email: "user@example.com",
+        },
+        metadata: {
+          user_id: "user_123",
+        },
+        subscription: null,
+      } as Stripe.Checkout.Session,
+    },
+  } as StripeWebhookEvent;
+}
+
 function buildExpiredEvent(): StripeWebhookEvent {
   return {
     id: "evt_expired_123",
@@ -349,6 +389,58 @@ describe("stripe webhook pending checkout lifecycle", () => {
       "upsert_entitlement",
       "fail_event",
     ]);
+  });
+
+  test("fails completed checkout events that cannot write an entitlement", async () => {
+    stripeWebhookEvent = buildMalformedCompletedEvent();
+
+    const response = await invokeWebhook();
+    const payload = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(400);
+    expect(payload).toEqual({ error: "Webhook processing failed." });
+    expect(beginWebhookEventCalls).toEqual([
+      ["evt_completed_malformed_123", "checkout.session.completed"],
+    ]);
+    expect(completeWebhookEventCalls).toHaveLength(0);
+    expect(failWebhookEventCalls).toEqual([
+      [
+        "evt_completed_malformed_123",
+        "Completed checkout session is missing user metadata.",
+      ],
+    ]);
+    expect(callOrder).toEqual([
+      "begin_event",
+      "mark_pending_completed",
+      "fail_event",
+    ]);
+    expect(markPendingCheckoutSessionCompletedCalls).toEqual([
+      "cs_test_completed_malformed_123",
+    ]);
+    expect(upsertEntitlementStateCalls).toHaveLength(0);
+    expect(sendTransactionalEmailCalls).toHaveLength(0);
+  });
+
+  test("fails completed checkout events missing subscription or customer ids", async () => {
+    stripeWebhookEvent = buildMissingStripeIdsCompletedEvent();
+
+    const response = await invokeWebhook();
+    const payload = (await response.json()) as { error: string };
+
+    expect(response.status).toBe(400);
+    expect(payload).toEqual({ error: "Webhook processing failed." });
+    expect(completeWebhookEventCalls).toHaveLength(0);
+    expect(failWebhookEventCalls).toEqual([
+      [
+        "evt_completed_missing_ids_123",
+        "Completed checkout session is missing subscription or customer data.",
+      ],
+    ]);
+    expect(markPendingCheckoutSessionCompletedCalls).toEqual([
+      "cs_test_completed_missing_ids_123",
+    ]);
+    expect(upsertEntitlementStateCalls).toHaveLength(0);
+    expect(sendTransactionalEmailCalls).toHaveLength(0);
   });
 
   test("does not send post-commit email before completion bookkeeping succeeds", async () => {
