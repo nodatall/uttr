@@ -227,7 +227,8 @@ mod tests {
 
     #[test]
     fn rejects_unsupported_extensions() {
-        let result = import_audio_file(PathBuf::from("fixture.invalid"));
+        let fixture = tempfile::NamedTempFile::with_suffix(".invalid").expect("fixture");
+        let result = import_audio_file(fixture.path());
         let err = result.expect_err("unsupported extension should fail");
         assert!(err.to_string().contains("Unsupported audio format"));
     }

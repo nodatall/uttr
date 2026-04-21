@@ -102,10 +102,19 @@ describe("pending checkout session helpers", () => {
   test("inserts pending checkout rows with context key and Stripe ids", async () => {
     const expiresAt = new Date(Date.now() + 60_000).toISOString();
     const insertedSession = buildSession({ expires_at: expiresAt });
-    mockDb<CheckoutSessionRow>(async () => ({
-      rows: [insertedSession],
-      rowCount: 1,
-    }));
+    mockDb<CheckoutSessionRow>(async (sql) => {
+      if (sql.includes("update public.checkout_sessions")) {
+        return {
+          rows: [],
+          rowCount: 1,
+        };
+      }
+
+      return {
+        rows: [insertedSession],
+        rowCount: 1,
+      };
+    });
 
     await expect(
       insertPendingCheckoutSession({
@@ -119,9 +128,14 @@ describe("pending checkout session helpers", () => {
       }),
     ).resolves.toEqual(insertedSession);
 
-    expect(queries[0].sql).toContain("insert into public.checkout_sessions");
+    expect(queries[0].sql).toContain("update public.checkout_sessions");
+    expect(queries[0].sql).toContain("expires_at <= now()");
     expect(queries[0].values).toEqual([
-        "user_id:user_123|anonymous_trial_id:trial_123|install_id:install_123",
+      "user_id:user_123|anonymous_trial_id:trial_123|install_id:install_123",
+    ]);
+    expect(queries[1].sql).toContain("insert into public.checkout_sessions");
+    expect(queries[1].values).toEqual([
+      "user_id:user_123|anonymous_trial_id:trial_123|install_id:install_123",
       "user_123",
       "trial_123",
       "install_123",

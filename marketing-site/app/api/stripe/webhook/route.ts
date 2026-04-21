@@ -115,7 +115,7 @@ async function syncEntitlementFromCheckout(
         sessionId: session.id,
       }),
     );
-    return;
+    throw new Error("Completed checkout session is missing user metadata.");
   }
 
   const subscription = await retrieveSubscriptionForCheckout(session, stripe);
@@ -131,7 +131,9 @@ async function syncEntitlementFromCheckout(
         hasSubscription: Boolean(subscriptionId),
       }),
     );
-    return;
+    throw new Error(
+      "Completed checkout session is missing subscription or customer data.",
+    );
   }
 
   await upsertEntitlementState({

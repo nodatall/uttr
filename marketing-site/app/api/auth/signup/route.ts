@@ -5,6 +5,12 @@ import {
   createAuthSession,
   createUserWithPassword,
 } from "@/lib/auth/server";
+import {
+  checkRateLimit,
+  rateLimitKeyFromRequest,
+  resolveRateLimitFailure,
+  type RateLimitBlockedDecision,
+} from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,7 +29,33 @@ function isUniqueViolation(error: unknown) {
   );
 }
 
+function respondToRateLimit(rateLimit: RateLimitBlockedDecision) {
+  const failure = resolveRateLimitFailure(
+    rateLimit,
+    "Too many account creation attempts.",
+  );
+
+  return NextResponse.json(
+    { error: failure.error },
+    {
+      status: failure.status,
+      headers: {
+        "retry-after": String(failure.retryAfterSeconds),
+      },
+    },
+  );
+}
+
 export async function POST(request: Request) {
+  const rateLimit = await checkRateLimit({
+    key: rateLimitKeyFromRequest(request, "account-signup"),
+    limit: 5,
+    windowMs: 60_000,
+  });
+  if (!rateLimit.allowed) {
+    return respondToRateLimit(rateLimit);
+  }
+
   const parsedBody = requestSchema.safeParse(await request.json().catch(() => ({})));
   if (!parsedBody.success) {
     return NextResponse.json(
