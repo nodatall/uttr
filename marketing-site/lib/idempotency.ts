@@ -14,10 +14,7 @@ function parseBeginStatus(payload: unknown): WebhookEventBeginStatus {
   throw new Error("Webhook idempotency store returned an invalid status.");
 }
 
-export async function beginWebhookEvent(
-  eventId: string,
-  eventType: string,
-) {
+export async function beginWebhookEvent(eventId: string, eventType: string) {
   return dbTransaction(async (client) => {
     const inserted = await client.query<{ id: string }>(
       `insert into public.stripe_webhook_events (
@@ -61,10 +58,7 @@ export async function beginWebhookEvent(
     const startedAtMs = row.processing_started_at
       ? new Date(row.processing_started_at).getTime()
       : 0;
-    if (
-      row.status === "processing" &&
-      startedAtMs > Date.now() - 600_000
-    ) {
+    if (row.status === "processing" && startedAtMs > Date.now() - 600_000) {
       return "in_progress";
     }
 
@@ -107,7 +101,9 @@ export async function failWebhookEvent(eventId: string, error: unknown) {
       where id = $1`,
     [
       eventId,
-      error instanceof Error ? error.message : "Unknown webhook processing error",
+      error instanceof Error
+        ? error.message
+        : "Unknown webhook processing error",
     ],
   );
 }

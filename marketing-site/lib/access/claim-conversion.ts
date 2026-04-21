@@ -13,8 +13,7 @@ export const claimConversionStatuses = [
   "invalid_claim",
 ] as const;
 
-export type ClaimConversionStatus =
-  (typeof claimConversionStatuses)[number];
+export type ClaimConversionStatus = (typeof claimConversionStatuses)[number];
 
 export type ClaimConversionOutcome =
   | {

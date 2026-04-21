@@ -58,7 +58,7 @@ function stripeId(value: string | { id?: string } | null): string | null {
     return null;
   }
 
-  return typeof value === "string" ? value : value.id ?? null;
+  return typeof value === "string" ? value : (value.id ?? null);
 }
 
 function mapSubscriptionStatus(
@@ -120,7 +120,8 @@ async function syncEntitlementFromCheckout(
 
   const subscription = await retrieveSubscriptionForCheckout(session, stripe);
   const subscriptionId = subscription?.id || stripeId(session.subscription);
-  const customerId = stripeId(session.customer) || stripeId(subscription?.customer ?? null);
+  const customerId =
+    stripeId(session.customer) || stripeId(subscription?.customer ?? null);
   if (!subscriptionId || !customerId || !subscription) {
     console.warn(
       JSON.stringify({
@@ -192,11 +193,14 @@ async function sendCheckoutCompletedEmail(
   session: Stripe.Checkout.Session,
   stripe: Stripe,
 ) {
-  const email = session.customer_details?.email ||
+  const email =
+    session.customer_details?.email ||
     (await resolveCustomerEmail(stripe, session.customer));
 
   if (!email) {
-    await sendSupportFallbackIfMissingEmail("welcome_email_missing_customer_email");
+    await sendSupportFallbackIfMissingEmail(
+      "welcome_email_missing_customer_email",
+    );
     return;
   }
 
@@ -212,10 +216,13 @@ type PostCommitSideEffect = () => Promise<void>;
 
 async function handleInvoicePaid(invoice: Stripe.Invoice, stripe: Stripe) {
   const email =
-    invoice.customer_email || (await resolveCustomerEmail(stripe, invoice.customer));
+    invoice.customer_email ||
+    (await resolveCustomerEmail(stripe, invoice.customer));
 
   if (!email) {
-    await sendSupportFallbackIfMissingEmail("invoice_paid_missing_customer_email");
+    await sendSupportFallbackIfMissingEmail(
+      "invoice_paid_missing_customer_email",
+    );
     return;
   }
 
@@ -228,10 +235,13 @@ async function handleInvoicePaid(invoice: Stripe.Invoice, stripe: Stripe) {
 
 async function handleInvoiceFailed(invoice: Stripe.Invoice, stripe: Stripe) {
   const email =
-    invoice.customer_email || (await resolveCustomerEmail(stripe, invoice.customer));
+    invoice.customer_email ||
+    (await resolveCustomerEmail(stripe, invoice.customer));
 
   if (!email) {
-    await sendSupportFallbackIfMissingEmail("invoice_failed_missing_customer_email");
+    await sendSupportFallbackIfMissingEmail(
+      "invoice_failed_missing_customer_email",
+    );
     return;
   }
 
@@ -249,7 +259,9 @@ async function sendSubscriptionDeletedEmail(
   const email = await resolveCustomerEmail(stripe, subscription.customer);
 
   if (!email) {
-    await sendSupportFallbackIfMissingEmail("subscription_deleted_missing_customer_email");
+    await sendSupportFallbackIfMissingEmail(
+      "subscription_deleted_missing_customer_email",
+    );
     return;
   }
 
@@ -279,7 +291,9 @@ async function sendSubscriptionUpdatedEmail(
 
   const email = await resolveCustomerEmail(stripe, subscription.customer);
   if (!email) {
-    await sendSupportFallbackIfMissingEmail("subscription_updated_missing_customer_email");
+    await sendSupportFallbackIfMissingEmail(
+      "subscription_updated_missing_customer_email",
+    );
     return;
   }
 
@@ -306,7 +320,11 @@ export async function POST(request: Request) {
     const stripe = getStripe(stripeSecretKey);
     const payload = await request.text();
 
-    const event = stripe.webhooks.constructEvent(payload, signature, webhookSecret);
+    const event = stripe.webhooks.constructEvent(
+      payload,
+      signature,
+      webhookSecret,
+    );
 
     const beginStatus = await beginWebhookEvent(event.id, event.type);
     if (beginStatus === "duplicate") {
@@ -327,7 +345,8 @@ export async function POST(request: Request) {
         const session = event.data.object as Stripe.Checkout.Session;
         await markPendingCheckoutSessionCompleted(session.id);
         await handleCheckoutCompleted(session, stripe);
-        postCommitSideEffect = () => sendCheckoutCompletedEmail(session, stripe);
+        postCommitSideEffect = () =>
+          sendCheckoutCompletedEmail(session, stripe);
         break;
       }
       case "checkout.session.expired": {

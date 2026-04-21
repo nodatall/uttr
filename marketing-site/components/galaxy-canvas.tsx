@@ -143,7 +143,10 @@ export function GalaxyCanvas() {
       ctx.fillRect(0, 0, w, h);
 
       if (source.complete && source.naturalWidth > 0) {
-        const baseScale = Math.max(w / source.naturalWidth, h / source.naturalHeight);
+        const baseScale = Math.max(
+          w / source.naturalWidth,
+          h / source.naturalHeight,
+        );
         const pulse = reducedMotion ? 1 : 1 + Math.sin(time * 0.00028) * 0.018;
         const rotation = reducedMotion ? 0 : Math.sin(time * 0.00009) * 0.006;
 
@@ -186,7 +189,7 @@ export function GalaxyCanvas() {
         const cx = w * 0.52;
         const cy = h * 0.39;
         const spiralScaleX = w * 0.42;
-        const spiralScaleY = h * 0.30;
+        const spiralScaleY = h * 0.3;
         const arms = 5;
 
         for (let i = 0; i < swirlStars.length; i += 1) {
@@ -211,7 +214,8 @@ export function GalaxyCanvas() {
             Math.sin(spiralAngle) * spiralScaleY * radius +
             Math.sin(angle * 1.72 - t * 0.13) * jitter * 0.72;
 
-          const twinkle = 0.72 + Math.sin(t * star.twinkleSpeed + star.phase) * 0.28;
+          const twinkle =
+            0.72 + Math.sin(t * star.twinkleSpeed + star.phase) * 0.28;
           const alpha = Math.max(0.06, star.alpha * twinkle);
           const size = star.size * (0.95 + star.depth * 0.3);
 

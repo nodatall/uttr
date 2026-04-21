@@ -62,7 +62,9 @@ async function readInstallTokenFromBodyOrRequest(request: Request) {
     return transportToken;
   }
 
-  const parsedBody = requestSchema.safeParse(await request.json().catch(() => ({})));
+  const parsedBody = requestSchema.safeParse(
+    await request.json().catch(() => ({})),
+  );
   if (!parsedBody.success) {
     return null;
   }
@@ -102,7 +104,9 @@ export async function POST(request: Request) {
       );
     }
 
-    const trial = await fetchAnonymousTrialById(tokenPayload.anonymous_trial_id);
+    const trial = await fetchAnonymousTrialById(
+      tokenPayload.anonymous_trial_id,
+    );
     if (
       !trial ||
       trial.install_id !== tokenPayload.install_id ||

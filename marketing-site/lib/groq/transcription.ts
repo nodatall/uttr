@@ -5,7 +5,9 @@ export const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
 export const GROQ_UPLOAD_LIMIT_BYTES = 100 * 1024 * 1024;
 export const GROQ_DEFAULT_TRANSLATION_MODEL = "whisper-large-v3";
 
-export type GroqTranscriptionEndpoint = "audio/transcriptions" | "audio/translations";
+export type GroqTranscriptionEndpoint =
+  | "audio/transcriptions"
+  | "audio/translations";
 
 export interface GroqTranscriptionInput {
   audioBytes: ArrayBuffer | Uint8Array;
@@ -53,7 +55,9 @@ export function resolveGroqTranscriptionModel(
   return resolved;
 }
 
-export function resolveGroqEndpoint(translateToEnglish: boolean): GroqTranscriptionEndpoint {
+export function resolveGroqEndpoint(
+  translateToEnglish: boolean,
+): GroqTranscriptionEndpoint {
   return translateToEnglish ? "audio/translations" : "audio/transcriptions";
 }
 
@@ -81,7 +85,10 @@ export async function transcribeWithGroq({
   translateToEnglish,
 }: GroqTranscriptionInput) {
   const { groqApiKey } = readCloudProxyConfig();
-  const resolvedModel = resolveGroqTranscriptionModel(model, translateToEnglish);
+  const resolvedModel = resolveGroqTranscriptionModel(
+    model,
+    translateToEnglish,
+  );
   const endpoint = resolveGroqEndpoint(translateToEnglish);
   const body = new FormData();
 
@@ -94,7 +101,9 @@ export async function transcribeWithGroq({
   }
 
   const blobBytes =
-    audioBytes instanceof Uint8Array ? Uint8Array.from(audioBytes) : new Uint8Array(audioBytes);
+    audioBytes instanceof Uint8Array
+      ? Uint8Array.from(audioBytes)
+      : new Uint8Array(audioBytes);
   const blob = new Blob([blobBytes], { type: mimeType });
   body.set("file", blob, fileName);
 

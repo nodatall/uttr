@@ -109,10 +109,7 @@ function App() {
     if (onboardingStep === "done" && !hasCompletedPostOnboardingInit.current) {
       hasCompletedPostOnboardingInit.current = true;
       logFrontendStartup("post onboarding init start");
-      Promise.all([
-        commands.initializeEnigo(),
-        commands.initializeShortcuts(),
-      ])
+      Promise.all([commands.initializeEnigo(), commands.initializeShortcuts()])
         .then(() => logFrontendStartup("post onboarding input init complete"))
         .catch((e) => {
           console.warn("Failed to initialize:", e);

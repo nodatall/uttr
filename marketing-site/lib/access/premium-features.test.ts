@@ -16,9 +16,7 @@ describe("premium cloud feature access", () => {
     expect(accessAllowsCloudSource("trialing", "file_transcription")).toBe(
       true,
     );
-    expect(accessAllowsCloudSource("trialing", "full_system_audio")).toBe(
-      true,
-    );
+    expect(accessAllowsCloudSource("trialing", "full_system_audio")).toBe(true);
     expect(accessAllowsCloudSource("subscribed", "file_transcription")).toBe(
       true,
     );

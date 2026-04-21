@@ -18,8 +18,7 @@ export const checkoutSessionStatuses = [
   "completed",
   "expired",
 ] as const;
-export type CheckoutSessionStatus =
-  (typeof checkoutSessionStatuses)[number];
+export type CheckoutSessionStatus = (typeof checkoutSessionStatuses)[number];
 
 export const usageEventSources = [
   "cloud_default",

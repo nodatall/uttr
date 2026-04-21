@@ -53,7 +53,9 @@ export function buildPendingCheckoutSessionContextKey(params: {
 }
 
 function isReusableCheckoutSession(row: CheckoutSessionRow) {
-  return row.status === "open" && new Date(row.expires_at).getTime() > Date.now();
+  return (
+    row.status === "open" && new Date(row.expires_at).getTime() > Date.now()
+  );
 }
 
 function buildPendingCheckoutSessionRow(params: {
@@ -78,9 +80,7 @@ function buildPendingCheckoutSessionRow(params: {
   };
 }
 
-export async function fetchAnonymousTrialByInstallId(
-  installId: string,
-) {
+export async function fetchAnonymousTrialByInstallId(installId: string) {
   const rows = await queryRows<AnonymousTrialRow>(
     `select *
        from public.anonymous_trials
@@ -385,9 +385,7 @@ export async function patchEntitlementByStripeSubscriptionId(
   patch: Partial<
     Pick<
       EntitlementRow,
-      | "subscription_status"
-      | "stripe_customer_id"
-      | "current_period_ends_at"
+      "subscription_status" | "stripe_customer_id" | "current_period_ends_at"
     >
   >,
 ) {

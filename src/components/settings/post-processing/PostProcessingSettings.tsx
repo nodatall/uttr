@@ -2,11 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RefreshCcw } from "lucide-react";
 
-import {
-  SettingContainer,
-  SettingsGroup,
-  Slider,
-} from "@/components/ui";
+import { SettingContainer, SettingsGroup, Slider } from "@/components/ui";
 import { Button } from "../../ui/Button";
 import { ResetButton } from "../../ui/ResetButton";
 
@@ -39,9 +35,7 @@ const PostProcessingSettingsApiComponent: React.FC = () => {
             isLoading={state.isFetchingModels}
             placeholder={
               state.modelOptions.length > 0
-                ? t(
-                    "settings.postProcessing.api.model.placeholderWithOptions",
-                  )
+                ? t("settings.postProcessing.api.model.placeholderWithOptions")
                 : t("settings.postProcessing.api.model.placeholderNoOptions")
             }
             onSelect={state.handleModelSelect}
@@ -72,7 +66,11 @@ PostProcessingSettingsApi.displayName = "PostProcessingSettingsApi";
 
 type CleaningPromptPreset = "strict" | "nuanced" | "custom";
 
-const PRESET_OPTIONS: { value: CleaningPromptPreset; label: string; hint: string }[] = [
+const PRESET_OPTIONS: {
+  value: CleaningPromptPreset;
+  label: string;
+  hint: string;
+}[] = [
   { value: "strict", label: "Strict", hint: "8B+ friendly" },
   { value: "nuanced", label: "Nuanced", hint: "70B recommended" },
   { value: "custom", label: "Custom", hint: "" },
@@ -109,8 +107,12 @@ const PostProcessingSettingsAdvancedComponent: React.FC = () => {
   const { getSetting, updateSetting, isUpdating } = useSettings();
 
   const timeoutSecs = (getSetting("post_process_timeout_secs") as number) ?? 60;
-  const preset = (getSetting("post_process_cleaning_prompt_preset") as CleaningPromptPreset) ?? "strict";
-  const systemPrompt = (getSetting("post_process_system_prompt") as string) ?? "";
+  const preset =
+    (getSetting(
+      "post_process_cleaning_prompt_preset",
+    ) as CleaningPromptPreset) ?? "strict";
+  const systemPrompt =
+    (getSetting("post_process_system_prompt") as string) ?? "";
 
   const [draftSystemPrompt, setDraftSystemPrompt] = useState(systemPrompt);
   const isSystemPromptDirty = draftSystemPrompt !== systemPrompt;
@@ -156,7 +158,9 @@ const PostProcessingSettingsAdvancedComponent: React.FC = () => {
               >
                 <span>{option.label}</span>
                 {option.hint && (
-                  <span className="text-xs text-mid-gray/60 font-normal mt-0.5">{option.hint}</span>
+                  <span className="text-xs text-mid-gray/60 font-normal mt-0.5">
+                    {option.hint}
+                  </span>
                 )}
               </button>
             ))}
@@ -182,7 +186,12 @@ const PostProcessingSettingsAdvancedComponent: React.FC = () => {
             {!isPresetReadOnly && isSystemPromptDirty && (
               <div className="flex gap-2 pt-1">
                 <Button
-                  onClick={() => updateSetting("post_process_system_prompt", draftSystemPrompt)}
+                  onClick={() =>
+                    updateSetting(
+                      "post_process_system_prompt",
+                      draftSystemPrompt,
+                    )
+                  }
                   variant="primary"
                   size="md"
                   disabled={isUpdating("post_process_system_prompt")}
@@ -207,7 +216,9 @@ const PostProcessingSettingsAdvancedComponent: React.FC = () => {
       </SettingContainer>
       <Slider
         value={timeoutSecs}
-        onChange={(val) => updateSetting("post_process_timeout_secs", Math.round(val))}
+        onChange={(val) =>
+          updateSetting("post_process_timeout_secs", Math.round(val))
+        }
         min={5}
         max={120}
         step={1}

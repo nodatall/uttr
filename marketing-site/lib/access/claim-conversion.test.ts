@@ -37,9 +37,7 @@ function trial(overrides: Partial<AnonymousTrialRow> = {}): AnonymousTrialRow {
   };
 }
 
-function entitlement(
-  overrides: Partial<EntitlementRow> = {},
-): EntitlementRow {
+function entitlement(overrides: Partial<EntitlementRow> = {}): EntitlementRow {
   const now = new Date().toISOString();
   return {
     user_id: "user_123",

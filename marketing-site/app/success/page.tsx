@@ -54,7 +54,8 @@ export default async function SuccessPage({
             ) : (
               <>
                 Thanks for subscribing to Uttr Pro at <strong>$5/month</strong>.
-                A confirmation has been sent to <strong>{customerEmail}</strong>.
+                A confirmation has been sent to <strong>{customerEmail}</strong>
+                .
               </>
             )}
           </p>
@@ -69,9 +70,7 @@ export default async function SuccessPage({
             >
               Back to homepage
             </Link>
-            <BillingPortalButton
-              className="rounded-full border border-white/25 px-6 py-3 text-sm text-cosmic-100 transition hover:border-white/45 hover:text-cosmic-50"
-            >
+            <BillingPortalButton className="rounded-full border border-white/25 px-6 py-3 text-sm text-cosmic-100 transition hover:border-white/45 hover:text-cosmic-50">
               Manage billing
             </BillingPortalButton>
           </div>

@@ -49,8 +49,16 @@
   body {
     margin: 0;
     background:
-      radial-gradient(circle at 20% 15%, rgba(182, 134, 255, 0.2), transparent 38%),
-      radial-gradient(circle at 84% 80%, rgba(107, 184, 255, 0.14), transparent 36%),
+      radial-gradient(
+        circle at 20% 15%,
+        rgba(182, 134, 255, 0.2),
+        transparent 38%
+      ),
+      radial-gradient(
+        circle at 84% 80%,
+        rgba(107, 184, 255, 0.14),
+        transparent 36%
+      ),
       linear-gradient(180deg, #060810 0%, #04050a 100%);
     color: var(--foreground);
     font-family: var(--font-display), "Space Grotesk", sans-serif;
@@ -86,9 +94,19 @@
 
 .star-grid {
   background-image:
-    radial-gradient(circle at 1px 1px, rgba(255, 255, 255, 0.15) 1px, transparent 0),
-    radial-gradient(circle at 60px 80px, rgba(255, 255, 255, 0.08) 1px, transparent 0);
-  background-size: 120px 120px, 200px 200px;
+    radial-gradient(
+      circle at 1px 1px,
+      rgba(255, 255, 255, 0.15) 1px,
+      transparent 0
+    ),
+    radial-gradient(
+      circle at 60px 80px,
+      rgba(255, 255, 255, 0.08) 1px,
+      transparent 0
+    );
+  background-size:
+    120px 120px,
+    200px 200px;
 }
 
 .noise-mask {
@@ -96,7 +114,10 @@
   inset: 0;
   opacity: 0.17;
   pointer-events: none;
-  background-image: radial-gradient(rgba(255, 255, 255, 0.3) 0.4px, transparent 0.4px);
+  background-image: radial-gradient(
+    rgba(255, 255, 255, 0.3) 0.4px,
+    transparent 0.4px
+  );
   background-size: 3px 3px;
 }
 
@@ -116,7 +137,11 @@
 @media (max-width: 780px) {
   body {
     background:
-      radial-gradient(circle at 50% 12%, rgba(182, 134, 255, 0.18), transparent 35%),
+      radial-gradient(
+        circle at 50% 12%,
+        rgba(182, 134, 255, 0.18),
+        transparent 35%
+      ),
       linear-gradient(180deg, #060810 0%, #04050a 100%);
   }
 }

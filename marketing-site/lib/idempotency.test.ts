@@ -36,7 +36,9 @@ describe("webhook idempotency", () => {
     await expect(
       beginWebhookEvent("evt_456", "checkout.session.completed"),
     ).resolves.toBe("process");
-    expect(queries[0].sql).toContain("insert into public.stripe_webhook_events");
+    expect(queries[0].sql).toContain(
+      "insert into public.stripe_webhook_events",
+    );
     expect(queries[0].values).toEqual([
       "evt_456",
       "checkout.session.completed",

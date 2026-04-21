@@ -1,5 +1,6 @@
 # Dependencies
 node_modules
+.venv-icons
 bun.lock
 package-lock.json
 
@@ -7,6 +8,7 @@ package-lock.json
 dist
 target
 *.bundle.*
+marketing-site/.next
 
 # Tauri
 src-tauri/target
@@ -14,6 +16,13 @@ src-tauri/gen
 
 # Generated files
 src/bindings.ts
+AGENTS.md
+CLAUDE.md
+skills
+.playwright-cli
+output/playwright
+tasks/tmp
+full-system-progress-mock.html
 
 # Misc
 .DS_Store

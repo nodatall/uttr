@@ -144,9 +144,7 @@ fn create_audio_recorder(
         .with_level_callback({
             let app_handle = app_handle.clone();
             move |levels| {
-                if !levels.is_empty()
-                    && !FIRST_AUDIO_LEVEL_LOGGED.swap(true, Ordering::Relaxed)
-                {
+                if !levels.is_empty() && !FIRST_AUDIO_LEVEL_LOGGED.swap(true, Ordering::Relaxed) {
                     info!(
                         "[latency] first audio level callback received band_count={}",
                         levels.len()

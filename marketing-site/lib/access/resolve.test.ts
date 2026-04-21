@@ -51,7 +51,9 @@ describe("access resolution", () => {
   test("treats an expired trial as blocked access", () => {
     const trial = buildTrial({
       status: "trialing",
-      trial_started_at: new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString(),
+      trial_started_at: new Date(
+        Date.now() - 48 * 60 * 60 * 1000,
+      ).toISOString(),
       trial_ends_at: new Date(Date.now() - 60_000).toISOString(),
     });
 

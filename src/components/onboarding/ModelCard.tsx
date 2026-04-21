@@ -93,7 +93,10 @@ const ModelCard: React.FC<ModelCardProps> = ({
       : null,
   ].filter(Boolean) as string[];
 
-  if (traitLabels.length === 0 && (model.speed_score > 0 || model.accuracy_score > 0)) {
+  if (
+    traitLabels.length === 0 &&
+    (model.speed_score > 0 || model.accuracy_score > 0)
+  ) {
     traitLabels.push(
       t("settings.models.traits.balanced", { defaultValue: "Balanced" }),
     );

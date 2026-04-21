@@ -9,6 +9,8 @@ export function buildTimings(
     preflight_ms: Math.round(groqStartMs - startMs),
     groq_ms: Math.round(groqEndMs - groqStartMs),
     persistence_ms: Math.round(endMs - groqEndMs),
-    backend_overhead_ms: Math.round(endMs - startMs - (groqEndMs - groqStartMs)),
+    backend_overhead_ms: Math.round(
+      endMs - startMs - (groqEndMs - groqStartMs),
+    ),
   };
 }

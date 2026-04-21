@@ -23,15 +23,13 @@ export function BillingPortalButton({
 
     try {
       const session = await auth.getSession();
-      const accessToken = session?.access_token;
-      if (!accessToken) {
+      if (!session) {
         throw new Error("Sign in to manage billing.");
       }
 
       const response = await fetch("/api/billing/portal", {
         method: "POST",
         headers: {
-          authorization: `Bearer ${accessToken}`,
           "content-type": "application/json",
         },
       });
@@ -47,7 +45,8 @@ export function BillingPortalButton({
 
       window.location.assign(payload.url);
     } catch (err) {
-      const message = err instanceof Error ? err.message : "Unable to open billing portal.";
+      const message =
+        err instanceof Error ? err.message : "Unable to open billing portal.";
       setError(message);
       setIsLoading(false);
     }

@@ -122,7 +122,10 @@ async function checkWithDurableRateLimit(
   policy: RateLimitPolicy,
 ): Promise<RateLimitDecision> {
   if (policy.limit <= 0) {
-    return buildDeniedDecision(buildRetryAfterSeconds(policy.windowMs), "durable");
+    return buildDeniedDecision(
+      buildRetryAfterSeconds(policy.windowMs),
+      "durable",
+    );
   }
 
   const result = await dbQuery<{
@@ -158,11 +161,7 @@ async function checkWithDurableRateLimit(
 
   const row = result.rows[0];
 
-  if (
-    !row ||
-    typeof row.count !== "number" ||
-    !row.reset_at
-  ) {
+  if (!row || typeof row.count !== "number" || !row.reset_at) {
     throw new Error("Durable rate-limit store returned an invalid payload.");
   }
 

@@ -113,7 +113,6 @@ export default function Home() {
                     Download for macOS
                   </a>
                 </div>
-
               </div>
 
               <div className="justify-self-end">
@@ -125,7 +124,9 @@ export default function Home() {
                   <div className="mt-5 space-y-4">
                     {glanceItems.map(([title, body]) => (
                       <div key={title}>
-                        <p className="text-2xl font-semibold text-white">{title}</p>
+                        <p className="text-2xl font-semibold text-white">
+                          {title}
+                        </p>
                         <p className="text-sm text-cosmic-200/85">{body}</p>
                       </div>
                     ))}
@@ -205,7 +206,8 @@ export default function Home() {
                 </h2>
               </div>
               <p className="max-w-sm text-base leading-relaxed text-cosmic-100/72">
-                Two simple options for macOS. Pro unlocks the deeper capture and cleanup tools.
+                Two simple options for macOS. Pro unlocks the deeper capture and
+                cleanup tools.
               </p>
             </div>
 
@@ -235,7 +237,9 @@ export default function Home() {
                         {plan.suffix ? (
                           <span
                             className={`pb-2 text-sm ${
-                              plan.featured ? "text-cosmic-700" : "text-cosmic-100/65"
+                              plan.featured
+                                ? "text-cosmic-700"
+                                : "text-cosmic-100/65"
                             }`}
                           >
                             {plan.suffix}
