@@ -31,7 +31,8 @@
     "upgradeStatusAccessExpired": "Access expired",
     "upgradeStatusLinkedAccount": "Linked account",
     "upgradeCaption": "{{status}} - $5/month",
-    "upgradeOpenFailed": "Could not start checkout. Try again from Uttr in a moment."
+    "upgradeOpenFailed": "Could not start checkout. Try again from Uttr in a moment.",
+    "fileTranscription": "File Transcription"
   },
   "onboarding": {
     "subtitle": "Pro začátek vyberte model pro přepis",
@@ -587,6 +588,43 @@
         "placeholder": "gsk_...",
         "storageNote": "The key is not shown after saving. Replace it here, or clear it to remove the stored secret."
       }
+    },
+    "fileTranscription": {
+      "eyebrow": "Utility",
+      "title": "File Transcription",
+      "description": "Drop in one audio file or choose one from disk. Uttr will transcribe it using your current model, language, and post-processing settings.",
+      "chooseFile": "Choose Audio File",
+      "browse": "Browse for file",
+      "clear": "Clear",
+      "processing": "Transcribing audio file...",
+      "dropzoneTitle": "Drag and drop one audio file here",
+      "dropzoneDescription": "Supported formats: {{formats}}",
+      "currentFileLabel": "Current file",
+      "postProcessedBadge": "Post-processed",
+      "emptyState": "Imported files stay on this screen only. They are not added to your transcription history.",
+      "transcriptLabel": "Transcript",
+      "transcriptDescription": "This is the text output from your current transcription settings.",
+      "copy": "Copy",
+      "copySuccess": "Transcript copied to clipboard.",
+      "fileFilter": "Audio Files",
+      "errors": {
+        "inProgress": "Wait for the current file to finish transcribing.",
+        "singleFile": "Drop or choose exactly one audio file.",
+        "unsupportedFormat": "Unsupported audio format. Use {{formats}}."
+      },
+      "readyState": "File selected. Review it, then click Transcribe when you're ready.",
+      "starting": "Starting transcription...",
+      "completed": "Transcription finished.",
+      "cancelled": "Transcription cancelled.",
+      "cancelling": "Cancelling transcription...",
+      "cancel": "Cancel",
+      "transcribe": "Transcribe",
+      "readyTitle": "File selected and ready to transcribe",
+      "manualStartHint": "Selecting a file does not start transcription. Click Transcribe when you want to begin.",
+      "progressChunks": "Chunk {{current}} of {{total}}",
+      "progressPreparing": "Preparing transcription",
+      "inProgressBadge": "In progress",
+      "readyBadge": "Ready"
     }
   },
   "footer": {
