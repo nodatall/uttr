@@ -551,7 +551,7 @@ impl TranscriptionManager {
             }
             Ok(None) => {}
             Err(error) => {
-                warn!("Failed to load Groq BYOK secret from Stronghold: {}", error);
+                warn!("Failed to load Groq BYOK key: {}", error);
             }
         }
 

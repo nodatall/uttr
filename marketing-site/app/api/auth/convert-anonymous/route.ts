@@ -15,6 +15,12 @@ import {
   resolveClaimConversionOutcome,
   type ClaimConversionStatus,
 } from "@/lib/access/claim-conversion";
+import {
+  checkRateLimit,
+  rateLimitKeyFromRequest,
+  resolveRateLimitFailure,
+  type RateLimitBlockedDecision,
+} from "@/lib/rate-limit";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -37,8 +43,34 @@ function claimConversionStatusCode(status: ClaimConversionStatus) {
   }
 }
 
+function respondToRateLimit(rateLimit: RateLimitBlockedDecision) {
+  const failure = resolveRateLimitFailure(
+    rateLimit,
+    "Too many anonymous conversion requests.",
+  );
+
+  return NextResponse.json(
+    { error: failure.error },
+    {
+      status: failure.status,
+      headers: {
+        "retry-after": String(failure.retryAfterSeconds),
+      },
+    },
+  );
+}
+
 export async function POST(request: Request) {
   try {
+    const rateLimit = await checkRateLimit({
+      key: rateLimitKeyFromRequest(request, "anonymous-conversion"),
+      limit: 30,
+      windowMs: 60_000,
+    });
+    if (!rateLimit.allowed) {
+      return respondToRateLimit(rateLimit);
+    }
+
     const parsedBody = requestSchema.safeParse(await request.json());
     if (!parsedBody.success) {
       return NextResponse.json(

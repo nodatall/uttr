@@ -89,7 +89,7 @@ pub fn change_byok_enabled_setting(app: AppHandle, enabled: bool) -> Result<(), 
     let mut settings = get_settings(&app);
     if enabled {
         let has_secret = crate::byok_secrets::load_groq_api_key(&app, &settings)
-            .map_err(|error| format!("Failed to load Groq BYOK secret: {}", error))?
+            .map_err(|error| format!("Failed to load Groq BYOK key: {}", error))?
             .map(|key| !key.trim().is_empty())
             .unwrap_or(false);
         if !has_secret {
@@ -111,8 +111,8 @@ pub async fn validate_byok_groq_key(
 ) -> Result<crate::access::InstallAccessSnapshot, String> {
     let mut settings = get_settings(&app);
     let key = crate::byok_secrets::load_groq_api_key(&app, &settings)
-        .map_err(|error| format!("Failed to load Groq BYOK secret: {}", error))?
-        .ok_or_else(|| "Groq BYOK secret is missing.".to_string())?;
+        .map_err(|error| format!("Failed to load Groq BYOK key: {}", error))?
+        .ok_or_else(|| "Groq BYOK key is missing.".to_string())?;
 
     let provider = settings
         .post_process_provider("groq")

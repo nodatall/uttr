@@ -16,17 +16,37 @@ const trial = {
 const usageEventCalls: Array<Record<string, unknown>> = [];
 const callOrder: string[] = [];
 let transcribeShouldFail = false;
+const lockedExecutor = { query: async () => ({ rows: [], rowCount: 0 }) };
 
 mock.module("@/lib/access", () => ({
   fetchAnonymousTrialById: async () => trial,
   fetchEntitlementByUserId: async () => null,
-  fetchUsageEventsSince: async () => [],
-  insertUsageEvent: async (row: Record<string, unknown>) => {
-    callOrder.push("insert_usage");
+  fetchUsageEventsSince: async (_params: unknown, executor?: unknown) => {
+    callOrder.push(
+      executor === lockedExecutor ? "fetch_usage_locked" : "fetch_usage_pool",
+    );
+    return [];
+  },
+  insertUsageEvent: async (
+    row: Record<string, unknown>,
+    executor?: unknown,
+  ) => {
+    callOrder.push(
+      executor === lockedExecutor ? "insert_usage_locked" : "insert_usage_pool",
+    );
     usageEventCalls.push(row);
     return { id: "usage_123", ...row };
   },
-  patchAnonymousTrialById: async () => trial,
+  patchAnonymousTrialById: async (
+    _id: string,
+    _patch: unknown,
+    executor?: unknown,
+  ) => {
+    callOrder.push(
+      executor === lockedExecutor ? "patch_trial_locked" : "patch_trial_pool",
+    );
+    return trial;
+  },
   readInstallTokenFromRequest: () => "install-token",
   refreshAnonymousTrialState: async () => trial,
   resolveAccessDecision: () => ({
@@ -41,6 +61,13 @@ mock.module("@/lib/access", () => ({
     device_fingerprint_hash: trial.device_fingerprint_hash,
     issued_at: new Date().toISOString(),
   }),
+  withAnonymousTrialUsageLock: async (
+    anonymousTrialId: string,
+    callback: (executor: typeof lockedExecutor) => Promise<Response>,
+  ) => {
+    callOrder.push(`lock:${anonymousTrialId}`);
+    return callback(lockedExecutor);
+  },
 }));
 
 mock.module("@/lib/access/cloud-transcription-policy", () => ({
@@ -73,20 +100,6 @@ mock.module("@/lib/groq/timings", () => ({
   }),
 }));
 
-mock.module("@/lib/rate-limit", () => ({
-  checkRateLimit: async () => ({
-    allowed: true,
-    remaining: 59,
-    source: "memory",
-  }),
-  rateLimitKeyFromRequest: () => "cloud-transcribe:test",
-  resolveRateLimitFailure: () => ({
-    status: 429,
-    error: "Too many transcription requests.",
-    retryAfterSeconds: 60,
-  }),
-}));
-
 const { POST } = await import("./route");
 
 beforeEach(() => {
@@ -95,7 +108,7 @@ beforeEach(() => {
   transcribeShouldFail = false;
 });
 
-function buildRequest() {
+function buildRequest(fields: Record<string, string> = {}) {
   const formData = new FormData();
   formData.set(
     "file",
@@ -103,6 +116,9 @@ function buildRequest() {
       type: "audio/wav",
     }),
   );
+  for (const [key, value] of Object.entries(fields)) {
+    formData.set(key, value);
+  }
 
   return new Request("https://uttr.test/api/transcribe/cloud", {
     method: "POST",
@@ -117,7 +133,13 @@ describe("/api/transcribe/cloud usage accounting", () => {
 
     expect(response.status).toBe(200);
     expect(payload.text).toBe("hello world");
-    expect(callOrder).toEqual(["transcribe", "insert_usage"]);
+    expect(callOrder).toEqual([
+      "lock:trial_123",
+      "fetch_usage_locked",
+      "patch_trial_locked",
+      "transcribe",
+      "insert_usage_locked",
+    ]);
     expect(usageEventCalls).toEqual([
       {
         anonymous_trial_id: trial.id,
@@ -136,7 +158,49 @@ describe("/api/transcribe/cloud usage accounting", () => {
 
     expect(response.status).toBe(500);
     expect(payload.error).toBe("Could not transcribe audio.");
-    expect(callOrder).toEqual(["transcribe"]);
+    expect(callOrder).toEqual([
+      "lock:trial_123",
+      "fetch_usage_locked",
+      "patch_trial_locked",
+      "transcribe",
+    ]);
     expect(usageEventCalls).toHaveLength(0);
+  });
+
+  test("uses server-estimated audio seconds instead of client-supplied duration", async () => {
+    const response = await POST(buildRequest({ audio_seconds: "1" }));
+
+    expect(response.status).toBe(200);
+    expect(usageEventCalls).toEqual([
+      {
+        anonymous_trial_id: trial.id,
+        user_id: null,
+        source: "cloud_default",
+        audio_seconds: 12,
+      },
+    ]);
+  });
+
+  test("rejects clearly oversized request bodies before parsing multipart data", async () => {
+    const request = new Request("https://uttr.test/api/transcribe/cloud", {
+      method: "POST",
+      headers: {
+        "content-length": String(111 * 1024 * 1024),
+      },
+    });
+    Object.defineProperty(request, "formData", {
+      configurable: true,
+      value: async () => {
+        throw new Error("multipart body should not be parsed when too large");
+      },
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(413);
+    await expect(response.json()).resolves.toEqual({
+      error: "Audio upload exceeds the 100 MB limit.",
+    });
+    expect(callOrder).toEqual([]);
   });
 });

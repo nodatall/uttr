@@ -1002,11 +1002,17 @@ pub async fn fetch_post_process_models(
     }
 
     // Get API key
-    let api_key = settings
-        .post_process_api_keys
-        .get(&provider_id)
-        .cloned()
-        .unwrap_or_default();
+    let api_key = if provider.id == "groq" {
+        crate::byok_secrets::load_groq_api_key(&app, &settings)
+            .map_err(|error| format!("Failed to load Groq BYOK key: {}", error))?
+            .unwrap_or_default()
+    } else {
+        settings
+            .post_process_api_keys
+            .get(&provider_id)
+            .cloned()
+            .unwrap_or_default()
+    };
 
     // Skip fetching if no API key for providers that typically need one
     if api_key.trim().is_empty() && provider.id != "custom" {

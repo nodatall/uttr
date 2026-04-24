@@ -92,13 +92,17 @@ export async function fetchAnonymousTrialByInstallId(installId: string) {
   return firstOrNull(rows);
 }
 
-export async function fetchAnonymousTrialById(id: string) {
+export async function fetchAnonymousTrialById(
+  id: string,
+  executor: DbExecutor = { query: dbQuery },
+) {
   const rows = await queryRows<AnonymousTrialRow>(
     `select *
        from public.anonymous_trials
       where id = $1
       limit 1`,
     [id],
+    executor,
   );
 
   return firstOrNull(rows);
@@ -170,13 +174,14 @@ type AnonymousTrialPatchColumn = (typeof anonymousTrialPatchColumns)[number];
 export async function patchAnonymousTrialById(
   id: string,
   patch: Partial<Pick<AnonymousTrialRow, AnonymousTrialPatchColumn>>,
+  executor: DbExecutor = { query: dbQuery },
 ) {
   const entries = anonymousTrialPatchColumns
     .filter((column) => patch[column] !== undefined)
     .map((column) => [column, patch[column]] as const);
 
   if (entries.length === 0) {
-    return fetchAnonymousTrialById(id);
+    return fetchAnonymousTrialById(id, executor);
   }
 
   const setClauses = entries.map(
@@ -189,6 +194,7 @@ export async function patchAnonymousTrialById(
       where id = $1
       returning *`,
     values,
+    executor,
   );
 
   return firstOrNull(rows);
@@ -196,6 +202,7 @@ export async function patchAnonymousTrialById(
 
 export async function insertUsageEvent(
   row: Omit<UsageEventRow, "id" | "created_at">,
+  executor: DbExecutor = { query: dbQuery },
 ) {
   const rows = await queryRows<UsageEventRow>(
     `insert into public.usage_events (
@@ -205,24 +212,42 @@ export async function insertUsageEvent(
        audio_seconds
      )
      values ($1, $2, $3, $4)
-     returning *`,
+    returning *`,
     [row.anonymous_trial_id, row.user_id, row.source, row.audio_seconds],
+    executor,
   );
 
   return firstOrNull(rows);
 }
 
-export async function fetchUsageEventsSince(params: {
-  anonymousTrialId: string;
-  since: string;
-}) {
+export async function fetchUsageEventsSince(
+  params: {
+    anonymousTrialId: string;
+    since: string;
+  },
+  executor: DbExecutor = { query: dbQuery },
+) {
   return queryRows<UsageEventRow>(
     `select *
        from public.usage_events
       where anonymous_trial_id = $1
         and created_at >= $2`,
     [params.anonymousTrialId, params.since],
+    executor,
   );
+}
+
+export async function withAnonymousTrialUsageLock<T>(
+  anonymousTrialId: string,
+  callback: (executor: DbExecutor) => Promise<T>,
+) {
+  return dbTransaction(async (client) => {
+    await client.query("select pg_advisory_xact_lock(hashtext($1))", [
+      `anonymous_trial_usage:${anonymousTrialId}`,
+    ]);
+
+    return callback(client);
+  });
 }
 
 export async function fetchAuthenticatedUser(

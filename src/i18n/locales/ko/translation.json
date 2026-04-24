@@ -565,12 +565,12 @@
       }
     },
     "byok": {
-      "eyebrow": "Hidden access",
+      "eyebrow": "BYOK access",
       "title": "BYOK controls",
-      "description": "Manage the optional Groq Bring Your Own Key path. The key is stored securely and only used when BYOK is enabled and validated.",
+      "description": "Manage the optional Groq Bring Your Own Key path. The saved key is used only when BYOK is enabled and validated.",
       "status": "Status",
-      "secretStored": "Secret stored in Stronghold",
-      "noSecret": "No stored secret",
+      "secretStored": "Key saved in settings",
+      "noSecret": "No saved key",
       "enableLabel": "Enable BYOK",
       "enableDescription": "Use the stored Groq key for direct routing only after the key validates successfully.",
       "enableGuard": "Save and validate a Groq key before enabling direct BYOK routing.",
@@ -582,11 +582,11 @@
       "groq": {
         "sectionLabel": "Groq BYOK",
         "title": "Direct Groq routing",
-        "description": "Unlock the key entry, save the secret, validate it, and then enable BYOK to bypass subscription gating when the key is valid.",
+        "description": "Unlock the key entry, save the key, validate it, and then enable BYOK to bypass subscription gating when the key is valid.",
         "keyLabel": "Groq API key",
-        "stored": "Secret stored in Stronghold",
+        "stored": "Key saved in settings",
         "placeholder": "gsk_...",
-        "storageNote": "The key is not shown after saving. Replace it here, or clear it to remove the stored secret."
+        "storageNote": "The saved key stays in this field so you can inspect, replace, or clear it."
       }
     },
     "fileTranscription": {

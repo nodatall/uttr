@@ -264,7 +264,7 @@ async fn post_process_transcription(
             Ok(None) => String::new(),
             Err(error) => {
                 warn!(
-                    "Failed to load Groq BYOK secret from Stronghold for post-processing: {}",
+                    "Failed to load Groq BYOK key for post-processing: {}",
                     error
                 );
                 String::new()

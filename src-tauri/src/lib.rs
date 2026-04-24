@@ -476,16 +476,6 @@ pub fn run() {
         ))
         .setup(move |app| {
             let app_handle = app.handle().clone();
-            let stronghold_salt_path = app_handle
-                .path()
-                .app_data_dir()
-                .expect("Failed to resolve app data directory")
-                .join("stronghold_salt.txt");
-            app.handle()
-                .plugin(
-                    tauri_plugin_stronghold::Builder::with_argon2(&stronghold_salt_path).build(),
-                )
-                .expect("Failed to initialize Stronghold plugin");
             let settings = get_settings(&app_handle);
             let tauri_log_level: tauri_plugin_log::LogLevel = settings.log_level.into();
             let file_log_level: log::Level = tauri_log_level.into();

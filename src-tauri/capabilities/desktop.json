@@ -7,7 +7,6 @@
     "global-shortcut:default",
     "autostart:default",
     "autostart:default",
-    "stronghold:default",
     "updater:default"
   ]
 }

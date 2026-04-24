@@ -35,6 +35,7 @@ export {
   buildPendingCheckoutSessionContextKey,
   upsertAnonymousTrialHeartbeat,
   upsertEntitlementState,
+  withAnonymousTrialUsageLock,
 } from "./postgres";
 export {
   claimConversionStatuses,

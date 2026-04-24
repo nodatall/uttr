@@ -1,5 +1,4 @@
 use log::{debug, warn};
-use once_cell::sync::OnceCell;
 use serde::de::{self, Visitor};
 use serde::{Deserialize, Deserializer, Serialize};
 use sha2::{Digest, Sha256};
@@ -11,7 +10,6 @@ use uuid::Uuid;
 
 pub const APPLE_INTELLIGENCE_PROVIDER_ID: &str = "apple_intelligence";
 pub const APPLE_INTELLIGENCE_DEFAULT_MODEL_ID: &str = "Apple Intelligence";
-static GROQ_SECRET_MIGRATION_ATTEMPTED: OnceCell<()> = OnceCell::new();
 
 pub const STRICT_CLEANING_PROMPT: &str = "You are a transcript cleaning assistant. Clean the transcript in the user message following these rules:
 1. Fix spelling, capitalisation, and punctuation errors.
@@ -853,12 +851,6 @@ fn ensure_onboarding_defaults(settings: &mut AppSettings) -> bool {
     true
 }
 
-fn ensure_groq_secret_is_migrated(app: &AppHandle, settings: &mut AppSettings) -> bool {
-    let _ = app;
-    let _ = settings;
-    false
-}
-
 pub const SETTINGS_STORE_PATH: &str = "settings_store.json";
 
 pub fn get_default_settings() -> AppSettings {
@@ -1101,10 +1093,6 @@ pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
         changed = true;
     }
 
-    if ensure_groq_secret_is_migrated(app, &mut settings) {
-        changed = true;
-    }
-
     if ensure_file_transcription_history_defaults(&mut settings) {
         changed = true;
     }
@@ -1166,10 +1154,6 @@ pub fn get_settings(app: &AppHandle) -> AppSettings {
     }
 
     if ensure_onboarding_defaults(&mut settings) {
-        changed = true;
-    }
-
-    if ensure_groq_secret_is_migrated(app, &mut settings) {
         changed = true;
     }
 

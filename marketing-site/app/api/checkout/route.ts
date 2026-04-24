@@ -13,6 +13,12 @@ import {
 } from "@/lib/access";
 import { createOrReuseCheckoutSession } from "@/lib/checkout";
 import { readCheckoutConfig } from "@/lib/env";
+import {
+  checkRateLimit,
+  rateLimitKeyFromRequest,
+  resolveRateLimitFailure,
+  type RateLimitBlockedDecision,
+} from "@/lib/rate-limit";
 import { getStripe } from "@/lib/stripe";
 
 export const runtime = "nodejs";
@@ -25,6 +31,23 @@ const requestSchema = z.object({
 
 function normalizeSource(source: string | undefined) {
   return source?.trim() || "direct";
+}
+
+function respondToRateLimit(rateLimit: RateLimitBlockedDecision) {
+  const failure = resolveRateLimitFailure(
+    rateLimit,
+    "Too many checkout requests.",
+  );
+
+  return NextResponse.json(
+    { error: failure.error },
+    {
+      status: failure.status,
+      headers: {
+        "retry-after": String(failure.retryAfterSeconds),
+      },
+    },
+  );
 }
 
 class CheckoutRouteError extends Error {
@@ -92,6 +115,15 @@ async function resolveClaimContext(claimToken: string, userId: string) {
 
 export async function POST(request: Request) {
   try {
+    const rateLimit = await checkRateLimit({
+      key: rateLimitKeyFromRequest(request, "checkout"),
+      limit: 20,
+      windowMs: 60_000,
+    });
+    if (!rateLimit.allowed) {
+      return respondToRateLimit(rateLimit);
+    }
+
     const parsedBody = requestSchema.safeParse(await request.json());
     if (!parsedBody.success) {
       return NextResponse.json(

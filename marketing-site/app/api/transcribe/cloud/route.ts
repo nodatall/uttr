@@ -7,6 +7,7 @@ import {
   transcribeWithGroq,
 } from "@/lib/groq";
 import { buildTimings } from "@/lib/groq/timings";
+import type { DbExecutor } from "@/lib/db";
 import {
   fetchAnonymousTrialById,
   fetchEntitlementByUserId,
@@ -19,6 +20,7 @@ import {
   type InstallTokenPayload,
   type UsageEventRow,
   verifyInstallToken,
+  withAnonymousTrialUsageLock,
 } from "@/lib/access";
 import { evaluateCloudTranscriptionPreflight } from "@/lib/access/cloud-transcription-policy";
 import {
@@ -32,6 +34,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const TRIAL_DURATION_MS = 48 * 60 * 60 * 1000;
+const CLOUD_TRANSCRIPTION_REQUEST_BODY_LIMIT_BYTES = 110 * 1024 * 1024;
 
 function parseBooleanField(value: FormDataEntryValue | null) {
   if (typeof value !== "string") {
@@ -86,6 +89,19 @@ function resolvePostTranscriptionAccessState(
   accessState: string,
 ) {
   return trialState === "trialing" ? "trialing" : accessState;
+}
+
+function requestBodyIsClearlyTooLarge(request: Request) {
+  const contentLength = request.headers.get("content-length");
+  if (!contentLength) {
+    return false;
+  }
+
+  const parsed = Number.parseInt(contentLength, 10);
+  return (
+    Number.isFinite(parsed) &&
+    parsed > CLOUD_TRANSCRIPTION_REQUEST_BODY_LIMIT_BYTES
+  );
 }
 
 export async function POST(request: Request) {
@@ -152,6 +168,13 @@ export async function POST(request: Request) {
       );
     }
 
+    if (requestBodyIsClearlyTooLarge(request)) {
+      return NextResponse.json(
+        { error: "Audio upload exceeds the 100 MB limit." },
+        { status: 413 },
+      );
+    }
+
     const formData = await request.formData();
     const fileEntry = formData.get("file");
 
@@ -175,9 +198,7 @@ export async function POST(request: Request) {
     const source = parseTextField(formData.get("source"));
     const chunkIndex = parseChunkNumberField(formData.get("chunk_index"));
     const chunkCount = parseChunkNumberField(formData.get("chunk_count"));
-    const audioSeconds =
-      parseChunkNumberField(formData.get("audio_seconds")) ??
-      estimateAudioSecondsFromWavBytes(fileEntry.size);
+    const audioSeconds = estimateAudioSecondsFromWavBytes(fileEntry.size);
 
     const requestedModel = parseTextField(formData.get("model"));
     const groqTraceId = summarizeGroqPayload(
@@ -185,120 +206,147 @@ export async function POST(request: Request) {
       requestedModel || "default",
     );
 
-    let usageEvents: UsageEventRow[] = [];
-    if (accessDecision.accessState !== "subscribed") {
-      const usageWindowStart =
-        refreshedTrial.trial_started_at ||
-        new Date(Date.now() - TRIAL_DURATION_MS).toISOString();
-      usageEvents = await fetchUsageEventsSince({
-        anonymousTrialId: refreshedTrial.id,
-        since: usageWindowStart,
-      });
-    }
-
-    const preflightDecision = evaluateCloudTranscriptionPreflight({
-      accessState: accessDecision.accessState,
-      trialState: accessDecision.trialState,
-      source,
-      usageEvents,
-      audioSeconds,
-    });
-    if (!preflightDecision.allowed) {
-      return NextResponse.json(
-        {
-          error: preflightDecision.error,
-          reason: preflightDecision.reason,
-        },
-        { status: preflightDecision.status },
-      );
-    }
-
-    const now = new Date().toISOString();
-    let persistedTrial = refreshedTrial;
-
-    if (
-      refreshedTrial.status === "new" &&
-      accessDecision.accessState !== "subscribed"
-    ) {
-      const startedTrial = await patchAnonymousTrialById(refreshedTrial.id, {
-        status: "trialing",
-        trial_started_at: now,
-        trial_ends_at: new Date(Date.now() + TRIAL_DURATION_MS).toISOString(),
-        last_seen_at: now,
-      });
-
-      if (!startedTrial) {
-        throw new Error("Unable to start anonymous trial.");
+    const runTranscription = async (executor?: DbExecutor) => {
+      let usageEvents: UsageEventRow[] = [];
+      if (accessDecision.accessState !== "subscribed") {
+        const usageWindowStart =
+          refreshedTrial.trial_started_at ||
+          new Date(Date.now() - TRIAL_DURATION_MS).toISOString();
+        usageEvents = await fetchUsageEventsSince(
+          {
+            anonymousTrialId: refreshedTrial.id,
+            since: usageWindowStart,
+          },
+          executor,
+        );
       }
 
-      persistedTrial = startedTrial;
-    } else {
-      const touchedTrial = await patchAnonymousTrialById(refreshedTrial.id, {
-        last_seen_at: now,
-      });
-
-      if (!touchedTrial) {
-        throw new Error("Unable to refresh trial heartbeat.");
-      }
-
-      persistedTrial = touchedTrial;
-    }
-
-    const fileBytes = Buffer.from(await fileEntry.arrayBuffer());
-    const groqStartMs = performance.now();
-    const groqResult = await transcribeWithGroq({
-      audioBytes: fileBytes,
-      fileName: fileEntry.name || "uttr.wav",
-      mimeType: fileEntry.type || "audio/wav",
-      language: parseTextField(formData.get("language")),
-      model: requestedModel,
-      translateToEnglish,
-    });
-    const groqEndMs = performance.now();
-
-    const usageEvent = await insertUsageEvent({
-      anonymous_trial_id: persistedTrial.id,
-      user_id: persistedTrial.user_id,
-      source: "cloud_default",
-      audio_seconds: audioSeconds,
-    });
-
-    if (!usageEvent) {
-      throw new Error("Unable to record usage event.");
-    }
-
-    const endMs = performance.now();
-
-    const timings = buildTimings(startMs, groqStartMs, groqEndMs, endMs);
-    const accessState = resolvePostTranscriptionAccessState(
-      persistedTrial.status,
-      accessDecision.accessState,
-    );
-
-    console.info(
-      JSON.stringify({
-        level: "info",
-        event: "cloud_transcription_completed",
-        trace_id: groqTraceId,
+      const preflightDecision = evaluateCloudTranscriptionPreflight({
+        accessState: accessDecision.accessState,
+        trialState: accessDecision.trialState,
         source,
-        chunk_index: chunkIndex,
-        chunk_count: chunkCount,
-        trial_id: persistedTrial.id,
+        usageEvents,
+        audioSeconds,
+      });
+      if (!preflightDecision.allowed) {
+        return NextResponse.json(
+          {
+            error: preflightDecision.error,
+            reason: preflightDecision.reason,
+          },
+          { status: preflightDecision.status },
+        );
+      }
+
+      const now = new Date().toISOString();
+      let persistedTrial = refreshedTrial;
+
+      if (
+        refreshedTrial.status === "new" &&
+        accessDecision.accessState !== "subscribed"
+      ) {
+        const startedTrial = await patchAnonymousTrialById(
+          refreshedTrial.id,
+          {
+            status: "trialing",
+            trial_started_at: now,
+            trial_ends_at: new Date(
+              Date.now() + TRIAL_DURATION_MS,
+            ).toISOString(),
+            last_seen_at: now,
+          },
+          executor,
+        );
+
+        if (!startedTrial) {
+          throw new Error("Unable to start anonymous trial.");
+        }
+
+        persistedTrial = startedTrial;
+      } else {
+        const touchedTrial = await patchAnonymousTrialById(
+          refreshedTrial.id,
+          {
+            last_seen_at: now,
+          },
+          executor,
+        );
+
+        if (!touchedTrial) {
+          throw new Error("Unable to refresh trial heartbeat.");
+        }
+
+        persistedTrial = touchedTrial;
+      }
+
+      const fileBytes = Buffer.from(await fileEntry.arrayBuffer());
+      const groqStartMs = performance.now();
+      const groqResult = await transcribeWithGroq({
+        audioBytes: fileBytes,
+        fileName: fileEntry.name || "uttr.wav",
+        mimeType: fileEntry.type || "audio/wav",
+        language: parseTextField(formData.get("language")),
+        model: requestedModel,
+        translateToEnglish,
+      });
+      const groqEndMs = performance.now();
+
+      const usageEvent = await insertUsageEvent(
+        {
+          anonymous_trial_id: persistedTrial.id,
+          user_id: persistedTrial.user_id,
+          source: "cloud_default",
+          audio_seconds: audioSeconds,
+        },
+        executor,
+      );
+
+      if (!usageEvent) {
+        throw new Error("Unable to record usage event.");
+      }
+
+      const endMs = performance.now();
+
+      const timings = buildTimings(startMs, groqStartMs, groqEndMs, endMs);
+      const accessState = resolvePostTranscriptionAccessState(
+        persistedTrial.status,
+        accessDecision.accessState,
+      );
+
+      console.info(
+        JSON.stringify({
+          level: "info",
+          event: "cloud_transcription_completed",
+          trace_id: groqTraceId,
+          source,
+          chunk_index: chunkIndex,
+          chunk_count: chunkCount,
+          trial_id: persistedTrial.id,
+          trial_state: persistedTrial.status,
+          access_state: accessState,
+          groq_endpoint: groqResult.endpoint,
+          groq_model: groqResult.model,
+          timings,
+        }),
+      );
+
+      return NextResponse.json({
+        text: groqResult.text,
+        timings,
         trial_state: persistedTrial.status,
         access_state: accessState,
-        groq_endpoint: groqResult.endpoint,
-        groq_model: groqResult.model,
-        timings,
-      }),
-    );
+        entitlement_state: accessDecision.entitlementState,
+      });
+    };
 
-    return NextResponse.json({
-      text: groqResult.text,
-      timings,
-      trial_state: persistedTrial.status,
-      access_state: accessState,
-      entitlement_state: accessDecision.entitlementState,
-    });
+    if (accessDecision.accessState === "subscribed") {
+      return await runTranscription();
+    }
+
+    return await withAnonymousTrialUsageLock(
+      refreshedTrial.id,
+      runTranscription,
+    );
   } catch (error) {
     console.error(
       JSON.stringify({

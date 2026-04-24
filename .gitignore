@@ -35,6 +35,9 @@ playwright-report/
 test-results/
 blob-report/
 
+# Local probe artifacts can carry bearer tokens, checkout URLs, or test credentials.
+/tasks/tmp/stripe-browser-payment-probe-current.json
+
 .direnv
 .envrc
 .env.local

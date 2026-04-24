@@ -8,6 +8,7 @@ import { isDevPlanSimulationActive } from "@/lib/utils/premiumFeatures";
 export const ApiKeysSettings: React.FC = () => {
   const { t } = useTranslation();
   const {
+    settings,
     installAccess,
     refreshInstallAccess,
     updatePostProcessApiKey,
@@ -22,9 +23,11 @@ export const ApiKeysSettings: React.FC = () => {
     }
   }, [installAccess, refreshInstallAccess]);
 
+  const savedGroqApiKey = settings?.post_process_api_keys?.groq ?? "";
+
   useEffect(() => {
-    setGroqApiKeyDraft("");
-  }, [installAccess?.has_byok_secret]);
+    setGroqApiKeyDraft(savedGroqApiKey);
+  }, [savedGroqApiKey]);
 
   const hasStoredSecret = installAccess?.has_byok_secret ?? false;
   const isKeyUpdating = isUpdating("post_process_api_key:groq");
@@ -56,7 +59,7 @@ export const ApiKeysSettings: React.FC = () => {
         <p className="max-w-2xl text-sm leading-relaxed text-text/52">
           {t("settings.apiKeys.description", {
             defaultValue:
-              "Add your Groq API key to use your own cloud transcription access. The key is stored securely on this device.",
+              "Add your Groq API key to use your own cloud transcription access.",
           })}
         </p>
       </div>
@@ -106,7 +109,7 @@ export const ApiKeysSettings: React.FC = () => {
               placeholder={
                 hasStoredSecret
                   ? t("settings.apiKeys.groq.stored", {
-                      defaultValue: "Key stored securely",
+                      defaultValue: "Saved key",
                     })
                   : t("settings.apiKeys.groq.placeholder", {
                       defaultValue: "gsk_...",
@@ -118,7 +121,7 @@ export const ApiKeysSettings: React.FC = () => {
             <p className="text-xs leading-relaxed text-text/42">
               {t("settings.apiKeys.groq.storageNote", {
                 defaultValue:
-                  "The key is hidden after saving. Enter a new key here to replace it, or clear it to remove the stored key.",
+                  "The saved key stays in this field so you can inspect, replace, or clear it.",
               })}
             </p>
           </div>

@@ -186,7 +186,10 @@ function failClosedRateLimit(policy: RateLimitPolicy): RateLimitDecision {
 }
 
 function isProductionRuntime() {
-  return process.env.NODE_ENV === "production";
+  return (
+    process.env.NODE_ENV === "production" ||
+    process.env.UTTR_FORCE_DURABLE_RATE_LIMITS === "true"
+  );
 }
 
 export async function checkRateLimit(
