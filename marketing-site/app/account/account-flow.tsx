@@ -41,23 +41,6 @@ export function AccountFlow() {
 
   useEffect(() => {
     let cancelled = false;
-    let fallbackTimeoutId: number | null = null;
-
-    const clearFallbackTimeout = () => {
-      if (fallbackTimeoutId !== null) {
-        window.clearTimeout(fallbackTimeoutId);
-        fallbackTimeoutId = null;
-      }
-    };
-
-    const scheduleSignedOutFallback = () => {
-      clearFallbackTimeout();
-      fallbackTimeoutId = window.setTimeout(() => {
-        if (!cancelled) {
-          setHasCheckedSession(true);
-        }
-      }, 900);
-    };
 
     const getVerifiedSession = () => {
       sessionCheckRef.current ??= auth.getSession().finally(() => {
@@ -69,14 +52,12 @@ export function AccountFlow() {
 
     const syncSession = async () => {
       setHasCheckedSession(false);
-      scheduleSignedOutFallback();
 
       const session = await getVerifiedSession();
       if (cancelled) {
         return;
       }
 
-      clearFallbackTimeout();
       setSignedInEmail(session?.user.email ?? null);
       setHasCheckedSession(true);
     };
@@ -98,7 +79,6 @@ export function AccountFlow() {
 
     return () => {
       cancelled = true;
-      clearFallbackTimeout();
       window.removeEventListener("pageshow", refreshSession);
       window.removeEventListener("focus", refreshSession);
       document.removeEventListener("visibilitychange", refreshSession);
@@ -168,7 +148,12 @@ export function AccountFlow() {
 
   return (
     <div className="mx-auto mt-9 w-full max-w-xl text-left">
-      {signedInEmail ? (
+      {!hasCheckedSession ? (
+        <div className="space-y-4 text-center text-sm text-cosmic-200">
+          <p>Checking your account...</p>
+          <div className="mx-auto h-10 w-44 animate-pulse rounded-full bg-cosmic-100/12" />
+        </div>
+      ) : signedInEmail ? (
         <div className="space-y-4 text-sm text-cosmic-200">
           <button
             type="button"
@@ -192,11 +177,6 @@ export function AccountFlow() {
               ? "Opening billing portal..."
               : "Manage subscription"}
           </button>
-        </div>
-      ) : !hasCheckedSession ? (
-        <div className="space-y-4 text-center text-sm text-cosmic-200">
-          <p>Checking your account...</p>
-          <div className="mx-auto h-10 w-44 animate-pulse rounded-full bg-cosmic-100/12" />
         </div>
       ) : (
         <form
