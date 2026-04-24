@@ -130,7 +130,7 @@ fn create_audio_recorder(
     vad_path: &str,
     app_handle: &tauri::AppHandle,
 ) -> Result<AudioRecorder, anyhow::Error> {
-    let silero = SileroVad::new(vad_path, 0.3)
+    let silero = SileroVad::new(vad_path, 0.22)
         .map_err(|e| anyhow::anyhow!("Failed to create SileroVad: {}", e))?;
     // Less aggressive onset gating helps preserve first spoken words.
     // Keep generous prefill to include context leading into the first detected voice frame.

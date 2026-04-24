@@ -43,6 +43,8 @@ pub struct DrainResult {
 }
 
 const TRANSCRIPTION_SAMPLE_RATE: u32 = crate::audio_toolkit::constants::WHISPER_SAMPLE_RATE;
+const QUIET_SPEECH_RMS_THRESHOLD: f32 = 0.0012;
+const QUIET_SPEECH_PEAK_THRESHOLD: f32 = 0.0075;
 
 pub fn normalize_transcription_pcm(
     samples: &[f32],
@@ -595,6 +597,24 @@ fn drain_recording(
     }
 }
 
+fn frame_has_quiet_speech_energy(samples: &[f32]) -> bool {
+    if samples.is_empty() {
+        return false;
+    }
+
+    let mut sum_squares = 0.0f32;
+    let mut peak = 0.0f32;
+
+    for sample in samples {
+        let abs = sample.abs();
+        sum_squares += sample * sample;
+        peak = peak.max(abs);
+    }
+
+    let rms = (sum_squares / samples.len() as f32).sqrt();
+    rms >= QUIET_SPEECH_RMS_THRESHOLD || peak >= QUIET_SPEECH_PEAK_THRESHOLD
+}
+
 fn run_consumer(
     in_sample_rate: u32,
     vad: Option<Arc<Mutex<Box<dyn vad::VoiceActivityDetector>>>>,
@@ -607,7 +627,7 @@ fn run_consumer(
     // Long-idle stream-closed misses stay explicitly deferred to the audio manager lifecycle.
     const PRE_ROLL_SAMPLES: usize = SPEECH_SAMPLE_RATE * 500 / 1000; // 500ms
     const PAUSE_THRESHOLD_SAMPLES: usize = SPEECH_SAMPLE_RATE * 300 / 1000; // 300ms
-    const STARTUP_PASSTHROUGH_SAMPLES: usize = SPEECH_SAMPLE_RATE * 350 / 1000; // 350ms
+    const STARTUP_PASSTHROUGH_SAMPLES: usize = SPEECH_SAMPLE_RATE * 650 / 1000; // 650ms
 
     let mut frame_resampler = FrameResampler::new(
         in_sample_rate as usize,
@@ -659,6 +679,10 @@ fn run_consumer(
             match det.push_frame(samples).unwrap_or(VadFrame::Speech(samples)) {
                 VadFrame::Speech(buf) => {
                     out_buf.extend_from_slice(buf);
+                    true
+                }
+                VadFrame::Noise if frame_has_quiet_speech_energy(samples) => {
+                    out_buf.extend_from_slice(samples);
                     true
                 }
                 VadFrame::Noise => false,
@@ -809,8 +833,8 @@ fn run_consumer(
 #[cfg(test)]
 mod tests {
     use super::{
-        drain_recording, handle_start, mix_transcription_pcm_sources, normalize_transcription_pcm,
-        DrainResult, PreRollBuffer,
+        drain_recording, frame_has_quiet_speech_energy, handle_start,
+        mix_transcription_pcm_sources, normalize_transcription_pcm, DrainResult, PreRollBuffer,
     };
 
     #[test]
@@ -954,6 +978,15 @@ mod tests {
         let normalized = normalize_transcription_pcm(&samples, 16_000, 2).expect("normalize audio");
 
         assert_eq!(normalized, vec![0.75, -0.75]);
+    }
+
+    #[test]
+    fn quiet_speech_energy_fallback_accepts_low_voice_frames() {
+        let quiet_voice = vec![0.0014; 480];
+        let silence = vec![0.0002; 480];
+
+        assert!(frame_has_quiet_speech_energy(&quiet_voice));
+        assert!(!frame_has_quiet_speech_energy(&silence));
     }
 
     #[test]
