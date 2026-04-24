@@ -45,7 +45,7 @@ const SPEECH_WAKE_AVERAGE = 0.00055;
 const SPEECH_WAKE_PEAK = 0.0035;
 const SPEECH_SLEEP_AVERAGE = 0.00024;
 const SPEECH_SLEEP_PEAK = 0.0012;
-const SPEECH_SLEEP_HOLD_MS = 650;
+const SPEECH_SLEEP_HOLD_MS = 260;
 const WAVE_ENERGY_MIN = 0;
 const WAVE_ENERGY_MAX = 1;
 const WAVE_AMPLITUDE_MIN = 0.65;
@@ -61,6 +61,7 @@ const WAVE_IDLE_AMPLITUDE = 0.08;
 const WAVE_IDLE_SPEED = 0.012;
 const SUSTAINED_SPEECH_MIN_ENERGY = 0.12;
 const EFFECTIVE_WAVE_ENERGY_CAP = 0.56;
+const SUSTAINED_SPEECH_ENERGY_DECAY = 0.9;
 const IOS9_BASELINE_OFFSET_PX = 6;
 const RECORDING_CURVES = [
   { color: "255,255,255", supportLine: true },
@@ -276,7 +277,7 @@ const RecordingOverlay: React.FC = () => {
         }
 
         lastSpeechEnergyRef.current = Math.max(
-          lastSpeechEnergyRef.current * 0.985,
+          lastSpeechEnergyRef.current * SUSTAINED_SPEECH_ENERGY_DECAY,
           rawEnergy,
           SUSTAINED_SPEECH_MIN_ENERGY,
         );
