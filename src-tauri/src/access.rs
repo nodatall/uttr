@@ -12,6 +12,7 @@ use std::time::Duration;
 use tauri::AppHandle;
 
 const BACKEND_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const DEFAULT_BACKEND_BASE_URL: &str = "https://uttr.pro";
 const PREMIUM_FEATURE_ACCESS_MESSAGE: &str = "Upgrade to Pro to use this feature.";
 const TRANSCRIPTION_ACCESS_MESSAGE: &str =
     "Your trial has ended. Upgrade to Pro to keep using transcription.";
@@ -113,7 +114,7 @@ pub struct ClaimTokenResult {
 fn normalize_backend_base_url(raw: &str) -> String {
     let trimmed = raw.trim().trim_end_matches('/');
     if trimmed.is_empty() {
-        "https://uttr.app".to_string()
+        DEFAULT_BACKEND_BASE_URL.to_string()
     } else {
         trimmed.to_string()
     }
@@ -121,7 +122,8 @@ fn normalize_backend_base_url(raw: &str) -> String {
 
 pub fn backend_base_url() -> String {
     normalize_backend_base_url(
-        &std::env::var("UTTR_BACKEND_BASE_URL").unwrap_or_else(|_| "https://uttr.app".to_string()),
+        &std::env::var("UTTR_BACKEND_BASE_URL")
+            .unwrap_or_else(|_| DEFAULT_BACKEND_BASE_URL.to_string()),
     )
 }
 
@@ -472,16 +474,16 @@ mod tests {
     #[test]
     fn normalizes_backend_base_url() {
         assert_eq!(
-            normalize_backend_base_url("https://uttr.app/"),
-            "https://uttr.app"
+            normalize_backend_base_url("https://uttr.pro/"),
+            DEFAULT_BACKEND_BASE_URL
         );
-        assert_eq!(normalize_backend_base_url(""), "https://uttr.app");
+        assert_eq!(normalize_backend_base_url(""), DEFAULT_BACKEND_BASE_URL);
     }
 
     #[test]
     fn backend_transport_hint_detects_dns_failures() {
         let hint = backend_transport_error_hint(
-            "https://uttr.app/api/trial/bootstrap",
+            "https://uttr.pro/api/trial/bootstrap",
             "error sending request for url: dns error: failed to lookup address information",
         );
 
@@ -492,7 +494,7 @@ mod tests {
     #[test]
     fn backend_transport_hint_detects_connectivity_failures() {
         let hint = backend_transport_error_hint(
-            "https://uttr.app/api/trial/bootstrap",
+            "https://uttr.pro/api/trial/bootstrap",
             "error sending request for url: connection refused",
         );
 

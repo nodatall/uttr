@@ -268,7 +268,7 @@ async function sendSubscriptionDeletedEmail(
   await sendTransactionalEmail({
     to: email,
     subject: "Your Uttr subscription has been canceled",
-    html: "<p>Your Uttr Pro subscription is now canceled. You can resubscribe at any time from uttr.app.</p>",
+    html: "<p>Your Uttr Pro subscription is now canceled. You can resubscribe at any time from uttr.pro.</p>",
   });
 }
 

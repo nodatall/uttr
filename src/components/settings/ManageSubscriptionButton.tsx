@@ -9,7 +9,7 @@ import {
 
 const LOCAL_MARKETING_ORIGIN = "http://localhost:4317";
 const PRODUCTION_ACCOUNT_URL =
-  "https://uttr.app/account?source=settings-subscription";
+  "https://uttr.pro/account?source=settings-subscription";
 
 const toAccountUrl = () => {
   if (!import.meta.env.DEV) {

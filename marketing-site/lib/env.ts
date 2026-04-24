@@ -15,7 +15,7 @@ export function readSiteConfig() {
   return {
     siteUrl: readEnv("NEXT_PUBLIC_SITE_URL"),
     supportEmail:
-      readOptionalEnv("NEXT_PUBLIC_SUPPORT_EMAIL") || "support@uttr.app",
+      readOptionalEnv("NEXT_PUBLIC_SUPPORT_EMAIL") || "support@uttr.pro",
   };
 }
 
@@ -52,7 +52,7 @@ export function readEmailConfig() {
 
   return {
     resendApiKey: readOptionalEnv("RESEND_API_KEY"),
-    from: readOptionalEnv("EMAIL_FROM") || "Uttr <noreply@uttr.app>",
+    from: readOptionalEnv("EMAIL_FROM") || "Uttr <noreply@uttr.pro>",
     supportEmail: readOptionalEnv("EMAIL_SUPPORT") || siteConfig.supportEmail,
   };
 }
