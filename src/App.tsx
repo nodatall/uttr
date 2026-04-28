@@ -122,6 +122,10 @@ function App() {
 
   // Handle keyboard shortcuts for debug mode toggle
   useEffect(() => {
+    if (!import.meta.env.DEV) {
+      return;
+    }
+
     const handleKeyDown = (event: KeyboardEvent) => {
       // Check for Ctrl+Shift+D (Windows/Linux) or Cmd+Shift+D (macOS)
       const isDebugShortcut =
@@ -251,9 +255,7 @@ function App() {
   }
 
   if (onboardingStep === "accessibility") {
-    return (
-      <AccessibilityOnboarding onComplete={handleAccessibilityComplete} />
-    );
+    return <AccessibilityOnboarding onComplete={handleAccessibilityComplete} />;
   }
 
   return (
