@@ -250,6 +250,38 @@ jobs:
           echo "CERT_ID=$CERT_ID" >> $GITHUB_ENV
           echo "Certificate imported."
 
+      - name: Preflight notarization account access
+        if: contains(inputs.platform, 'macos') && inputs.sign-binaries
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          NOTARY_PASSWORD="${APPLE_PASSWORD:-${APPLE_ID_PASSWORD:-}}"
+          if [[ -z "$NOTARY_PASSWORD" ]]; then
+            echo "::error::Missing Apple notarization password secret. Set APPLE_PASSWORD or APPLE_ID_PASSWORD."
+            exit 1
+          fi
+
+          history_output="$(xcrun notarytool history \
+            --apple-id "$APPLE_ID" \
+            --password "$NOTARY_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" 2>&1)" || {
+              echo "$history_output"
+              if grep -qi "required agreement is missing or has expired" <<<"$history_output"; then
+                echo "::error::Apple notarization is blocked because the Apple Developer team has a missing or expired agreement. Sign the pending agreement in Apple Developer or App Store Connect, then rerun the release."
+              else
+                echo "::error::Apple notarization preflight failed before build. Resolve the notarization account issue above, then rerun the release."
+              fi
+              exit 1
+            }
+
+          echo "$history_output"
+
       - name: Patch asset name pattern
         id: patch-release-name
         shell: bash
