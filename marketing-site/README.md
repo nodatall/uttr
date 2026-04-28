@@ -14,8 +14,8 @@ Standalone Next.js marketing + subscription site for Uttr.
 ## Deployment
 
 - Build the site as a standalone Next.js server with `output: "standalone"`.
-- Ship it with the included `Dockerfile` and `fly.toml`.
-- Fly listens on port `3000` and runs the emitted `server.js` entrypoint.
+- Ship it with the included `Dockerfile`.
+- The container runs the emitted `server.js` entrypoint.
 - Keep the site and backend routes in this one deployment; do not split the proxy into a second service.
 
 ## Run Locally
@@ -43,7 +43,7 @@ npm run dev
 The site expects these runtime variables:
 
 - `NEXT_PUBLIC_SITE_URL` - public site URL used for redirects and checkout success/cancel links.
-- `NEXT_PUBLIC_DOWNLOAD_URL` - public macOS download URL used by marketing and account CTAs.
+- `NEXT_PUBLIC_DOWNLOAD_URL` - public macOS download URL used by marketing and account CTAs. Use `/download` to redirect visitors straight to the latest macOS release asset.
 - `NEXT_PUBLIC_SUPPORT_EMAIL` - public support address shown in site UI.
 - `NEXT_PUBLIC_STRIPE_PRICE_ID_MONTHLY` - Stripe monthly subscription price ID.
 - `NEXT_PUBLIC_AGENTATION_DEV_TOOLBAR` - optional development-only Agentation toolbar toggle; set to `true` when annotating UI.
@@ -97,6 +97,7 @@ Copy the emitted signing secret to `STRIPE_WEBHOOK_SECRET`.
 ## Routes
 
 - `/` landing page
+- `/download` redirect to the latest macOS release download
 - `/success` checkout success page
 - `/cancel` checkout cancellation page
 - `POST /api/checkout` create Stripe checkout session
