@@ -252,10 +252,7 @@ function App() {
 
   if (onboardingStep === "accessibility") {
     return (
-      <AccessibilityOnboarding
-        onComplete={handleAccessibilityComplete}
-        showScreenRecordingGuidance={platform() === "macos"}
-      />
+      <AccessibilityOnboarding onComplete={handleAccessibilityComplete} />
     );
   }
 
