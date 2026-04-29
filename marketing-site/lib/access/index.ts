@@ -23,6 +23,7 @@ export {
   fetchAuthenticatedUser,
   fetchTrialClaimByHash,
   fetchUsageEventsSince,
+  fetchUserUsageEventsSince,
   insertPendingCheckoutSession,
   insertUsageEvent,
   isAnonymousTrialExpired,
@@ -36,6 +37,7 @@ export {
   upsertAnonymousTrialHeartbeat,
   upsertEntitlementState,
   withAnonymousTrialUsageLock,
+  withUserUsageLock,
 } from "./postgres";
 export {
   claimConversionStatuses,

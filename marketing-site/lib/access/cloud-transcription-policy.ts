@@ -1,5 +1,11 @@
 import { accessAllowsCloudSource } from "./premium-features";
-import { trialUsageAllowsRequest } from "./usage";
+import {
+  proBurstUsageAllowsRequest,
+  proDailyUsageAllowsRequest,
+  readProUsageLimits,
+  trialUsageAllowsRequest,
+  type ProUsageLimits,
+} from "./usage";
 import type { AccessState, TrialState, UsageEventRow } from "./types";
 
 type CloudTranscriptionPreflightParams = {
@@ -7,6 +13,9 @@ type CloudTranscriptionPreflightParams = {
   trialState: TrialState;
   source: string | null;
   usageEvents: UsageEventRow[];
+  proDailyUsageEvents?: UsageEventRow[];
+  proBurstUsageEvents?: UsageEventRow[];
+  proUsageLimits?: ProUsageLimits;
   audioSeconds: number;
 };
 
@@ -26,6 +35,9 @@ export function evaluateCloudTranscriptionPreflight({
   trialState,
   source,
   usageEvents,
+  proDailyUsageEvents = [],
+  proBurstUsageEvents = [],
+  proUsageLimits = readProUsageLimits(),
   audioSeconds,
 }: CloudTranscriptionPreflightParams): CloudTranscriptionPreflightResult {
   if (!accessAllowsCloudSource(accessState, source, trialState)) {
@@ -37,6 +49,35 @@ export function evaluateCloudTranscriptionPreflight({
   }
 
   if (accessState === "subscribed") {
+    const burstDecision = proBurstUsageAllowsRequest(
+      proBurstUsageEvents,
+      proUsageLimits,
+    );
+    if (!burstDecision.allowed) {
+      return {
+        allowed: false,
+        status: 403,
+        error:
+          "Temporary Pro usage limit reached. Contact support if this is legitimate heavy use.",
+        reason: burstDecision.reason,
+      };
+    }
+
+    const dailyDecision = proDailyUsageAllowsRequest(
+      proDailyUsageEvents,
+      audioSeconds,
+      proUsageLimits,
+    );
+    if (!dailyDecision.allowed) {
+      return {
+        allowed: false,
+        status: 403,
+        error:
+          "Daily Pro usage limit reached. Contact support if this is legitimate heavy use.",
+        reason: dailyDecision.reason,
+      };
+    }
+
     return { allowed: true };
   }
 

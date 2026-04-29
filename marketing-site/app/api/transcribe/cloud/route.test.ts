@@ -1,6 +1,25 @@
 import { beforeEach, describe, expect, mock, test } from "bun:test";
 
-const trial = {
+type MockTrial = {
+  id: string;
+  install_id: string;
+  device_fingerprint_hash: string;
+  user_id: string | null;
+  status: string;
+  trial_started_at: string;
+  trial_ends_at: string;
+  last_seen_at: string;
+  created_at: string;
+  updated_at: string;
+};
+
+type MockAccessDecision = {
+  accessState: "blocked" | "trialing" | "subscribed";
+  trialState: "new" | "trialing" | "expired" | "linked";
+  entitlementState: "inactive" | "active" | "past_due" | "canceled" | "expired";
+};
+
+const trial: MockTrial = {
   id: "trial_123",
   install_id: "install_123",
   device_fingerprint_hash: "device_123",
@@ -13,19 +32,36 @@ const trial = {
   updated_at: new Date().toISOString(),
 };
 
+let currentTrial: MockTrial = trial;
+let currentAccessDecision: MockAccessDecision = {
+  accessState: "trialing",
+  trialState: "trialing",
+  entitlementState: "inactive",
+};
 const usageEventCalls: Array<Record<string, unknown>> = [];
 const callOrder: string[] = [];
 let transcribeShouldFail = false;
 const lockedExecutor = { query: async () => ({ rows: [], rowCount: 0 }) };
 
 mock.module("@/lib/access", () => ({
-  fetchAnonymousTrialById: async () => trial,
+  fetchAnonymousTrialById: async () => currentTrial,
   fetchEntitlementByUserId: async () => null,
   fetchUsageEventsSince: async (_params: unknown, executor?: unknown) => {
     callOrder.push(
       executor === lockedExecutor ? "fetch_usage_locked" : "fetch_usage_pool",
     );
     return [];
+  },
+  fetchUserUsageEventsSince: async (
+    params: { since?: string },
+    executor?: unknown,
+  ) => {
+    callOrder.push(
+      executor === lockedExecutor
+        ? "fetch_user_usage_locked"
+        : "fetch_user_usage_pool",
+    );
+    return params.since ? [] : [];
   },
   insertUsageEvent: async (
     row: Record<string, unknown>,
@@ -45,20 +81,16 @@ mock.module("@/lib/access", () => ({
     callOrder.push(
       executor === lockedExecutor ? "patch_trial_locked" : "patch_trial_pool",
     );
-    return trial;
+    return currentTrial;
   },
   readInstallTokenFromRequest: () => "install-token",
-  refreshAnonymousTrialState: async () => trial,
-  resolveAccessDecision: () => ({
-    accessState: "trialing",
-    trialState: "trialing",
-    entitlementState: "inactive",
-  }),
+  refreshAnonymousTrialState: async () => currentTrial,
+  resolveAccessDecision: () => currentAccessDecision,
   verifyInstallToken: () => ({
     version: 1,
-    anonymous_trial_id: trial.id,
-    install_id: trial.install_id,
-    device_fingerprint_hash: trial.device_fingerprint_hash,
+    anonymous_trial_id: currentTrial.id,
+    install_id: currentTrial.install_id,
+    device_fingerprint_hash: currentTrial.device_fingerprint_hash,
     issued_at: new Date().toISOString(),
   }),
   withAnonymousTrialUsageLock: async (
@@ -66,6 +98,13 @@ mock.module("@/lib/access", () => ({
     callback: (executor: typeof lockedExecutor) => Promise<Response>,
   ) => {
     callOrder.push(`lock:${anonymousTrialId}`);
+    return callback(lockedExecutor);
+  },
+  withUserUsageLock: async (
+    userId: string,
+    callback: (executor: typeof lockedExecutor) => Promise<Response>,
+  ) => {
+    callOrder.push(`user_lock:${userId}`);
     return callback(lockedExecutor);
   },
 }));
@@ -103,6 +142,12 @@ mock.module("@/lib/groq/timings", () => ({
 const { POST } = await import("./route");
 
 beforeEach(() => {
+  currentTrial = trial;
+  currentAccessDecision = {
+    accessState: "trialing",
+    trialState: "trialing",
+    entitlementState: "inactive",
+  };
   usageEventCalls.length = 0;
   callOrder.length = 0;
   transcribeShouldFail = false;
@@ -175,6 +220,39 @@ describe("/api/transcribe/cloud usage accounting", () => {
       {
         anonymous_trial_id: trial.id,
         user_id: null,
+        source: "cloud_default",
+        audio_seconds: 12,
+      },
+    ]);
+  });
+
+  test("serializes subscribed usage checks by user", async () => {
+    currentTrial = {
+      ...trial,
+      user_id: "user_123",
+      status: "linked",
+    };
+    currentAccessDecision = {
+      accessState: "subscribed",
+      trialState: "linked",
+      entitlementState: "active",
+    };
+
+    const response = await POST(buildRequest());
+
+    expect(response.status).toBe(200);
+    expect(callOrder).toEqual([
+      "user_lock:user_123",
+      "fetch_user_usage_locked",
+      "fetch_user_usage_locked",
+      "patch_trial_locked",
+      "transcribe",
+      "insert_usage_locked",
+    ]);
+    expect(usageEventCalls).toEqual([
+      {
+        anonymous_trial_id: trial.id,
+        user_id: "user_123",
         source: "cloud_default",
         audio_seconds: 12,
       },

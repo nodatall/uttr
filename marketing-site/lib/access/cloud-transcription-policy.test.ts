@@ -1,6 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { evaluateCloudTranscriptionPreflight } from "./cloud-transcription-policy";
 import {
+  PRO_USAGE_BURST_REQUEST_LIMIT_DEFAULT,
+  PRO_USAGE_DAILY_AUDIO_SECONDS_LIMIT_DEFAULT,
   TRIAL_USAGE_AUDIO_SECONDS_LIMIT,
   TRIAL_USAGE_REQUEST_LIMIT,
 } from "./usage";
@@ -64,5 +66,46 @@ describe("cloud transcription pre-provider policy", () => {
         audioSeconds: TRIAL_USAGE_AUDIO_SECONDS_LIMIT,
       }),
     ).toEqual({ allowed: true });
+  });
+
+  test("blocks subscribed access when the Pro burst cap is exhausted", () => {
+    const proBurstUsageEvents = Array.from(
+      { length: PRO_USAGE_BURST_REQUEST_LIMIT_DEFAULT },
+      () => usage(1),
+    );
+
+    expect(
+      evaluateCloudTranscriptionPreflight({
+        accessState: "subscribed",
+        trialState: "linked",
+        source: "file_transcription",
+        usageEvents: [],
+        proBurstUsageEvents,
+        audioSeconds: 1,
+      }),
+    ).toMatchObject({
+      allowed: false,
+      status: 403,
+      reason: "request_limit",
+    });
+  });
+
+  test("blocks subscribed access when the Pro daily audio cap is exhausted", () => {
+    expect(
+      evaluateCloudTranscriptionPreflight({
+        accessState: "subscribed",
+        trialState: "linked",
+        source: "file_transcription",
+        usageEvents: [],
+        proDailyUsageEvents: [
+          usage(PRO_USAGE_DAILY_AUDIO_SECONDS_LIMIT_DEFAULT),
+        ],
+        audioSeconds: 1,
+      }),
+    ).toMatchObject({
+      allowed: false,
+      status: 403,
+      reason: "audio_seconds_limit",
+    });
   });
 });

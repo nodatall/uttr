@@ -53,6 +53,10 @@ The site expects these runtime variables:
 - `DATABASE_POOL_MAX` - optional Postgres pool size; defaults to `5`.
 - `GROQ_API_KEY` - server-held Groq key for default cloud transcription proxying.
 - `GROQ_TRANSCRIPTION_MODEL_DEFAULT` - default Groq transcription model name.
+- `UTTR_PRO_DAILY_AUDIO_SECONDS_LIMIT` - optional Pro rolling 24-hour audio cap in seconds; defaults to `18000` (5 hours).
+- `UTTR_PRO_DAILY_REQUEST_LIMIT` - optional Pro rolling 24-hour transcription request cap; defaults to `500`.
+- `UTTR_PRO_BURST_REQUEST_LIMIT` - optional Pro burst transcription request cap; defaults to `60`.
+- `UTTR_PRO_BURST_WINDOW_SECONDS` - optional Pro burst window in seconds; defaults to `600` (10 minutes).
 - `UTTR_INSTALL_TOKEN_SECRET` - signing secret for install tokens.
 - `UTTR_CLAIM_TOKEN_SECRET` - signing secret for claim tokens.
 - `UTTR_SESSION_SECRET` - signing secret for account sessions.
@@ -60,12 +64,12 @@ The site expects these runtime variables:
 - `EMAIL_FROM` - optional sender identity for transactional mail.
 - `EMAIL_SUPPORT` - optional support mailbox override for transactional mail.
 
-Copy `.env.example` to `.env.local` for development. Production should provide the same variables through Fly secrets and app configuration.
+Copy `.env.example` to `.env.local` for development. Production should provide the same variables through Railway service variables or shared variables.
 
-Apply database migrations with `psql` before running the purchase/account routes:
+Apply database migrations before running the purchase/account routes:
 
 ```bash
-psql "$DATABASE_URL" -f db/migrations/20260420000000_postgres_billing_access_schema.sql
+npm run db:migrate
 ```
 
 ## Stripe Setup

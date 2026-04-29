@@ -237,6 +237,23 @@ export async function fetchUsageEventsSince(
   );
 }
 
+export async function fetchUserUsageEventsSince(
+  params: {
+    userId: string;
+    since: string;
+  },
+  executor: DbExecutor = { query: dbQuery },
+) {
+  return queryRows<UsageEventRow>(
+    `select *
+       from public.usage_events
+      where user_id = $1
+        and created_at >= $2`,
+    [params.userId, params.since],
+    executor,
+  );
+}
+
 export async function withAnonymousTrialUsageLock<T>(
   anonymousTrialId: string,
   callback: (executor: DbExecutor) => Promise<T>,
@@ -244,6 +261,19 @@ export async function withAnonymousTrialUsageLock<T>(
   return dbTransaction(async (client) => {
     await client.query("select pg_advisory_xact_lock(hashtext($1))", [
       `anonymous_trial_usage:${anonymousTrialId}`,
+    ]);
+
+    return callback(client);
+  });
+}
+
+export async function withUserUsageLock<T>(
+  userId: string,
+  callback: (executor: DbExecutor) => Promise<T>,
+) {
+  return dbTransaction(async (client) => {
+    await client.query("select pg_advisory_xact_lock(hashtext($1))", [
+      `user_usage:${userId}`,
     ]);
 
     return callback(client);

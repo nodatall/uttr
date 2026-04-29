@@ -12,6 +12,7 @@ import {
   fetchAnonymousTrialById,
   fetchEntitlementByUserId,
   fetchUsageEventsSince,
+  fetchUserUsageEventsSince,
   insertUsageEvent,
   patchAnonymousTrialById,
   readInstallTokenFromRequest,
@@ -21,8 +22,10 @@ import {
   type UsageEventRow,
   verifyInstallToken,
   withAnonymousTrialUsageLock,
+  withUserUsageLock,
 } from "@/lib/access";
 import { evaluateCloudTranscriptionPreflight } from "@/lib/access/cloud-transcription-policy";
+import { readProUsageLimits } from "@/lib/access/usage";
 import {
   checkRateLimit,
   rateLimitKeyFromRequest,
@@ -199,6 +202,7 @@ export async function POST(request: Request) {
     const chunkIndex = parseChunkNumberField(formData.get("chunk_index"));
     const chunkCount = parseChunkNumberField(formData.get("chunk_count"));
     const audioSeconds = estimateAudioSecondsFromWavBytes(fileEntry.size);
+    const proUsageLimits = readProUsageLimits();
 
     const requestedModel = parseTextField(formData.get("model"));
     const groqTraceId = summarizeGroqPayload(
@@ -208,6 +212,8 @@ export async function POST(request: Request) {
 
     const runTranscription = async (executor?: DbExecutor) => {
       let usageEvents: UsageEventRow[] = [];
+      let proDailyUsageEvents: UsageEventRow[] = [];
+      let proBurstUsageEvents: UsageEventRow[] = [];
       if (accessDecision.accessState !== "subscribed") {
         const usageWindowStart =
           refreshedTrial.trial_started_at ||
@@ -219,6 +225,29 @@ export async function POST(request: Request) {
           },
           executor,
         );
+      } else if (refreshedTrial.user_id) {
+        const nowMs = Date.now();
+        const dailyUsageWindowStart = new Date(
+          nowMs - 24 * 60 * 60 * 1000,
+        ).toISOString();
+        const burstUsageWindowStart = new Date(
+          nowMs - proUsageLimits.burstWindowSeconds * 1000,
+        ).toISOString();
+
+        proDailyUsageEvents = await fetchUserUsageEventsSince(
+          {
+            userId: refreshedTrial.user_id,
+            since: dailyUsageWindowStart,
+          },
+          executor,
+        );
+        proBurstUsageEvents = await fetchUserUsageEventsSince(
+          {
+            userId: refreshedTrial.user_id,
+            since: burstUsageWindowStart,
+          },
+          executor,
+        );
       }
 
       const preflightDecision = evaluateCloudTranscriptionPreflight({
@@ -226,6 +255,9 @@ export async function POST(request: Request) {
         trialState: accessDecision.trialState,
         source,
         usageEvents,
+        proDailyUsageEvents,
+        proBurstUsageEvents,
+        proUsageLimits,
         audioSeconds,
       });
       if (!preflightDecision.allowed) {
@@ -340,7 +372,11 @@ export async function POST(request: Request) {
     };
 
     if (accessDecision.accessState === "subscribed") {
-      return await runTranscription();
+      if (!refreshedTrial.user_id) {
+        throw new Error("Subscribed access is missing a linked user.");
+      }
+
+      return await withUserUsageLock(refreshedTrial.user_id, runTranscription);
     }
 
     return await withAnonymousTrialUsageLock(
