@@ -80,8 +80,7 @@ export const SECTIONS_CONFIG = {
     labelKey: "sidebar.debug",
     icon: FlaskConical,
     component: DebugSettings,
-    enabled: (settings) =>
-      import.meta.env.DEV && (settings?.debug_mode ?? false),
+    enabled: (settings) => settings?.debug_mode ?? false,
   },
 } as const satisfies Record<string, SectionConfig>;
 
