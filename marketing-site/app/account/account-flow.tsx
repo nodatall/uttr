@@ -147,12 +147,9 @@ export function AccountFlow() {
   };
 
   return (
-    <div className="mx-auto mt-9 w-full max-w-xl text-left">
+    <div className="mx-auto mt-9 min-h-[17rem] w-full max-w-xl text-left">
       {!hasCheckedSession ? (
-        <div className="space-y-4 text-center text-sm text-cosmic-200">
-          <p>Checking your account...</p>
-          <div className="mx-auto h-10 w-44 animate-pulse rounded-full bg-cosmic-100/12" />
-        </div>
+        <div aria-busy="true" className="h-[17rem]" />
       ) : signedInEmail ? (
         <div className="space-y-4 text-sm text-cosmic-200">
           <button
