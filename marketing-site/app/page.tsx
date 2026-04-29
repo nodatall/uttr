@@ -46,9 +46,10 @@ const plans = [
   {
     name: "Free",
     price: "$0",
-    description: "For trying Uttr and lightweight dictation.",
+    description: "Includes a two-day trial for trying Uttr and lightweight dictation.",
     cta: "Download for macOS",
     features: [
+      "Two-day trial included",
       "Desktop speech-to-text",
       "Quick shortcut capture",
       "Transcript history",
