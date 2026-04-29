@@ -15,6 +15,7 @@ Standalone Next.js marketing + subscription site for Uttr.
 
 - Build the site as a standalone Next.js server with `output: "standalone"`.
 - Ship it with the included `Dockerfile`.
+- Railway reads `railway.json` and runs `npm run db:migrate` as a pre-deploy command before starting the app.
 - The container runs the emitted `server.js` entrypoint.
 - Keep the site and backend routes in this one deployment; do not split the proxy into a second service.
 
