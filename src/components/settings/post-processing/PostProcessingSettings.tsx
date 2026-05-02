@@ -27,7 +27,7 @@ const PostProcessingSettingsApiComponent: React.FC = () => {
         layout="stacked"
         grouped={true}
       >
-        <div className="flex items-center gap-2">
+        <div className="flex w-full min-w-0 items-center gap-2">
           <ModelSelect
             value={state.model}
             options={state.modelOptions}
@@ -41,7 +41,7 @@ const PostProcessingSettingsApiComponent: React.FC = () => {
             onSelect={state.handleModelSelect}
             onCreate={state.handleModelCreate}
             onBlur={() => {}}
-            className="flex-1 min-w-[380px]"
+            className="min-w-0 flex-1"
           />
           <ResetButton
             onClick={state.handleRefreshModels}
