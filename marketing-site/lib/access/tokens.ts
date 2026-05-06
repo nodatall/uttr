@@ -1,6 +1,13 @@
-import { createHash, createHmac, timingSafeEqual } from "node:crypto";
+import {
+  createHash,
+  createHmac,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
 import { readAccessTokenConfig } from "@/lib/env";
 import type { ClaimTokenPayload, InstallTokenPayload } from "./types";
+
+export const INSTALL_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 function encodeBase64Url(value: string | Buffer) {
   return Buffer.from(value).toString("base64url");
@@ -21,8 +28,31 @@ function isInstallTokenPayload(value: unknown): value is InstallTokenPayload {
     typeof candidate.anonymous_trial_id === "string" &&
     typeof candidate.install_id === "string" &&
     typeof candidate.device_fingerprint_hash === "string" &&
-    typeof candidate.issued_at === "string"
+    typeof candidate.issued_at === "string" &&
+    typeof candidate.expires_at === "string" &&
+    typeof candidate.jti === "string"
   );
+}
+
+export function buildInstallTokenPayload(params: {
+  anonymousTrialId: string;
+  installId: string;
+  deviceFingerprintHash: string;
+  issuedAt?: Date;
+}): InstallTokenPayload {
+  const issuedAt = params.issuedAt ?? new Date();
+
+  return {
+    version: 1,
+    anonymous_trial_id: params.anonymousTrialId,
+    install_id: params.installId,
+    device_fingerprint_hash: params.deviceFingerprintHash,
+    issued_at: issuedAt.toISOString(),
+    expires_at: new Date(
+      issuedAt.getTime() + INSTALL_TOKEN_TTL_MS,
+    ).toISOString(),
+    jti: randomUUID(),
+  };
 }
 
 function isClaimTokenPayload(value: unknown): value is ClaimTokenPayload {
@@ -51,7 +81,7 @@ export function signInstallToken(payload: InstallTokenPayload) {
   return `${encodedPayload}.${signature}`;
 }
 
-export function verifyInstallToken(token: string) {
+export function verifyInstallToken(token: string, now = new Date()) {
   const { installTokenSecret } = readAccessTokenConfig();
   const [encodedPayload, encodedSignature] = token.split(".");
 
@@ -76,6 +106,10 @@ export function verifyInstallToken(token: string) {
   const parsedPayload = JSON.parse(decodeBase64Url(encodedPayload)) as unknown;
   if (!isInstallTokenPayload(parsedPayload)) {
     throw new Error("Invalid install token payload.");
+  }
+
+  if (new Date(parsedPayload.expires_at).getTime() <= now.getTime()) {
+    throw new Error("Install token expired.");
   }
 
   return parsedPayload;

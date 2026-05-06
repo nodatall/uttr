@@ -104,10 +104,9 @@ fn set_mute(mute: bool) {
 }
 
 const WHISPER_SAMPLE_RATE: usize = 16000;
-// Keep the on-demand microphone warm long enough to cover longer natural pauses
-// between dictation bursts. Recorder-side pre-roll only helps while the stream
-// is already open, so a warmer stream materially improves first-word capture.
-const ON_DEMAND_IDLE_KEEPALIVE: Duration = Duration::from_secs(30 * 60);
+// Keep the stream briefly warm after real use without leaving the mic open
+// through long idle periods.
+const ON_DEMAND_IDLE_KEEPALIVE: Duration = Duration::from_secs(5 * 60);
 const FRONTMOST_APP_PREWARM_COOLDOWN: Duration = Duration::from_secs(5);
 
 /* ──────────────────────────────────────────────────────────────── */
@@ -202,14 +201,6 @@ impl AudioRecordingManager {
         // Always-on?  Open immediately.
         if matches!(mode, MicrophoneMode::AlwaysOn) {
             manager.start_microphone_stream()?;
-        } else {
-            // Best-effort prewarm for on-demand mode to reduce first-utterance latency.
-            // If this fails (e.g. no device yet), we retry on actual recording start.
-            let manager_clone = manager.clone();
-            tauri::async_runtime::spawn(async move {
-                tokio::time::sleep(Duration::from_secs(2)).await;
-                manager_clone.prewarm_for_quick_start("startup");
-            });
         }
 
         Ok(manager)

@@ -10,7 +10,7 @@ export type GroqTranscriptionEndpoint =
   | "audio/translations";
 
 export interface GroqTranscriptionInput {
-  audioBytes: ArrayBuffer | Uint8Array;
+  audioFile: Blob | File;
   fileName?: string;
   mimeType?: string;
   language?: string | null;
@@ -76,10 +76,82 @@ export function summarizeGroqPayload(fileName: string, model: string) {
     .slice(0, 12);
 }
 
+function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function parseRetryAfterMs(value: string | null) {
+  if (!value) {
+    return null;
+  }
+
+  const seconds = Number.parseInt(value, 10);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return seconds * 1000;
+  }
+
+  const retryAt = new Date(value).getTime();
+  if (Number.isFinite(retryAt)) {
+    return Math.max(0, retryAt - Date.now());
+  }
+
+  return null;
+}
+
+function isRetryableGroqStatus(status: number) {
+  return status === 429 || status === 408 || status >= 500;
+}
+
+async function fetchGroqWithRetry(
+  url: string,
+  buildInit: () => RequestInit,
+  maxAttempts = 3,
+) {
+  let lastError: unknown = null;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 90_000);
+
+    try {
+      const response = await fetch(url, {
+        ...buildInit(),
+        signal: controller.signal,
+      });
+
+      if (
+        response.ok ||
+        !isRetryableGroqStatus(response.status) ||
+        attempt === maxAttempts
+      ) {
+        return response;
+      }
+
+      const retryAfterMs = parseRetryAfterMs(
+        response.headers.get("retry-after"),
+      );
+      await response.arrayBuffer().catch(() => null);
+      await sleep(Math.min(retryAfterMs ?? 250 * 2 ** (attempt - 1), 2_000));
+    } catch (error) {
+      lastError = error;
+      if (attempt === maxAttempts) {
+        throw error;
+      }
+
+      await sleep(250 * 2 ** (attempt - 1));
+    } finally {
+      clearTimeout(timeout);
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error("Groq request failed before receiving a response.");
+}
+
 export async function transcribeWithGroq({
-  audioBytes,
+  audioFile,
   fileName = "uttr.wav",
-  mimeType = "audio/wav",
   language,
   model,
   translateToEnglish,
@@ -90,30 +162,29 @@ export async function transcribeWithGroq({
     translateToEnglish,
   );
   const endpoint = resolveGroqEndpoint(translateToEnglish);
-  const body = new FormData();
-
-  body.set("model", resolvedModel);
-  body.set("response_format", "json");
-
   const normalizedLanguage = normalizeGroqLanguage(language);
-  if (normalizedLanguage) {
-    body.set("language", normalizedLanguage);
-  }
 
-  const blobBytes =
-    audioBytes instanceof Uint8Array
-      ? Uint8Array.from(audioBytes)
-      : new Uint8Array(audioBytes);
-  const blob = new Blob([blobBytes], { type: mimeType });
-  body.set("file", blob, fileName);
+  const response = await fetchGroqWithRetry(
+    `${GROQ_BASE_URL}/${endpoint}`,
+    () => {
+      const body = new FormData();
 
-  const response = await fetch(`${GROQ_BASE_URL}/${endpoint}`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${groqApiKey}`,
+      body.set("model", resolvedModel);
+      body.set("response_format", "json");
+      if (normalizedLanguage) {
+        body.set("language", normalizedLanguage);
+      }
+      body.set("file", audioFile, fileName);
+
+      return {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${groqApiKey}`,
+        },
+        body,
+      };
     },
-    body,
-  });
+  );
 
   if (!response.ok) {
     const responseBody = await response.text().catch(() => "");

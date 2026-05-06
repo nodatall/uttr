@@ -38,6 +38,9 @@ export const dynamic = "force-dynamic";
 
 const TRIAL_DURATION_MS = 48 * 60 * 60 * 1000;
 const CLOUD_TRANSCRIPTION_REQUEST_BODY_LIMIT_BYTES = 110 * 1024 * 1024;
+const CLOUD_PRINCIPAL_RATE_LIMIT = 120;
+const CLOUD_PRINCIPAL_RATE_LIMIT_WINDOW_MS = 60_000;
+const WAV_HEADER_BYTES = 44;
 
 function parseBooleanField(value: FormDataEntryValue | null) {
   if (typeof value !== "string") {
@@ -68,6 +71,56 @@ function parseChunkNumberField(value: FormDataEntryValue | null) {
 
 function isFileEntry(value: FormDataEntryValue | null): value is File {
   return typeof File !== "undefined" && value instanceof File;
+}
+
+function principalRateLimitKey(params: {
+  anonymousTrialId: string;
+  userId: string | null;
+}) {
+  return params.userId
+    ? `cloud-transcribe-principal:user:${params.userId}`
+    : `cloud-transcribe-principal:trial:${params.anonymousTrialId}`;
+}
+
+function isSupportedWavMimeType(mimeType: string) {
+  const normalized = mimeType.trim().toLowerCase();
+  return normalized === "audio/wav" || normalized === "audio/x-wav";
+}
+
+async function validateWavUpload(file: File) {
+  if (!isSupportedWavMimeType(file.type || "audio/wav")) {
+    return "Audio upload must be a WAV file.";
+  }
+
+  if (file.size < WAV_HEADER_BYTES) {
+    return "Audio upload is missing a valid WAV header.";
+  }
+
+  const header = new Uint8Array(
+    await file.slice(0, WAV_HEADER_BYTES).arrayBuffer(),
+  );
+  const riff = String.fromCharCode(...header.slice(0, 4));
+  const wave = String.fromCharCode(...header.slice(8, 12));
+  const format = String.fromCharCode(...header.slice(12, 16));
+  const audioFormat = header[20] | (header[21] << 8);
+  const channels = header[22] | (header[23] << 8);
+  const sampleRate =
+    header[24] | (header[25] << 8) | (header[26] << 16) | (header[27] << 24);
+  const bitsPerSample = header[34] | (header[35] << 8);
+
+  if (
+    riff !== "RIFF" ||
+    wave !== "WAVE" ||
+    format !== "fmt " ||
+    audioFormat !== 1 ||
+    channels !== 1 ||
+    sampleRate !== 16_000 ||
+    bitsPerSample !== 16
+  ) {
+    return "Audio upload must be 16 kHz mono 16-bit PCM WAV.";
+  }
+
+  return null;
 }
 
 function respondToRateLimit(
@@ -161,6 +214,21 @@ export async function POST(request: Request) {
       : null;
     const accessDecision = resolveAccessDecision(refreshedTrial, entitlement);
 
+    const principalRateLimit = await checkRateLimit({
+      key: principalRateLimitKey({
+        anonymousTrialId: refreshedTrial.id,
+        userId: refreshedTrial.user_id,
+      }),
+      limit: CLOUD_PRINCIPAL_RATE_LIMIT,
+      windowMs: CLOUD_PRINCIPAL_RATE_LIMIT_WINDOW_MS,
+    });
+    if (!principalRateLimit.allowed) {
+      return respondToRateLimit(
+        principalRateLimit,
+        "Too many transcription requests for this install.",
+      );
+    }
+
     if (
       accessDecision.accessState === "blocked" &&
       refreshedTrial.status !== "new"
@@ -193,6 +261,11 @@ export async function POST(request: Request) {
         { error: "Audio upload exceeds the 100 MB limit." },
         { status: 413 },
       );
+    }
+
+    const wavUploadError = await validateWavUpload(fileEntry);
+    if (wavUploadError) {
+      return NextResponse.json({ error: wavUploadError }, { status: 400 });
     }
 
     const translateToEnglish = parseBooleanField(
@@ -311,10 +384,9 @@ export async function POST(request: Request) {
         persistedTrial = touchedTrial;
       }
 
-      const fileBytes = Buffer.from(await fileEntry.arrayBuffer());
       const groqStartMs = performance.now();
       const groqResult = await transcribeWithGroq({
-        audioBytes: fileBytes,
+        audioFile: fileEntry,
         fileName: fileEntry.name || "uttr.wav",
         mimeType: fileEntry.type || "audio/wav",
         language: parseTextField(formData.get("language")),

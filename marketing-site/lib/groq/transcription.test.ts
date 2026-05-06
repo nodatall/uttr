@@ -6,10 +6,12 @@ import {
   resolveGroqEndpoint,
   resolveGroqTranscriptionModel,
   summarizeGroqPayload,
+  transcribeWithGroq,
 } from "./transcription";
 
 const originalGroqModelDefault = process.env.GROQ_TRANSCRIPTION_MODEL_DEFAULT;
 const originalGroqApiKey = process.env.GROQ_API_KEY;
+const originalFetch = globalThis.fetch;
 
 beforeEach(() => {
   process.env.GROQ_TRANSCRIPTION_MODEL_DEFAULT = "whisper-large-v3";
@@ -19,6 +21,7 @@ beforeEach(() => {
 afterEach(() => {
   process.env.GROQ_TRANSCRIPTION_MODEL_DEFAULT = originalGroqModelDefault;
   process.env.GROQ_API_KEY = originalGroqApiKey;
+  globalThis.fetch = originalFetch;
 });
 
 describe("Groq transcription helpers", () => {
@@ -47,5 +50,27 @@ describe("Groq transcription helpers", () => {
     expect(resolveGroqEndpoint(true)).toBe("audio/translations");
     expect(resolveGroqEndpoint(false)).toBe("audio/transcriptions");
     expect(summarizeGroqPayload("uttr.wav", "model-a")).toHaveLength(12);
+  });
+
+  test("retries transient Groq provider failures", async () => {
+    let attempts = 0;
+    globalThis.fetch = (async () => {
+      attempts += 1;
+      if (attempts === 1) {
+        return new Response("busy", { status: 503, statusText: "Unavailable" });
+      }
+
+      return Response.json({ text: "retry success" });
+    }) as typeof fetch;
+
+    const result = await transcribeWithGroq({
+      audioFile: new File([new Uint8Array([1, 2, 3])], "uttr.wav", {
+        type: "audio/wav",
+      }),
+      translateToEnglish: false,
+    });
+
+    expect(result.text).toBe("retry success");
+    expect(attempts).toBe(2);
   });
 });

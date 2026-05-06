@@ -48,6 +48,7 @@ export type {
   ClaimConversionStatus,
 } from "./claim-conversion";
 export {
+  buildInstallTokenPayload,
   hashClaimToken,
   signClaimToken,
   signInstallToken,

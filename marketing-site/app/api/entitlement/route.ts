@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 import type { InstallTokenPayload } from "@/lib/access";
 import {
+  buildInstallTokenPayload,
   fetchAnonymousTrialById,
   fetchEntitlementByUserId,
   readInstallTokenFromRequest,
   refreshAnonymousTrialState,
   resolveAccessDecision,
+  signInstallToken,
   verifyInstallToken,
 } from "@/lib/access";
 
@@ -55,11 +57,18 @@ export async function GET(request: Request) {
       ? await fetchEntitlementByUserId(refreshedTrial.user_id)
       : null;
     const accessDecision = resolveAccessDecision(refreshedTrial, entitlement);
+    const refreshedInstallTokenPayload = buildInstallTokenPayload({
+      anonymousTrialId: refreshedTrial.id,
+      installId: refreshedTrial.install_id,
+      deviceFingerprintHash: refreshedTrial.device_fingerprint_hash,
+    });
 
     return NextResponse.json({
       access_state: accessDecision.accessState,
       trial_state: accessDecision.trialState,
       entitlement_state: accessDecision.entitlementState,
+      install_token: signInstallToken(refreshedInstallTokenPayload),
+      install_token_expires_at: refreshedInstallTokenPayload.expires_at,
     });
   } catch (error) {
     console.error(

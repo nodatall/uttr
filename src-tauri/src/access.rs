@@ -3,7 +3,7 @@ use crate::settings::{
     ByokValidationState, EntitlementState, TrialState,
 };
 use once_cell::sync::Lazy;
-use reqwest::Client;
+use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 #[cfg(debug_assertions)]
@@ -69,6 +69,7 @@ struct EntitlementResponse {
     trial_state: TrialState,
     access_state: AccessState,
     entitlement_state: EntitlementState,
+    install_token: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -333,6 +334,12 @@ async fn refresh_entitlement_state_internal(
             format_backend_transport_error("refresh entitlement", &target_url, &error)
         })?;
 
+    if response.status() == StatusCode::UNAUTHORIZED {
+        settings.install_token.clear();
+        write_settings(app, settings);
+        return bootstrap_install_state_internal(app).await;
+    }
+
     if !response.status().is_success() {
         let status = response.status();
         let body = response
@@ -353,6 +360,9 @@ async fn refresh_entitlement_state_internal(
     settings.anonymous_trial_state = backend.trial_state;
     settings.access_state = backend.access_state;
     settings.entitlement_state = backend.entitlement_state;
+    if let Some(install_token) = backend.install_token {
+        settings.install_token = install_token;
+    }
     write_settings(app, settings);
 
     let refreshed_settings = get_settings(app);
@@ -385,6 +395,32 @@ async fn request_claim_token_internal(app: &AppHandle) -> Result<ClaimTokenResul
             format_backend_transport_error("request a claim token", &target_url, &error)
         })?;
 
+    if response.status() == StatusCode::UNAUTHORIZED {
+        settings.install_token.clear();
+        write_settings(app, settings);
+        bootstrap_install_state_internal(app).await?;
+        settings = get_settings(app);
+
+        let retry_response = BACKEND_HTTP_CLIENT
+            .post(&target_url)
+            .json(&InstallTokenRequest {
+                install_token: settings.install_token.trim(),
+            })
+            .send()
+            .await
+            .map_err(|error| {
+                format_backend_transport_error("request a claim token", &target_url, &error)
+            })?;
+
+        return parse_claim_token_response(retry_response).await;
+    }
+
+    parse_claim_token_response(response).await
+}
+
+async fn parse_claim_token_response(
+    response: reqwest::Response,
+) -> Result<ClaimTokenResult, String> {
     if !response.status().is_success() {
         let status = response.status();
         let body = response

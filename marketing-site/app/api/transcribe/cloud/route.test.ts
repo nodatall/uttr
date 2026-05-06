@@ -40,6 +40,7 @@ let currentAccessDecision: MockAccessDecision = {
 };
 const usageEventCalls: Array<Record<string, unknown>> = [];
 const callOrder: string[] = [];
+const transcribeInputs: Array<Record<string, unknown>> = [];
 let transcribeShouldFail = false;
 const lockedExecutor = { query: async () => ({ rows: [], rowCount: 0 }) };
 
@@ -92,6 +93,8 @@ mock.module("@/lib/access", () => ({
     install_id: currentTrial.install_id,
     device_fingerprint_hash: currentTrial.device_fingerprint_hash,
     issued_at: new Date().toISOString(),
+    expires_at: new Date(Date.now() + 60_000).toISOString(),
+    jti: "install_token_123",
   }),
   withAnonymousTrialUsageLock: async (
     anonymousTrialId: string,
@@ -117,8 +120,9 @@ mock.module("@/lib/groq", () => ({
   estimateAudioSecondsFromWavBytes: () => 12,
   isGroqUploadWithinLimit: () => true,
   summarizeGroqPayload: () => "trace_123",
-  transcribeWithGroq: async () => {
+  transcribeWithGroq: async (input: Record<string, unknown>) => {
     callOrder.push("transcribe");
+    transcribeInputs.push(input);
     if (transcribeShouldFail) {
       throw new Error("provider failed");
     }
@@ -150,17 +154,36 @@ beforeEach(() => {
   };
   usageEventCalls.length = 0;
   callOrder.length = 0;
+  transcribeInputs.length = 0;
   transcribeShouldFail = false;
 });
 
-function buildRequest(fields: Record<string, string> = {}) {
+function buildPcmWavBytes() {
+  const bytes = new Uint8Array(48);
+  bytes.set([0x52, 0x49, 0x46, 0x46], 0);
+  bytes.set([40, 0, 0, 0], 4);
+  bytes.set([0x57, 0x41, 0x56, 0x45], 8);
+  bytes.set([0x66, 0x6d, 0x74, 0x20], 12);
+  bytes.set([16, 0, 0, 0], 16);
+  bytes.set([1, 0], 20);
+  bytes.set([1, 0], 22);
+  bytes.set([0x80, 0x3e, 0, 0], 24);
+  bytes.set([0, 0x7d, 0, 0], 28);
+  bytes.set([2, 0], 32);
+  bytes.set([16, 0], 34);
+  bytes.set([0x64, 0x61, 0x74, 0x61], 36);
+  bytes.set([4, 0, 0, 0], 40);
+  return bytes;
+}
+
+function buildRequest(
+  fields: Record<string, string> = {},
+  file = new File([buildPcmWavBytes()], "sample.wav", {
+    type: "audio/wav",
+  }),
+) {
   const formData = new FormData();
-  formData.set(
-    "file",
-    new File([new Uint8Array([1, 2, 3])], "sample.wav", {
-      type: "audio/wav",
-    }),
-  );
+  formData.set("file", file);
   for (const [key, value] of Object.entries(fields)) {
     formData.set(key, value);
   }
@@ -193,6 +216,7 @@ describe("/api/transcribe/cloud usage accounting", () => {
         audio_seconds: 12,
       },
     ]);
+    expect(transcribeInputs[0]?.audioFile).toBeInstanceOf(File);
   });
 
   test("does not spend trial usage when provider transcription fails", async () => {
@@ -280,5 +304,24 @@ describe("/api/transcribe/cloud usage accounting", () => {
       error: "Audio upload exceeds the 100 MB limit.",
     });
     expect(callOrder).toEqual([]);
+  });
+
+  test("rejects non-WAV uploads before calling the provider", async () => {
+    const response = await POST(
+      buildRequest(
+        {},
+        new File([new Uint8Array([1, 2, 3])], "sample.mp3", {
+          type: "audio/mpeg",
+        }),
+      ),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Audio upload must be a WAV file.",
+    });
+    expect(callOrder).toEqual([]);
+    expect(transcribeInputs).toHaveLength(0);
+    expect(usageEventCalls).toHaveLength(0);
   });
 });

@@ -289,7 +289,10 @@ async fn post_process_transcription(
     );
 
     // Hardcoded user message template — injects the transcript for the model to fill
-    let processed_prompt = format!("# Input\n{}\n\n# Output\n", transcription);
+    let processed_prompt = format!(
+        "# Task\nClean the transcript. Return only the final cleaned transcript inside <uttr_output>...</uttr_output>. Do not include analysis, chat roles, markdown fences, or explanations.\n\n# Input\n{}\n\n# Output format\nWrap only the cleaned transcript like this:\n<uttr_output>\n...\n</uttr_output>",
+        transcription
+    );
     debug!("Processed prompt length: {} chars", processed_prompt.len());
 
     if provider.id == APPLE_INTELLIGENCE_PROVIDER_ID {
@@ -307,6 +310,7 @@ async fn post_process_transcription(
                         debug!("Apple Intelligence returned an empty response");
                         None
                     } else {
+                        let result = clean_post_process_response(&result);
                         debug!(
                             "Apple Intelligence post-processing succeeded. Output length: {} chars",
                             result.len()
@@ -358,6 +362,7 @@ async fn post_process_transcription(
                 .replace('\u{200C}', "") // Zero-Width Non-Joiner
                 .replace('\u{200D}', "") // Zero-Width Joiner
                 .replace('\u{FEFF}', ""); // Byte Order Mark / Zero-Width No-Break Space
+            let content = clean_post_process_response(&content);
             debug!(
                 "LLM post-processing succeeded for provider '{}'. Output length: {} chars",
                 provider.id,
@@ -378,6 +383,117 @@ async fn post_process_transcription(
             None
         }
     }
+}
+
+fn text_after_last_marker<'a>(content: &'a str, markers: &[&str]) -> Option<&'a str> {
+    let lower = content.to_ascii_lowercase();
+    markers
+        .iter()
+        .filter_map(|marker| {
+            lower
+                .rfind(marker)
+                .map(|index| (index, index + marker.len()))
+        })
+        .max_by_key(|(index, _)| *index)
+        .map(|(_, start)| &content[start..])
+}
+
+fn extract_tagged_output(content: &str, tag: &str) -> Option<String> {
+    let open = format!("<{}>", tag);
+    let close = format!("</{}>", tag);
+    let lower = content.to_ascii_lowercase();
+    let open_index = lower.rfind(&open)?;
+    let start = open_index + open.len();
+    let remainder = &content[start..];
+    let remainder_lower = &lower[start..];
+    let end = remainder_lower.find(&close).unwrap_or(remainder.len());
+    Some(remainder[..end].trim().to_string())
+}
+
+fn remove_tagged_block(mut content: String, tag: &str) -> String {
+    let open = format!("<{}>", tag);
+    let close = format!("</{}>", tag);
+
+    loop {
+        let lower = content.to_ascii_lowercase();
+        let Some(open_index) = lower.find(&open) else {
+            break;
+        };
+        let search_start = open_index + open.len();
+        if let Some(relative_close_index) = lower[search_start..].find(&close) {
+            let close_end = search_start + relative_close_index + close.len();
+            content.replace_range(open_index..close_end, "");
+        } else {
+            content.replace_range(open_index.., "");
+            break;
+        }
+    }
+
+    content
+}
+
+fn trim_chat_stop_tokens(content: &str) -> String {
+    let stop_tokens = ["<|end|>", "<|endoftext|>", "<|eot_id|>"];
+    let mut end = content.len();
+    for token in stop_tokens {
+        if let Some(index) = content.find(token) {
+            end = end.min(index);
+        }
+    }
+    content[..end].trim().to_string()
+}
+
+fn strip_wrapping_code_fence(content: &str) -> String {
+    let trimmed = content.trim();
+    if !trimmed.starts_with("```") || !trimmed.ends_with("```") {
+        return trimmed.to_string();
+    }
+
+    let mut lines = trimmed.lines();
+    let _opening = lines.next();
+    let mut body: Vec<&str> = lines.collect();
+    if body.last().map(|line| line.trim()) == Some("```") {
+        body.pop();
+    }
+    body.join("\n").trim().to_string()
+}
+
+fn clean_post_process_response(content: &str) -> String {
+    if let Some(output) = extract_tagged_output(content, "uttr_output") {
+        return strip_wrapping_code_fence(&trim_chat_stop_tokens(&output));
+    }
+
+    let mut cleaned = content.to_string();
+    if let Some(final_segment) = text_after_last_marker(
+        &cleaned,
+        &[
+            "<|channel|>final<|message|>",
+            "<|channel|>final\n<|message|>",
+            "<|final|>",
+            "\nfinal answer:",
+            "\nfinal:",
+            "\n# output\n",
+            "\noutput:",
+        ],
+    ) {
+        cleaned = final_segment.to_string();
+    } else {
+        let lower = cleaned.to_ascii_lowercase();
+        for prefix in ["final answer:", "final:", "# output\n", "output:"] {
+            if lower.starts_with(prefix) {
+                cleaned = cleaned[prefix.len()..].to_string();
+                break;
+            }
+        }
+    }
+
+    cleaned = remove_tagged_block(cleaned, "think");
+    cleaned = remove_tagged_block(cleaned, "analysis");
+    cleaned = trim_chat_stop_tokens(&cleaned);
+    cleaned = cleaned
+        .replace("<uttr_output>", "")
+        .replace("</uttr_output>", "");
+    strip_wrapping_code_fence(&cleaned)
 }
 
 async fn maybe_convert_chinese_variant(
@@ -1561,7 +1677,7 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
-        is_supported_post_process_model, select_preferred_groq_model,
+        clean_post_process_response, is_supported_post_process_model, select_preferred_groq_model,
         transcription_timeout_for_samples, transcription_watchdog_delay, ACTION_MAP,
         FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT,
     };
@@ -1646,5 +1762,26 @@ mod tests {
             "canopylabs/orpheus-v1-english"
         ));
         assert!(is_supported_post_process_model("openai/gpt-oss-20b"));
+    }
+
+    #[test]
+    fn post_process_response_prefers_uttr_output_tag() {
+        let response = "<think>cleaning notes</think><uttr_output>Hello, world.</uttr_output>";
+
+        assert_eq!(clean_post_process_response(response), "Hello, world.");
+    }
+
+    #[test]
+    fn post_process_response_extracts_final_chat_template_channel() {
+        let response = "<|start|>assistant<|channel|>analysis<|message|>Need clean text.<|end|><|start|>assistant<|channel|>final<|message|>Hello, world.<|end|>";
+
+        assert_eq!(clean_post_process_response(response), "Hello, world.");
+    }
+
+    #[test]
+    fn post_process_response_strips_think_blocks_and_final_label() {
+        let response = "<think>I should fix punctuation.</think>\nFinal: Hello, world.";
+
+        assert_eq!(clean_post_process_response(response), "Hello, world.");
     }
 }

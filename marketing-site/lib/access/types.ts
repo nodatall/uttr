@@ -88,6 +88,8 @@ export interface InstallTokenPayload {
   install_id: string;
   device_fingerprint_hash: string;
   issued_at: string;
+  expires_at: string;
+  jti: string;
 }
 
 export interface AuthenticatedUser {

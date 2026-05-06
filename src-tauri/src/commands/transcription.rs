@@ -18,7 +18,7 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter, State};
 
 const FILE_TRANSCRIPTION_SAMPLE_RATE: usize = 16_000;
-const FILE_TRANSCRIPTION_OVERLAP_SAMPLES: usize = FILE_TRANSCRIPTION_SAMPLE_RATE * 10;
+const FILE_TRANSCRIPTION_OVERLAP_SAMPLES: usize = FILE_TRANSCRIPTION_SAMPLE_RATE * 2;
 const DIRECT_CHUNK_SAFETY_MARGIN_BYTES: usize = 1 * 1024 * 1024;
 const PROXY_CHUNK_SAFETY_MARGIN_BYTES: usize = 4 * 1024 * 1024;
 const FILE_TRANSCRIPTION_SOURCE: &str = "file_transcription";
@@ -520,7 +520,7 @@ mod tests {
             end: FILE_TRANSCRIPTION_SAMPLE_RATE * 20,
         };
         let second = ChunkRange {
-            start: FILE_TRANSCRIPTION_SAMPLE_RATE * 10,
+            start: FILE_TRANSCRIPTION_SAMPLE_RATE * 18,
             end: FILE_TRANSCRIPTION_SAMPLE_RATE * 30,
         };
 

@@ -217,6 +217,36 @@ function buildExpiredEvent(): StripeWebhookEvent {
   } as StripeWebhookEvent;
 }
 
+function buildInvoicePaidEvent(): StripeWebhookEvent {
+  return {
+    id: "evt_invoice_paid_123",
+    type: "invoice.paid",
+    data: {
+      object: {
+        id: "in_paid_123",
+        customer: "cus_test_123",
+        customer_email: "user@example.com",
+        subscription: "sub_test_123",
+      } as Stripe.Invoice,
+    },
+  } as StripeWebhookEvent;
+}
+
+function buildInvoicePaymentFailedEvent(): StripeWebhookEvent {
+  return {
+    id: "evt_invoice_failed_123",
+    type: "invoice.payment_failed",
+    data: {
+      object: {
+        id: "in_failed_123",
+        customer: "cus_test_123",
+        customer_email: "user@example.com",
+        subscription: "sub_test_123",
+      } as Stripe.Invoice,
+    },
+  } as StripeWebhookEvent;
+}
+
 function buildUnknownEvent(): StripeWebhookEvent {
   return {
     id: "evt_unknown_123",
@@ -329,6 +359,56 @@ describe("stripe webhook pending checkout lifecycle", () => {
     ]);
     expect(upsertEntitlementStateCalls).toHaveLength(0);
     expect(sendTransactionalEmailCalls).toHaveLength(0);
+  });
+
+  test("syncs entitlement from invoice paid subscription before email", async () => {
+    stripeWebhookEvent = buildInvoicePaidEvent();
+
+    const response = await invokeWebhook();
+    const payload = (await response.json()) as { received: boolean };
+
+    expect(response.status).toBe(200);
+    expect(payload).toEqual({ received: true });
+    expect(upsertEntitlementStateCalls).toEqual([
+      {
+        user_id: "user_123",
+        subscription_status: "active",
+        stripe_customer_id: "cus_test_123",
+        stripe_subscription_id: "sub_test_123",
+        current_period_ends_at: "2030-03-17T17:46:40.000Z",
+      },
+    ]);
+    expect(callOrder).toEqual([
+      "begin_event",
+      "upsert_entitlement",
+      "complete_event",
+      "send_email",
+    ]);
+  });
+
+  test("syncs entitlement from payment failed invoice subscription before email", async () => {
+    stripeWebhookEvent = buildInvoicePaymentFailedEvent();
+
+    const response = await invokeWebhook();
+    const payload = (await response.json()) as { received: boolean };
+
+    expect(response.status).toBe(200);
+    expect(payload).toEqual({ received: true });
+    expect(upsertEntitlementStateCalls).toEqual([
+      {
+        user_id: "user_123",
+        subscription_status: "active",
+        stripe_customer_id: "cus_test_123",
+        stripe_subscription_id: "sub_test_123",
+        current_period_ends_at: "2030-03-17T17:46:40.000Z",
+      },
+    ]);
+    expect(callOrder).toEqual([
+      "begin_event",
+      "upsert_entitlement",
+      "complete_event",
+      "send_email",
+    ]);
   });
 
   test("keeps webhook idempotency intact for duplicate events", async () => {

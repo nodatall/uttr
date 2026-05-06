@@ -4,6 +4,7 @@ import {
   fetchEntitlementByUserId,
   refreshAnonymousTrialState,
   resolveAccessDecision,
+  buildInstallTokenPayload,
   signInstallToken,
   upsertAnonymousTrialHeartbeat,
 } from "@/lib/access";
@@ -81,18 +82,19 @@ export async function POST(request: Request) {
       ? await fetchEntitlementByUserId(refreshedTrial.user_id)
       : null;
     const accessDecision = resolveAccessDecision(refreshedTrial, entitlement);
-    const installToken = signInstallToken({
-      version: 1,
-      anonymous_trial_id: refreshedTrial.id,
-      install_id: refreshedTrial.install_id,
-      device_fingerprint_hash: refreshedTrial.device_fingerprint_hash,
-      issued_at: now,
+    const installTokenPayload = buildInstallTokenPayload({
+      anonymousTrialId: refreshedTrial.id,
+      installId: refreshedTrial.install_id,
+      deviceFingerprintHash: refreshedTrial.device_fingerprint_hash,
+      issuedAt: new Date(now),
     });
+    const installToken = signInstallToken(installTokenPayload);
 
     return NextResponse.json({
       trial_state: accessDecision.trialState,
       access_state: accessDecision.accessState,
       install_token: installToken,
+      install_token_expires_at: installTokenPayload.expires_at,
     });
   } catch (error) {
     console.error(

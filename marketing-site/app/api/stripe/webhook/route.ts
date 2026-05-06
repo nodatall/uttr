@@ -102,6 +102,22 @@ async function retrieveSubscriptionForCheckout(
   return stripe.subscriptions.retrieve(subscriptionId);
 }
 
+async function fetchInvoiceSubscription(
+  invoice: Stripe.Invoice,
+  stripe: Stripe,
+) {
+  const subscriptionId = stripeId(
+    (invoice as { subscription?: string | { id?: string } | null })
+      .subscription ?? null,
+  );
+
+  if (!subscriptionId) {
+    return null;
+  }
+
+  return stripe.subscriptions.retrieve(subscriptionId);
+}
+
 async function syncEntitlementFromCheckout(
   session: Stripe.Checkout.Session,
   stripe: Stripe,
@@ -356,11 +372,19 @@ export async function POST(request: Request) {
       }
       case "invoice.paid": {
         const invoice = event.data.object as Stripe.Invoice;
+        const subscription = await fetchInvoiceSubscription(invoice, stripe);
+        if (subscription) {
+          await syncEntitlementFromSubscription(subscription);
+        }
         postCommitSideEffect = () => handleInvoicePaid(invoice, stripe);
         break;
       }
       case "invoice.payment_failed": {
         const invoice = event.data.object as Stripe.Invoice;
+        const subscription = await fetchInvoiceSubscription(invoice, stripe);
+        if (subscription) {
+          await syncEntitlementFromSubscription(subscription);
+        }
         postCommitSideEffect = () => handleInvoiceFailed(invoice, stripe);
         break;
       }
