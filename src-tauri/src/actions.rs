@@ -579,7 +579,7 @@ pub async fn finalize_transcription_output(
         None
     };
 
-    if let Some(processed_text) = processed {
+    if let Some(processed_text) = processed.and_then(usable_post_processed_text) {
         post_processed_text = Some(processed_text.clone());
         final_text = processed_text;
         post_process_prompt = Some(match settings.post_process_cleaning_prompt_preset {
@@ -604,6 +604,15 @@ pub async fn finalize_transcription_output(
         final_text,
         post_processed_text,
         post_process_prompt,
+    }
+}
+
+fn usable_post_processed_text(processed_text: String) -> Option<String> {
+    if processed_text.trim().is_empty() {
+        warn!("Post-processing returned empty text; keeping base transcription");
+        None
+    } else {
+        Some(processed_text)
     }
 }
 
@@ -1678,8 +1687,8 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 mod tests {
     use super::{
         clean_post_process_response, is_supported_post_process_model, select_preferred_groq_model,
-        transcription_timeout_for_samples, transcription_watchdog_delay, ACTION_MAP,
-        FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT,
+        transcription_timeout_for_samples, transcription_watchdog_delay,
+        usable_post_processed_text, ACTION_MAP, FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT,
     };
 
     #[test]
@@ -1783,5 +1792,14 @@ mod tests {
         let response = "<think>I should fix punctuation.</think>\nFinal: Hello, world.";
 
         assert_eq!(clean_post_process_response(response), "Hello, world.");
+    }
+
+    #[test]
+    fn empty_post_process_response_is_not_usable() {
+        assert_eq!(usable_post_processed_text("   ".to_string()), None);
+        assert_eq!(
+            usable_post_processed_text("Hello, world.".to_string()).as_deref(),
+            Some("Hello, world.")
+        );
     }
 }
