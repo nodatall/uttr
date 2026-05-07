@@ -202,7 +202,7 @@
           },
           "transcribe_with_post_process": {
             "name": "Nachbearbeitungs-Tastenkürzel",
-            "description": "Optional: Ein dediziertes Tastenkürzel, das immer die KI-Nachbearbeitung auf Ihre Transkription anwendet."
+            "description": "Optional: Ein dediziertes Tastenkürzel, das die KI-Nachbearbeitung ein- oder ausschaltet."
           },
           "transcribe_full_system_audio": {
             "name": "Full-System Recording Shortcut",

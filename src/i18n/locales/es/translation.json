@@ -202,7 +202,7 @@
           },
           "transcribe_with_post_process": {
             "name": "Tecla de Post Procesamiento",
-            "description": "Opcional: Una tecla de acceso rápido dedicada que siempre aplica post procesamiento con IA a tu transcripción."
+            "description": "Opcional: un atajo dedicado que activa o desactiva el postprocesamiento con IA."
           },
           "transcribe_full_system_audio": {
             "name": "Full-System Recording Shortcut",

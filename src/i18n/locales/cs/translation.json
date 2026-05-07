@@ -202,7 +202,7 @@
           },
           "transcribe_with_post_process": {
             "name": "Klávesa pro následné zpracování",
-            "description": "Volitelné: Vyhrazená klávesová zkratka, která vždy použije AI následné zpracování na váš přepis."
+            "description": "Volitelné: Vyhrazená klávesová zkratka, která zapíná nebo vypíná následné zpracování pomocí AI."
           },
           "transcribe_full_system_audio": {
             "name": "Full-System Recording Shortcut",

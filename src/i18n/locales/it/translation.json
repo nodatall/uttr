@@ -202,7 +202,7 @@
           },
           "transcribe_with_post_process": {
             "name": "Tasto di post-elaborazione",
-            "description": "Facoltativo: Un tasto di scelta rapida dedicato che applica sempre la post-elaborazione IA alla trascrizione."
+            "description": "Opzionale: una scorciatoia dedicata che attiva o disattiva il post-processing con IA."
           },
           "transcribe_full_system_audio": {
             "name": "Full-System Recording Shortcut",

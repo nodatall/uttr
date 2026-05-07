@@ -202,7 +202,7 @@
           },
           "transcribe_with_post_process": {
             "name": "后处理快捷键",
-            "description": "可选：一个专用快捷键，始终对您的转录应用 AI 后处理。"
+            "description": "可选：用于开启或关闭 AI 后处理的专用快捷键。"
           },
           "transcribe_full_system_audio": {
             "name": "Full-System Recording Shortcut",

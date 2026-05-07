@@ -202,7 +202,7 @@
           },
           "transcribe_with_post_process": {
             "name": "Raccourci de post-traitement",
-            "description": "Facultatif : Un raccourci dédié qui applique toujours le post-traitement IA à votre transcription."
+            "description": "Facultatif : un raccourci dédié qui active ou désactive le post-traitement par IA."
           },
           "transcribe_full_system_audio": {
             "name": "Full-System Recording Shortcut",

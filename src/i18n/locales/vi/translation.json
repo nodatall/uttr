@@ -202,7 +202,7 @@
           },
           "transcribe_with_post_process": {
             "name": "Phím tắt xử lý sau",
-            "description": "Tùy chọn: Phím tắt chuyên dụng luôn áp dụng xử lý sau bằng AI cho bản chuyển đổi của bạn."
+            "description": "Tùy chọn: một phím tắt riêng để bật hoặc tắt xử lý hậu kỳ bằng AI."
           },
           "transcribe_full_system_audio": {
             "name": "Full-System Recording Shortcut",

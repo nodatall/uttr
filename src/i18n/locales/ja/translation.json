@@ -202,7 +202,7 @@
           },
           "transcribe_with_post_process": {
             "name": "後処理ホットキー",
-            "description": "オプション：文字起こしに常にAI後処理を適用する専用ホットキー。"
+            "description": "任意: AI ポスト処理のオン/オフを切り替える専用ホットキーです。"
           },
           "transcribe_full_system_audio": {
             "name": "Full-System Recording Shortcut",

@@ -780,6 +780,25 @@ fn ensure_post_process_defaults(settings: &mut AppSettings) -> bool {
     changed
 }
 
+fn ensure_shortcut_default_migrations(settings: &mut AppSettings) -> bool {
+    let mut changed = false;
+
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(binding) = settings.bindings.get_mut("transcribe_with_post_process") {
+            if binding.current_binding == "option+shift+space"
+                && binding.default_binding == "option+shift+space"
+            {
+                binding.default_binding = "shift+fn".to_string();
+                binding.current_binding = "shift+fn".to_string();
+                changed = true;
+            }
+        }
+    }
+
+    changed
+}
+
 fn ensure_file_transcription_history_defaults(settings: &mut AppSettings) -> bool {
     let mut changed = false;
 
@@ -877,7 +896,7 @@ pub fn get_default_settings() -> AppSettings {
     #[cfg(target_os = "windows")]
     let default_post_process_shortcut = "ctrl+shift+space";
     #[cfg(target_os = "macos")]
-    let default_post_process_shortcut = "option+shift+space";
+    let default_post_process_shortcut = "shift+fn";
     #[cfg(target_os = "linux")]
     let default_post_process_shortcut = "ctrl+shift+space";
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
@@ -887,9 +906,8 @@ pub fn get_default_settings() -> AppSettings {
         "transcribe_with_post_process".to_string(),
         ShortcutBinding {
             id: "transcribe_with_post_process".to_string(),
-            name: "Transcribe with Post-Processing".to_string(),
-            description: "Converts your speech into text and applies AI post-processing."
-                .to_string(),
+            name: "Post-Processing Shortcut".to_string(),
+            description: "Toggles AI post-processing on or off.".to_string(),
             default_binding: default_post_process_shortcut.to_string(),
             current_binding: default_post_process_shortcut.to_string(),
         },
@@ -1085,6 +1103,10 @@ pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
         changed = true;
     }
 
+    if ensure_shortcut_default_migrations(&mut settings) {
+        changed = true;
+    }
+
     if ensure_install_identity_defaults(app, &mut settings) {
         changed = true;
     }
@@ -1146,6 +1168,10 @@ pub fn get_settings(app: &AppHandle) -> AppSettings {
     }
 
     if ensure_post_process_defaults(&mut settings) {
+        changed = true;
+    }
+
+    if ensure_shortcut_default_migrations(&mut settings) {
         changed = true;
     }
 
@@ -1311,6 +1337,65 @@ mod tests {
         assert_eq!(binding.default_binding, "ctrl+alt+space");
 
         assert_eq!(binding.current_binding, binding.default_binding);
+    }
+
+    #[test]
+    fn default_post_process_binding_is_registered() {
+        let settings = get_default_settings();
+        let binding = settings
+            .bindings
+            .get("transcribe_with_post_process")
+            .expect("missing post-processing binding");
+
+        assert_eq!(binding.id, "transcribe_with_post_process");
+
+        #[cfg(target_os = "macos")]
+        assert_eq!(binding.default_binding, "shift+fn");
+
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(binding.default_binding, "ctrl+shift+space");
+
+        assert_eq!(binding.current_binding, binding.default_binding);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn migrates_old_macos_post_process_shortcut_default() {
+        let mut settings = get_default_settings();
+        let binding = settings
+            .bindings
+            .get_mut("transcribe_with_post_process")
+            .unwrap();
+        binding.default_binding = "option+shift+space".to_string();
+        binding.current_binding = "option+shift+space".to_string();
+
+        assert!(ensure_shortcut_default_migrations(&mut settings));
+        let binding = settings
+            .bindings
+            .get("transcribe_with_post_process")
+            .unwrap();
+        assert_eq!(binding.default_binding, "shift+fn");
+        assert_eq!(binding.current_binding, "shift+fn");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn shortcut_migration_preserves_custom_post_process_binding() {
+        let mut settings = get_default_settings();
+        let binding = settings
+            .bindings
+            .get_mut("transcribe_with_post_process")
+            .unwrap();
+        binding.default_binding = "option+shift+space".to_string();
+        binding.current_binding = "command+shift+space".to_string();
+
+        assert!(!ensure_shortcut_default_migrations(&mut settings));
+        let binding = settings
+            .bindings
+            .get("transcribe_with_post_process")
+            .unwrap();
+        assert_eq!(binding.default_binding, "option+shift+space");
+        assert_eq!(binding.current_binding, "command+shift+space");
     }
 
     #[test]

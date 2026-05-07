@@ -178,7 +178,7 @@
           },
           "transcribe_with_post_process": {
             "name": "후처리 단축키",
-            "description": "선택 사항: 항상 AI 후처리를 적용하는 전용 단축키입니다."
+            "description": "선택 사항: AI 후처리를 켜거나 끄는 전용 단축키입니다."
           },
           "transcribe_full_system_audio": {
             "name": "Full-System Recording Shortcut",

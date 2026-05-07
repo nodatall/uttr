@@ -202,7 +202,7 @@
           },
           "transcribe_with_post_process": {
             "name": "Skrót postprocessingu",
-            "description": "Opcjonalnie: Dedykowany skrót klawiszowy, który zawsze stosuje postprocessing AI do transkrypcji."
+            "description": "Opcjonalnie: dedykowany skrót, który włącza lub wyłącza postprocessing AI."
           },
           "transcribe_full_system_audio": {
             "name": "Full-System Recording Shortcut",

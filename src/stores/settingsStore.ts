@@ -13,6 +13,12 @@ const getBrowserE2ETestState = () =>
   typeof window !== "undefined" ? window.__UTTR_E2E__ : undefined;
 
 let installAccessChangedListener: Promise<UnlistenFn> | null = null;
+let settingsChangedListener: Promise<UnlistenFn> | null = null;
+
+type SettingsChangedPayload<K extends keyof Settings = keyof Settings> = {
+  setting: K;
+  value: Settings[K];
+};
 
 const normalizeTestSettings = (settings?: Partial<Settings> | null): Settings =>
   ({
@@ -674,6 +680,20 @@ export const useSettingsStore = create<SettingsStore>()(
           "install-access-changed",
           (event) => {
             set({ installAccess: event.payload });
+          },
+        );
+      }
+
+      if (!settingsChangedListener && typeof window !== "undefined") {
+        settingsChangedListener = listen<SettingsChangedPayload>(
+          "settings-changed",
+          (event) => {
+            const { setting, value } = event.payload;
+            set((state) => ({
+              settings: state.settings
+                ? { ...state.settings, [setting]: value }
+                : state.settings,
+            }));
           },
         );
       }

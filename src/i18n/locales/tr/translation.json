@@ -202,7 +202,7 @@
           },
           "transcribe_with_post_process": {
             "name": "Son İşlem Kısayolu",
-            "description": "İsteğe bağlı: Transkripsiyonunuza her zaman AI son işleme uygulayan özel bir kısayol tuşu."
+            "description": "İsteğe bağlı: Yapay zeka son işlemeyi açıp kapatan özel bir kısayol."
           },
           "transcribe_full_system_audio": {
             "name": "Full-System Recording Shortcut",

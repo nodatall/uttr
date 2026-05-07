@@ -174,7 +174,7 @@
           },
           "transcribe_with_post_process": {
             "name": "مفتاح المعالجة اللاحقة",
-            "description": "اختياري: مفتاح اختصار مخصص يطبق دائماً المعالجة اللاحقة بالذكاء الاصطناعي على التفريغ الصوتي."
+            "description": "اختياري: اختصار مخصص يبدّل المعالجة اللاحقة بالذكاء الاصطناعي تشغيلًا أو إيقافًا."
           },
           "transcribe_full_system_audio": {
             "name": "Full-System Recording Shortcut",

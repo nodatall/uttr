@@ -42,13 +42,11 @@ pub struct TranscriptionCoordinator {
 }
 
 pub fn is_transcribe_binding(id: &str) -> bool {
-    id == "transcribe"
-        || id == "transcribe_with_post_process"
-        || id == "transcribe_full_system_audio"
+    id == "transcribe" || id == "transcribe_full_system_audio"
 }
 
 pub fn transcribe_binding_push_to_talk(id: &str, push_to_talk: bool) -> bool {
-    push_to_talk && id != "transcribe_full_system_audio"
+    push_to_talk && id == "transcribe"
 }
 
 pub fn transcription_session_is_active(
@@ -309,7 +307,12 @@ mod tests {
     fn existing_transcribe_bindings_preserve_push_to_talk_setting() {
         assert!(transcribe_binding_push_to_talk("transcribe", true));
         assert!(!transcribe_binding_push_to_talk("transcribe", false));
-        assert!(transcribe_binding_push_to_talk(
+    }
+
+    #[test]
+    fn post_process_shortcut_does_not_route_through_transcribe_coordinator() {
+        assert!(!is_transcribe_binding("transcribe_with_post_process"));
+        assert!(!transcribe_binding_push_to_talk(
             "transcribe_with_post_process",
             true
         ));

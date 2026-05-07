@@ -14,7 +14,7 @@ use crate::managers::history::HistoryManager;
 use crate::managers::model::is_cloud_model_id;
 use crate::managers::transcription::TranscriptionManager;
 use crate::settings::{
-    get_settings, AppSettings, CleaningPromptPreset, PostProcessProvider,
+    get_settings, write_settings, AppSettings, CleaningPromptPreset, PostProcessProvider,
     APPLE_INTELLIGENCE_PROVIDER_ID, NUANCED_CLEANING_PROMPT, STRICT_CLEANING_PROMPT,
 };
 use crate::shortcut;
@@ -122,6 +122,8 @@ struct FullSystemTranscribeAction {
     post_process: bool,
 }
 
+struct TogglePostProcessingAction;
+
 const GROQ_PROVIDER_ID: &str = "groq";
 const GROQ_MODEL_PREFERENCES: &[&str] = &[
     "openai/gpt-oss-20b",
@@ -143,6 +145,11 @@ const SHORT_UTTERANCE_SAMPLES: usize = 16_000 * 10;
 
 static AUTO_SELECTED_MODEL_CACHE: Lazy<Mutex<HashMap<String, String>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+
+fn toggle_post_process_enabled(settings: &mut AppSettings) -> bool {
+    settings.post_process_enabled = !settings.post_process_enabled;
+    settings.post_process_enabled
+}
 
 pub struct FinalizedTranscriptionOutput {
     pub final_text: String,
@@ -1626,6 +1633,28 @@ impl ShortcutAction for CopyLastTranscriptAction {
     }
 }
 
+impl ShortcutAction for TogglePostProcessingAction {
+    fn start(&self, app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {
+        let mut settings = get_settings(app);
+        let enabled = toggle_post_process_enabled(&mut settings);
+        write_settings(app, settings);
+
+        let _ = app.emit(
+            "settings-changed",
+            serde_json::json!({
+                "setting": "post_process_enabled",
+                "value": enabled
+            }),
+        );
+
+        log::info!("Post-processing toggled via shortcut: enabled={}", enabled);
+    }
+
+    fn stop(&self, _app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {
+        // Toggle shortcuts act on press only.
+    }
+}
+
 // Test Action
 struct TestAction;
 
@@ -1660,7 +1689,7 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
     );
     map.insert(
         "transcribe_with_post_process".to_string(),
-        Arc::new(TranscribeAction { post_process: true }) as Arc<dyn ShortcutAction>,
+        Arc::new(TogglePostProcessingAction) as Arc<dyn ShortcutAction>,
     );
     map.insert(
         "transcribe_full_system_audio".to_string(),
@@ -1687,9 +1716,11 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 mod tests {
     use super::{
         clean_post_process_response, is_supported_post_process_model, select_preferred_groq_model,
-        transcription_timeout_for_samples, transcription_watchdog_delay,
-        usable_post_processed_text, ACTION_MAP, FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT,
+        toggle_post_process_enabled, transcription_timeout_for_samples,
+        transcription_watchdog_delay, usable_post_processed_text, ACTION_MAP,
+        FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT,
     };
+    use crate::settings::get_default_settings;
 
     #[test]
     fn full_system_binding_is_registered_in_action_map() {
@@ -1699,6 +1730,23 @@ mod tests {
     #[test]
     fn copy_last_transcript_binding_is_registered_in_action_map() {
         assert!(ACTION_MAP.contains_key("copy_last_transcript"));
+    }
+
+    #[test]
+    fn post_process_shortcut_binding_is_registered_in_action_map() {
+        assert!(ACTION_MAP.contains_key("transcribe_with_post_process"));
+    }
+
+    #[test]
+    fn post_process_toggle_flips_enabled_setting() {
+        let mut settings = get_default_settings();
+        settings.post_process_enabled = false;
+
+        assert!(toggle_post_process_enabled(&mut settings));
+        assert!(settings.post_process_enabled);
+
+        assert!(!toggle_post_process_enabled(&mut settings));
+        assert!(!settings.post_process_enabled);
     }
 
     #[test]
