@@ -349,6 +349,19 @@ impl HandyKeysState {
             .parse()
             .map_err(|e| format!("Failed to parse hotkey '{}': {}", hotkey_string, e))?;
 
+        if modifier_only_bindings.remove(binding_id).is_some() {
+            pressed_modifier_only.remove(binding_id);
+            active_push_to_talk.remove(binding_id);
+        }
+
+        if let Some(existing_id) = binding_to_hotkey.remove(binding_id) {
+            manager
+                .unregister(existing_id)
+                .map_err(|e| format!("Failed to replace existing hotkey: {}", e))?;
+            hotkey_to_binding.remove(&existing_id);
+            active_push_to_talk.remove(binding_id);
+        }
+
         if hotkey.key.is_none() {
             modifier_only_bindings
                 .insert(binding_id.to_string(), (hotkey, hotkey_string.to_string()));

@@ -780,6 +780,31 @@ fn ensure_post_process_defaults(settings: &mut AppSettings) -> bool {
     changed
 }
 
+fn normalized_shortcut_tokens(value: &str) -> Vec<String> {
+    let mut tokens = value
+        .split('+')
+        .map(|token| {
+            token
+                .trim()
+                .to_ascii_lowercase()
+                .replace("_left", "")
+                .replace("_right", "")
+        })
+        .map(|token| match token.as_str() {
+            "alt" | "opt" => "option".to_string(),
+            other => other.to_string(),
+        })
+        .filter(|token| !token.is_empty())
+        .collect::<Vec<_>>();
+    tokens.sort();
+    tokens.dedup();
+    tokens
+}
+
+fn is_ctrl_option_space_shortcut(value: &str) -> bool {
+    normalized_shortcut_tokens(value) == ["ctrl", "option", "space"]
+}
+
 fn ensure_shortcut_default_migrations(settings: &mut AppSettings) -> bool {
     let mut changed = false;
 
@@ -791,6 +816,18 @@ fn ensure_shortcut_default_migrations(settings: &mut AppSettings) -> bool {
             {
                 binding.default_binding = "shift+fn".to_string();
                 binding.current_binding = "shift+fn".to_string();
+                changed = true;
+            }
+        }
+
+        if let Some(binding) = settings.bindings.get_mut("transcribe_full_system_audio") {
+            if binding.default_binding == "option+ctrl+space" {
+                binding.default_binding = "ctrl+fn".to_string();
+                changed = true;
+            }
+
+            if is_ctrl_option_space_shortcut(&binding.current_binding) {
+                binding.current_binding = "ctrl+fn".to_string();
                 changed = true;
             }
         }
@@ -915,7 +952,7 @@ pub fn get_default_settings() -> AppSettings {
     #[cfg(target_os = "windows")]
     let default_full_system_shortcut = "ctrl+alt+space";
     #[cfg(target_os = "macos")]
-    let default_full_system_shortcut = "option+ctrl+space";
+    let default_full_system_shortcut = "ctrl+fn";
     #[cfg(target_os = "linux")]
     let default_full_system_shortcut = "ctrl+alt+space";
     #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
@@ -1331,7 +1368,7 @@ mod tests {
         assert_eq!(binding.id, "transcribe_full_system_audio");
 
         #[cfg(target_os = "macos")]
-        assert_eq!(binding.default_binding, "option+ctrl+space");
+        assert_eq!(binding.default_binding, "ctrl+fn");
 
         #[cfg(not(target_os = "macos"))]
         assert_eq!(binding.default_binding, "ctrl+alt+space");
@@ -1376,6 +1413,46 @@ mod tests {
             .unwrap();
         assert_eq!(binding.default_binding, "shift+fn");
         assert_eq!(binding.current_binding, "shift+fn");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn migrates_old_macos_full_system_shortcut_default() {
+        let mut settings = get_default_settings();
+        let binding = settings
+            .bindings
+            .get_mut("transcribe_full_system_audio")
+            .unwrap();
+        binding.default_binding = "option+ctrl+space".to_string();
+        binding.current_binding = "ctrl_left+option_left+space".to_string();
+
+        assert!(ensure_shortcut_default_migrations(&mut settings));
+        let binding = settings
+            .bindings
+            .get("transcribe_full_system_audio")
+            .unwrap();
+        assert_eq!(binding.default_binding, "ctrl+fn");
+        assert_eq!(binding.current_binding, "ctrl+fn");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn full_system_shortcut_migration_preserves_unrelated_custom_binding() {
+        let mut settings = get_default_settings();
+        let binding = settings
+            .bindings
+            .get_mut("transcribe_full_system_audio")
+            .unwrap();
+        binding.default_binding = "option+ctrl+space".to_string();
+        binding.current_binding = "command+shift+2".to_string();
+
+        assert!(ensure_shortcut_default_migrations(&mut settings));
+        let binding = settings
+            .bindings
+            .get("transcribe_full_system_audio")
+            .unwrap();
+        assert_eq!(binding.default_binding, "ctrl+fn");
+        assert_eq!(binding.current_binding, "command+shift+2");
     }
 
     #[cfg(target_os = "macos")]
