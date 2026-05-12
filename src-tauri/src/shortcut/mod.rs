@@ -162,6 +162,8 @@ pub fn change_binding(
     id: String,
     binding: String,
 ) -> Result<BindingResponse, String> {
+    let binding = binding_for_active_implementation(&app, &binding);
+
     // Reject empty bindings — every shortcut should have a value
     if binding.trim().is_empty() {
         return Err("Binding cannot be empty".to_string());
@@ -259,6 +261,15 @@ pub fn change_binding(
         binding: Some(updated_binding),
         error: None,
     })
+}
+
+fn binding_for_active_implementation(app: &AppHandle, binding: &str) -> String {
+    match get_settings(app).keyboard_implementation {
+        KeyboardImplementation::HandyKeys => {
+            handy_keys::normalize_shortcut_for_registration(binding)
+        }
+        KeyboardImplementation::Tauri => binding.to_string(),
+    }
 }
 
 #[tauri::command]

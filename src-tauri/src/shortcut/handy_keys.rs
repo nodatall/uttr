@@ -345,7 +345,8 @@ impl HandyKeysState {
         binding_id: &str,
         hotkey_string: &str,
     ) -> Result<(), String> {
-        let hotkey: Hotkey = hotkey_string
+        let normalized_hotkey_string = normalize_shortcut_for_registration(hotkey_string);
+        let hotkey: Hotkey = normalized_hotkey_string
             .parse()
             .map_err(|e| format!("Failed to parse hotkey '{}': {}", hotkey_string, e))?;
 
@@ -363,13 +364,15 @@ impl HandyKeysState {
         }
 
         if hotkey.key.is_none() {
-            modifier_only_bindings
-                .insert(binding_id.to_string(), (hotkey, hotkey_string.to_string()));
+            modifier_only_bindings.insert(
+                binding_id.to_string(),
+                (hotkey, normalized_hotkey_string.clone()),
+            );
             pressed_modifier_only.remove(binding_id);
             active_push_to_talk.remove(binding_id);
             debug!(
                 "Registered handy-keys modifier-only shortcut: {} -> {}",
-                binding_id, hotkey_string
+                binding_id, normalized_hotkey_string
             );
             return Ok(());
         }
@@ -379,7 +382,7 @@ impl HandyKeysState {
             .map_err(|e| format!("Failed to register hotkey: {}", e))?;
 
         binding_to_hotkey.insert(binding_id.to_string(), id);
-        hotkey_to_binding.insert(id, (binding_id.to_string(), hotkey_string.to_string()));
+        hotkey_to_binding.insert(id, (binding_id.to_string(), normalized_hotkey_string));
         active_push_to_talk.remove(binding_id);
 
         debug!(
@@ -718,6 +721,19 @@ fn modifiers_to_strings(modifiers: handy_keys::Modifiers) -> Vec<String> {
     result
 }
 
+pub fn normalize_shortcut_for_registration(raw: &str) -> String {
+    raw.split('+')
+        .map(|part| {
+            part.trim()
+                .to_ascii_lowercase()
+                .replace("_left", "")
+                .replace("_right", "")
+        })
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("+")
+}
+
 fn modifier_family_signature(modifiers: handy_keys::Modifiers) -> [bool; 5] {
     [
         modifiers.intersects(
@@ -799,7 +815,8 @@ pub fn validate_shortcut(raw: &str) -> Result<(), String> {
         return Err("Shortcut cannot be empty".into());
     }
 
-    let hotkey = raw
+    let normalized = normalize_shortcut_for_registration(raw);
+    let hotkey = normalized
         .parse::<Hotkey>()
         .map_err(|e| format!("Invalid shortcut for HandyKeys: {}", e))?;
 
@@ -838,6 +855,13 @@ pub fn init_shortcuts(app: &AppHandle) -> Result<(), String> {
                 id, binding.current_binding, e
             );
             binding = default_binding.clone();
+            user_settings.bindings.insert(id.clone(), binding.clone());
+            repaired_bindings = true;
+        }
+
+        let normalized_binding = normalize_shortcut_for_registration(&binding.current_binding);
+        if normalized_binding != binding.current_binding {
+            binding.current_binding = normalized_binding;
             user_settings.bindings.insert(id.clone(), binding.clone());
             repaired_bindings = true;
         }
@@ -1064,6 +1088,23 @@ mod tests {
     #[test]
     fn validate_shortcut_allows_fn_only_shortcut() {
         assert!(validate_shortcut("fn").is_ok());
+    }
+
+    #[test]
+    fn normalize_shortcut_strips_side_specific_modifiers() {
+        assert_eq!(
+            normalize_shortcut_for_registration("shift_left+command_left+space"),
+            "shift+command+space"
+        );
+        assert_eq!(
+            normalize_shortcut_for_registration("ctrl_right+fn"),
+            "ctrl+fn"
+        );
+    }
+
+    #[test]
+    fn validate_shortcut_accepts_recorded_side_specific_modifiers() {
+        assert!(validate_shortcut("shift_left+command_left+space").is_ok());
     }
 
     #[test]

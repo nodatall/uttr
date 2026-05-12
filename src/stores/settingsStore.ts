@@ -452,6 +452,20 @@ export const useSettingsStore = create<SettingsStore>()(
         if (!result.data.success) {
           throw new Error(result.data.error || "Failed to update binding");
         }
+
+        if (result.data.binding && get().settings) {
+          set((state) => ({
+            settings: state.settings
+              ? {
+                  ...state.settings,
+                  bindings: {
+                    ...state.settings.bindings,
+                    [id]: result.data.binding!,
+                  },
+                }
+              : null,
+          }));
+        }
       } catch (error) {
         console.error(`Failed to update binding ${id}:`, error);
 
