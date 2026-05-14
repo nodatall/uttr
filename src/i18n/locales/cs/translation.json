@@ -236,6 +236,10 @@
         "placeholder": "Vyberte mikrofon...",
         "loading": "Načítání..."
       },
+      "alwaysOnMicrophone": {
+        "label": "Vždy zapnutý mikrofon",
+        "description": "Udržovat mikrofon aktivní pro rychlejší odezvu"
+      },
       "audioFeedback": {
         "label": "Zvuková odezva",
         "description": "Přehrát zvuk při zahájení a ukončení nahrávání"

@@ -236,6 +236,10 @@
         "placeholder": "選擇麥克風...",
         "loading": "載入中..."
       },
+      "alwaysOnMicrophone": {
+        "label": "麥克風常開",
+        "description": "保持麥克風啟用以獲得更快的回應"
+      },
       "audioFeedback": {
         "label": "聲音回饋",
         "description": "錄製開始和停止時播放聲音"

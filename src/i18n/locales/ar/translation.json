@@ -208,6 +208,10 @@
         "placeholder": "...اختر الميكروفون",
         "loading": "...جاري التحميل"
       },
+      "alwaysOnMicrophone": {
+        "label": "ميكروفون يعمل دائماً",
+        "description": "إبقاء الميكروفون نشطاً لاستجابة أسرع"
+      },
       "audioFeedback": {
         "label": "تنبيهات صوتية",
         "description": "تشغيل صوت عند بدء التسجيل وتوقفه"

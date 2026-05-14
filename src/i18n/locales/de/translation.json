@@ -236,6 +236,10 @@
         "placeholder": "Mikrofon auswählen...",
         "loading": "Wird geladen..."
       },
+      "alwaysOnMicrophone": {
+        "label": "Mikrofon immer aktiv",
+        "description": "Mikrofon für schnellere Reaktion aktiv halten"
+      },
       "audioFeedback": {
         "label": "Audio-Feedback",
         "description": "Ton bei Start und Ende der Aufnahme abspielen"

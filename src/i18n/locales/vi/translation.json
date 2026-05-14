@@ -236,6 +236,10 @@
         "placeholder": "Chọn micrô...",
         "loading": "Đang tải..."
       },
+      "alwaysOnMicrophone": {
+        "label": "Micrô luôn bật",
+        "description": "Giữ micrô hoạt động để phản hồi nhanh hơn"
+      },
       "audioFeedback": {
         "label": "Phản hồi âm thanh",
         "description": "Phát âm thanh khi bắt đầu và kết thúc ghi âm"

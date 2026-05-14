@@ -315,6 +315,10 @@
         "placeholder": "Select microphone...",
         "loading": "Loading..."
       },
+      "alwaysOnMicrophone": {
+        "label": "Always-On Microphone",
+        "description": "Keep the microphone open between recordings so transcription starts faster. Turn this off to open it only while recording."
+      },
       "fullSystemAudio": {
         "title": "Enable system audio recording",
         "shortcutLabel": "Shortcut",

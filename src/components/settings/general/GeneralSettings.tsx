@@ -6,6 +6,7 @@ import { RecordFullSystemAudio } from "../RecordFullSystemAudio";
 import { SettingsGroup } from "../../ui/SettingsGroup";
 import { PushToTalk } from "../PushToTalk";
 import { MuteWhileRecording } from "../MuteWhileRecording";
+import { AlwaysOnMicrophone } from "../AlwaysOnMicrophone";
 import { AutostartToggle } from "../AutostartToggle";
 import { ShowTrayIcon } from "../ShowTrayIcon";
 import { TypingToolSetting } from "../TypingTool";
@@ -34,6 +35,7 @@ export const GeneralSettings: React.FC = () => {
       </SettingsGroup>
       <SettingsGroup title={t("settings.sound.title")}>
         <MicrophoneSelector descriptionMode="tooltip" grouped={true} />
+        <AlwaysOnMicrophone descriptionMode="tooltip" grouped={true} />
         <RecordFullSystemAudio descriptionMode="tooltip" grouped={true} />
         <MuteWhileRecording descriptionMode="tooltip" grouped={true} />
       </SettingsGroup>

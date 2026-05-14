@@ -236,6 +236,10 @@
         "placeholder": "Mikrofon seçin...",
         "loading": "Yükleniyor..."
       },
+      "alwaysOnMicrophone": {
+        "label": "Mikrofon Her Zaman Açık",
+        "description": "Daha hızlı yanıt için mikrofonu aktif tutar"
+      },
       "audioFeedback": {
         "label": "Sesli Geri Bildirim",
         "description": "Kayıt başladığında ve bittiğinde ses çalar"

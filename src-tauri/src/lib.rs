@@ -1,7 +1,5 @@
 mod access;
 mod actions;
-#[cfg(target_os = "macos")]
-mod app_activation_bridge;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod apple_intelligence;
 mod audio_feedback;
@@ -145,9 +143,6 @@ fn initialize_core_logic(app_handle: &AppHandle) {
             utils::emit_levels(&app_handle, &levels);
         }
     });
-
-    #[cfg(target_os = "macos")]
-    app_activation_bridge::install_frontmost_app_activation_monitor(recording_manager.clone());
 
     // Note: Shortcuts are NOT initialized here.
     // The frontend is responsible for calling the `initialize_shortcuts` command
@@ -536,13 +531,6 @@ pub fn run() {
                 if let Err(err) = shortcut::refresh_shortcuts(app_handle) {
                     log::warn!("Failed to refresh shortcuts on app resume: {}", err);
                 }
-            }
-
-            if let Some(recording_manager) = app_handle.try_state::<Arc<AudioRecordingManager>>() {
-                let recording_manager = Arc::clone(&recording_manager);
-                tauri::async_runtime::spawn(async move {
-                    recording_manager.prewarm_for_quick_start("app resume");
-                });
             }
         }
     });

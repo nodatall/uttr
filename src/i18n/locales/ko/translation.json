@@ -212,6 +212,10 @@
         "placeholder": "마이크 선택...",
         "loading": "로딩 중..."
       },
+      "alwaysOnMicrophone": {
+        "label": "항상 켜진 마이크",
+        "description": "더 빠른 응답을 위해 마이크를 활성 상태로 유지"
+      },
       "audioFeedback": {
         "label": "오디오 피드백",
         "description": "녹음 시작 및 정지 시 소리 재생"

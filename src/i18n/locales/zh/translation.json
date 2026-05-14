@@ -236,6 +236,10 @@
         "placeholder": "选择麦克风...",
         "loading": "加载中..."
       },
+      "alwaysOnMicrophone": {
+        "label": "麦克风常开",
+        "description": "保持麦克风活跃以获得更快的响应"
+      },
       "audioFeedback": {
         "label": "音频反馈",
         "description": "录制开始和停止时播放声音"
