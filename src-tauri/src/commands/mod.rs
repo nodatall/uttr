@@ -76,10 +76,11 @@ pub fn get_default_settings() -> Result<AppSettings, String> {
 #[specta::specta]
 pub fn complete_onboarding(app: AppHandle) -> Result<(), String> {
     let mut settings = get_settings(&app);
+    crate::settings::ensure_default_selected_transcription_model(&mut settings);
     if !settings.onboarding_completed {
         settings.onboarding_completed = true;
-        write_settings(&app, settings);
     }
+    write_settings(&app, settings);
     Ok(())
 }
 

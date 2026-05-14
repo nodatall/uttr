@@ -896,7 +896,7 @@ pub(crate) fn ensure_install_identity_defaults(
 
 fn ensure_onboarding_defaults(settings: &mut AppSettings) -> bool {
     if settings.onboarding_completed {
-        return false;
+        return ensure_default_selected_transcription_model(settings);
     }
 
     if settings.selected_model.trim().is_empty() {
@@ -904,6 +904,15 @@ fn ensure_onboarding_defaults(settings: &mut AppSettings) -> bool {
     }
 
     settings.onboarding_completed = true;
+    true
+}
+
+pub fn ensure_default_selected_transcription_model(settings: &mut AppSettings) -> bool {
+    if !settings.selected_model.trim().is_empty() {
+        return false;
+    }
+
+    settings.selected_model = crate::managers::model::GROQ_MODEL_WHISPER_LARGE_V3_TURBO.to_string();
     true
 }
 
@@ -1393,6 +1402,55 @@ mod tests {
         assert_eq!(binding.default_binding, "ctrl+shift+space");
 
         assert_eq!(binding.current_binding, binding.default_binding);
+    }
+
+    #[test]
+    fn default_transcription_model_is_selected_when_onboarding_is_completed() {
+        let mut settings = get_default_settings();
+        settings.onboarding_completed = true;
+        settings.selected_model = String::new();
+
+        assert!(ensure_default_selected_transcription_model(&mut settings));
+        assert_eq!(
+            settings.selected_model,
+            crate::managers::model::GROQ_MODEL_WHISPER_LARGE_V3_TURBO
+        );
+    }
+
+    #[test]
+    fn default_transcription_model_preserves_existing_selection() {
+        let mut settings = get_default_settings();
+        settings.onboarding_completed = true;
+        settings.selected_model = crate::managers::model::DEFAULT_LOCAL_MODEL_ID.to_string();
+
+        assert!(!ensure_default_selected_transcription_model(&mut settings));
+        assert_eq!(
+            settings.selected_model,
+            crate::managers::model::DEFAULT_LOCAL_MODEL_ID
+        );
+    }
+
+    #[test]
+    fn onboarding_defaults_repair_completed_install_without_model() {
+        let mut settings = get_default_settings();
+        settings.onboarding_completed = true;
+        settings.selected_model = String::new();
+
+        assert!(ensure_onboarding_defaults(&mut settings));
+        assert!(settings.onboarding_completed);
+        assert_eq!(
+            settings.selected_model,
+            crate::managers::model::GROQ_MODEL_WHISPER_LARGE_V3_TURBO
+        );
+    }
+
+    #[test]
+    fn onboarding_defaults_keep_fresh_install_uncompleted_until_onboarding_finishes() {
+        let mut settings = get_default_settings();
+
+        assert!(!ensure_onboarding_defaults(&mut settings));
+        assert!(!settings.onboarding_completed);
+        assert!(settings.selected_model.is_empty());
     }
 
     #[cfg(target_os = "macos")]
