@@ -72,6 +72,7 @@ const QUIET_AUDIO_TARGET_RMS: f32 = 0.045;
 const QUIET_AUDIO_MAX_PEAK: f32 = 0.92;
 const QUIET_AUDIO_MAX_GAIN: f32 = 4.0;
 const QUIET_AUDIO_MIN_GAIN: f32 = 1.15;
+const MIN_INCREMENTAL_FINALIZATION_CHUNKS: u64 = 2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CloudTranscriptionRoute {
@@ -370,6 +371,10 @@ fn append_stitched_text(existing: &mut String, incoming: &str) {
 
 pub(crate) fn stitch_transcription_text(existing: &mut String, incoming: &str) {
     append_stitched_text(existing, incoming);
+}
+
+fn has_enough_incremental_chunks_for_finalization(chunk_count: u64) -> bool {
+    chunk_count >= MIN_INCREMENTAL_FINALIZATION_CHUNKS
 }
 
 fn safe_live_chunk_limit_bytes(route: CloudTranscriptionRoute) -> usize {
@@ -2083,6 +2088,14 @@ impl TranscriptionManager {
             return Err(anyhow::anyhow!("Transcription cancelled"));
         }
 
+        let completed_chunk_count = session.runtime.chunk_count.load(Ordering::Relaxed);
+        if !has_enough_incremental_chunks_for_finalization(completed_chunk_count) {
+            return Err(anyhow::anyhow!(
+                "Only {} incremental chunk(s) completed; using full-pass fallback",
+                completed_chunk_count
+            ));
+        }
+
         let next_chunk_start = session.runtime.next_chunk_start.load(Ordering::Relaxed);
         if full_samples.len() < CHUNK_SAMPLES || next_chunk_start == 0 {
             return Err(anyhow::anyhow!(
@@ -2147,7 +2160,7 @@ impl TranscriptionManager {
         let final_result = self.apply_transcription_filters(raw, &settings);
         info!(
             "Incremental transcription finalized with {} chunk(s)",
-            session.runtime.chunk_count.load(Ordering::Relaxed)
+            completed_chunk_count
         );
 
         self.maybe_unload_immediately("incremental transcription");
@@ -2505,6 +2518,13 @@ mod tests {
         let mut assembled = "alpha beta".to_string();
         append_stitched_text(&mut assembled, "gamma delta");
         assert_eq!(assembled, "alpha beta gamma delta");
+    }
+
+    #[test]
+    fn incremental_finalization_requires_multiple_completed_chunks() {
+        assert!(!has_enough_incremental_chunks_for_finalization(0));
+        assert!(!has_enough_incremental_chunks_for_finalization(1));
+        assert!(has_enough_incremental_chunks_for_finalization(2));
     }
 
     #[test]
