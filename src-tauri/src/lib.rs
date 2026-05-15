@@ -86,6 +86,22 @@ fn build_console_filter() -> env_filter::Filter {
     builder.build()
 }
 
+fn should_write_file_log(metadata: &log::Metadata<'_>) -> bool {
+    let file_level = FILE_LOG_LEVEL.load(Ordering::Relaxed);
+    if metadata.level() > level_filter_from_u8(file_level) {
+        return false;
+    }
+
+    // The updater logs the full release manifest at debug level. That can make
+    // app startup feel sticky when update checks run with debug file logging.
+    if metadata.target().starts_with("tauri_plugin_updater") && metadata.level() > log::Level::Info
+    {
+        return false;
+    }
+
+    true
+}
+
 fn show_main_window(app: &AppHandle) {
     if let Some(main_window) = app.get_webview_window("main") {
         // First, ensure the window is visible
@@ -439,10 +455,7 @@ pub fn run() {
                     Target::new(TargetKind::LogDir {
                         file_name: Some("uttr".into()),
                     })
-                    .filter(|metadata| {
-                        let file_level = FILE_LOG_LEVEL.load(Ordering::Relaxed);
-                        metadata.level() <= level_filter_from_u8(file_level)
-                    }),
+                    .filter(should_write_file_log),
                 ])
                 .build(),
         );

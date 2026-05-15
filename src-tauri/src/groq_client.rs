@@ -7,10 +7,14 @@ use serde::Deserialize;
 use std::time::{Duration, Instant};
 
 const GROQ_BASE_URL: &str = "https://api.groq.com/openai/v1";
+const OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
+const OPENAI_DICTATION_PROMPT: &str = "Transcribe short desktop dictation accurately. The speaker may be quiet, fast, or mumbled. If speech is present, transcribe the spoken words verbatim with normal punctuation.";
 const GROQ_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+const OPENAI_REQUEST_TIMEOUT: Duration = Duration::from_secs(45);
 pub const WAV_HEADER_BYTES: usize = 44;
 pub const WAV_BYTES_PER_SAMPLE: usize = 2;
 pub const DIRECT_GROQ_UPLOAD_LIMIT_BYTES: usize = 25 * 1024 * 1024;
+pub const DIRECT_OPENAI_UPLOAD_LIMIT_BYTES: usize = 25 * 1024 * 1024;
 pub const PROXY_GROQ_UPLOAD_LIMIT_BYTES: usize = 100 * 1024 * 1024;
 const PROXY_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
@@ -19,6 +23,13 @@ static GROQ_HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
         .timeout(GROQ_REQUEST_TIMEOUT)
         .build()
         .expect("Failed to build Groq HTTP client")
+});
+
+static OPENAI_HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
+    Client::builder()
+        .timeout(OPENAI_REQUEST_TIMEOUT)
+        .build()
+        .expect("Failed to build OpenAI HTTP client")
 });
 
 static PROXY_HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
@@ -30,6 +41,11 @@ static PROXY_HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
 
 #[derive(Debug, Deserialize)]
 struct GroqTranscriptionResponse {
+    text: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAiTranscriptionResponse {
     text: String,
 }
 
@@ -211,6 +227,86 @@ pub async fn transcribe_samples_direct(
 
     debug!(
         "Groq direct transcription timing: model={}, samples={}, encode_ms={}, request_ms={}, parse_ms={}",
+        model,
+        samples.len(),
+        encode_elapsed.as_millis(),
+        request_elapsed.as_millis(),
+        parse_elapsed.as_millis()
+    );
+
+    Ok(parsed.text)
+}
+
+pub async fn transcribe_samples_direct_openai(
+    api_key: &str,
+    model: &str,
+    samples: &[f32],
+    selected_language: &str,
+    translate_to_english: bool,
+) -> Result<String, String> {
+    if api_key.trim().is_empty() {
+        return Err(
+            "OpenAI API key is required. Add your OpenAI key in Settings -> API Keys.".to_string(),
+        );
+    }
+
+    if translate_to_english {
+        return Err(
+            "OpenAI GPT-4o transcription does not support Uttr's translate-to-English route yet."
+                .to_string(),
+        );
+    }
+
+    let encode_started = Instant::now();
+    let wav = build_wav_bytes(samples)?;
+    let encode_elapsed = encode_started.elapsed();
+
+    let file_part = multipart::Part::bytes(wav)
+        .file_name("uttr.wav")
+        .mime_str("audio/wav")
+        .map_err(|e| format!("Failed to build audio payload: {}", e))?;
+
+    let mut form = multipart::Form::new()
+        .text("model", model.to_string())
+        .part("file", file_part)
+        .text("response_format", "json".to_string())
+        .text("prompt", OPENAI_DICTATION_PROMPT.to_string());
+
+    if let Some(language) = normalize_language(selected_language) {
+        form = form.text("language", language.to_string());
+    }
+
+    let request_started = Instant::now();
+    let response = OPENAI_HTTP_CLIENT
+        .post(format!("{}/audio/transcriptions", OPENAI_BASE_URL))
+        .bearer_auth(api_key.trim())
+        .multipart(form)
+        .send()
+        .await
+        .map_err(|e| format!("OpenAI transcription request failed: {}", e))?;
+    let request_elapsed = request_started.elapsed();
+
+    let status = response.status();
+    if !status.is_success() {
+        let body = response
+            .text()
+            .await
+            .unwrap_or_else(|_| "Unable to read OpenAI error response body".to_string());
+        return Err(format!(
+            "OpenAI transcription request failed ({}): {}",
+            status, body
+        ));
+    }
+
+    let parse_started = Instant::now();
+    let parsed: OpenAiTranscriptionResponse = response
+        .json()
+        .await
+        .map_err(|e| format!("Failed to parse OpenAI transcription response: {}", e))?;
+    let parse_elapsed = parse_started.elapsed();
+
+    debug!(
+        "OpenAI direct transcription timing: model={}, samples={}, encode_ms={}, request_ms={}, parse_ms={}",
         model,
         samples.len(),
         encode_elapsed.as_millis(),

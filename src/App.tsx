@@ -73,9 +73,14 @@ function App() {
   const refreshInstallAccess = useSettingsStore(
     (state) => state.refreshInstallAccess,
   );
+  const hasStartedOnboardingCheck = useRef(false);
   const hasCompletedPostOnboardingInit = useRef(false);
 
   useEffect(() => {
+    if (hasStartedOnboardingCheck.current) {
+      return;
+    }
+    hasStartedOnboardingCheck.current = true;
     logFrontendStartup("check onboarding start");
     checkOnboardingStatus();
   }, []);

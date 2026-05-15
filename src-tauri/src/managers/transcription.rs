@@ -5,8 +5,8 @@ use crate::audio_toolkit::{
 use crate::groq_client;
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::model::{
-    groq_api_model_name, is_cloud_model_id, EngineType, ModelInfo, ModelManager,
-    DEFAULT_LOCAL_MODEL_ID,
+    groq_api_model_name, is_cloud_model_id, openai_api_model_name, EngineType, ModelInfo,
+    ModelManager, DEFAULT_LOCAL_MODEL_ID, GROQ_MODEL_WHISPER_LARGE_V3,
 };
 use crate::settings::{
     get_settings, write_settings, AccessState, AppSettings, ModelUnloadTimeout, TrialState,
@@ -68,10 +68,15 @@ const MODEL_LOADING_WAIT_TIMEOUT: Duration = Duration::from_secs(12);
 const LIVE_TRANSCRIPTION_OVERLAP_SAMPLES: usize = SAMPLE_RATE * 10;
 const DIRECT_CHUNK_SAFETY_MARGIN_BYTES: usize = 1 * 1024 * 1024;
 const PROXY_CHUNK_SAFETY_MARGIN_BYTES: usize = 4 * 1024 * 1024;
+const QUIET_AUDIO_TARGET_RMS: f32 = 0.045;
+const QUIET_AUDIO_MAX_PEAK: f32 = 0.92;
+const QUIET_AUDIO_MAX_GAIN: f32 = 4.0;
+const QUIET_AUDIO_MIN_GAIN: f32 = 1.15;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CloudTranscriptionRoute {
     DirectGroq,
+    DirectOpenAi,
     BackendProxy,
 }
 
@@ -168,6 +173,48 @@ pub(crate) fn sanitize_transcription_audio(mut audio: Vec<f32>) -> Vec<f32> {
     audio
 }
 
+fn quiet_transcription_audio_gain(levels: (f32, f32)) -> Option<f32> {
+    if levels.0 <= 0.0 || levels.1 <= 0.0 || is_effectively_silent(levels) {
+        return None;
+    }
+
+    let rms_gain = QUIET_AUDIO_TARGET_RMS / levels.0;
+    let peak_gain = QUIET_AUDIO_MAX_PEAK / levels.1;
+    let gain = rms_gain.min(peak_gain).min(QUIET_AUDIO_MAX_GAIN);
+    if gain < QUIET_AUDIO_MIN_GAIN {
+        return None;
+    }
+
+    Some(gain)
+}
+
+fn boost_audio_with_gain(audio: &[f32], gain: f32) -> Vec<f32> {
+    audio
+        .iter()
+        .map(|sample| (sample * gain).clamp(-1.0, 1.0))
+        .collect()
+}
+
+fn prepare_transcription_audio(audio: Vec<f32>) -> Vec<f32> {
+    let audio = sanitize_transcription_audio(audio);
+    let Some(levels) = audio_levels(&audio) else {
+        return audio;
+    };
+    let Some(gain) = quiet_transcription_audio_gain(levels) else {
+        return audio;
+    };
+
+    let boosted_audio = boost_audio_with_gain(&audio, gain);
+    if let Some((boosted_rms, boosted_peak)) = audio_levels(&boosted_audio) {
+        info!(
+            "Boosting quiet transcription audio before provider request (gain={:.2}, rms={:.6}->{:.6}, peak={:.6}->{:.6})",
+            gain, levels.0, boosted_rms, levels.1, boosted_peak
+        );
+    }
+
+    boosted_audio
+}
+
 fn is_effectively_silent(levels: (f32, f32)) -> bool {
     const MAX_SILENT_RMS: f32 = 0.0035;
     const MAX_SILENT_PEAK: f32 = 0.02;
@@ -189,6 +236,27 @@ fn should_suppress_silence_hallucination(levels: Option<(f32, f32)>, transcripti
     };
 
     is_effectively_silent(levels)
+}
+
+fn non_silent_empty_transcription_levels(audio: &[f32], transcription: &str) -> Option<(f32, f32)> {
+    if !transcription.trim().is_empty() {
+        return None;
+    }
+
+    let levels = audio_levels(audio)?;
+    if is_effectively_silent(levels) {
+        None
+    } else {
+        Some(levels)
+    }
+}
+
+fn boost_audio_for_quiet_retry(audio: &[f32], levels: (f32, f32)) -> Option<Vec<f32>> {
+    if audio.is_empty() {
+        return None;
+    }
+
+    quiet_transcription_audio_gain(levels).map(|gain| boost_audio_with_gain(audio, gain))
 }
 
 fn choose_local_fallback_model_id(
@@ -307,6 +375,8 @@ pub(crate) fn stitch_transcription_text(existing: &mut String, incoming: &str) {
 fn safe_live_chunk_limit_bytes(route: CloudTranscriptionRoute) -> usize {
     match route {
         CloudTranscriptionRoute::DirectGroq => groq_client::DIRECT_GROQ_UPLOAD_LIMIT_BYTES
+            .saturating_sub(DIRECT_CHUNK_SAFETY_MARGIN_BYTES),
+        CloudTranscriptionRoute::DirectOpenAi => groq_client::DIRECT_OPENAI_UPLOAD_LIMIT_BYTES
             .saturating_sub(DIRECT_CHUNK_SAFETY_MARGIN_BYTES),
         CloudTranscriptionRoute::BackendProxy => groq_client::PROXY_GROQ_UPLOAD_LIMIT_BYTES
             .saturating_sub(PROXY_CHUNK_SAFETY_MARGIN_BYTES),
@@ -552,6 +622,24 @@ impl TranscriptionManager {
             Ok(None) => {}
             Err(error) => {
                 warn!("Failed to load Groq BYOK key: {}", error);
+            }
+        }
+
+        None
+    }
+
+    fn resolve_byok_openai_api_key(&self) -> Option<String> {
+        let settings = get_settings(&self.app_handle);
+        match crate::byok_secrets::load_openai_api_key(&self.app_handle, &settings) {
+            Ok(Some(key)) => {
+                let key = key.trim();
+                if !key.is_empty() {
+                    return Some(key.to_string());
+                }
+            }
+            Ok(None) => {}
+            Err(error) => {
+                warn!("Failed to load OpenAI BYOK key: {}", error);
             }
         }
 
@@ -856,6 +944,7 @@ impl TranscriptionManager {
             return Ok(String::new());
         }
 
+        let audio = prepare_transcription_audio(audio);
         self.wait_for_loading_if_needed();
 
         let engine_guard = self.lock_engine();
@@ -973,6 +1062,176 @@ impl TranscriptionManager {
                     .await
             }
         }
+    }
+
+    async fn transcribe_with_direct_openai(
+        &self,
+        model_id: &str,
+        audio: Vec<f32>,
+        settings: &AppSettings,
+        allow_local_fallback_on_cloud_error: bool,
+    ) -> Result<String> {
+        let openai_model = openai_api_model_name(model_id)
+            .ok_or_else(|| anyhow::anyhow!("Unknown OpenAI model id: {}", model_id))?;
+        let api_key = self
+            .resolve_byok_openai_api_key()
+            .ok_or_else(|| anyhow::anyhow!("OpenAI API key is required for this model."))?;
+
+        match groq_client::transcribe_samples_direct_openai(
+            &api_key,
+            openai_model,
+            &audio,
+            &settings.selected_language,
+            settings.translate_to_english,
+        )
+        .await
+        {
+            Ok(text) => {
+                if !text.trim().is_empty() {
+                    return Ok(text);
+                }
+
+                let Some(levels) = non_silent_empty_transcription_levels(&audio, &text) else {
+                    return Ok(text);
+                };
+
+                warn!(
+                    "OpenAI returned an empty transcription for non-silent audio (rms={:.6}, peak={:.6}); retrying quiet audio rescue",
+                    levels.0,
+                    levels.1
+                );
+
+                if let Some(boosted_audio) = boost_audio_for_quiet_retry(&audio, levels) {
+                    if let Some((boosted_rms, boosted_peak)) = audio_levels(&boosted_audio) {
+                        warn!(
+                            "Retrying OpenAI transcription with boosted audio (rms={:.6}, peak={:.6})",
+                            boosted_rms, boosted_peak
+                        );
+                    }
+
+                    match groq_client::transcribe_samples_direct_openai(
+                        &api_key,
+                        openai_model,
+                        &boosted_audio,
+                        &settings.selected_language,
+                        settings.translate_to_english,
+                    )
+                    .await
+                    {
+                        Ok(retry_text) if !retry_text.trim().is_empty() => {
+                            return Ok(retry_text);
+                        }
+                        Ok(_) => {
+                            warn!(
+                                "OpenAI quiet audio rescue still returned an empty transcription"
+                            );
+                        }
+                        Err(retry_error) => {
+                            warn!("OpenAI quiet audio rescue failed: {}", retry_error);
+                        }
+                    }
+                }
+
+                if self.resolve_byok_groq_api_key().is_some() {
+                    warn!(
+                        "Retrying empty OpenAI transcription with Groq fallback model '{}'",
+                        GROQ_MODEL_WHISPER_LARGE_V3
+                    );
+                    return self
+                        .transcribe_with_direct_groq(
+                            GROQ_MODEL_WHISPER_LARGE_V3,
+                            audio,
+                            settings,
+                            allow_local_fallback_on_cloud_error,
+                        )
+                        .await;
+                }
+
+                if !allow_local_fallback_on_cloud_error {
+                    return Err(anyhow::anyhow!(
+                        "OpenAI returned an empty transcription for non-silent audio and no cloud fallback is configured."
+                    ));
+                }
+
+                self.transcribe_with_local_fallback_after_cloud_issue(
+                    "OpenAI",
+                    "returned an empty transcription for non-silent audio",
+                    audio,
+                    settings,
+                )
+                .await
+            }
+            Err(openai_error) => {
+                if !allow_local_fallback_on_cloud_error {
+                    return Err(anyhow::anyhow!(
+                        "OpenAI transcription failed during incremental chunking: {}",
+                        openai_error
+                    ));
+                }
+
+                let issue = format!("transcription failed: {}", openai_error);
+                self.transcribe_with_local_fallback_after_cloud_issue(
+                    "OpenAI", &issue, audio, settings,
+                )
+                .await
+            }
+        }
+    }
+
+    async fn transcribe_with_local_fallback_after_cloud_issue(
+        &self,
+        provider_label: &str,
+        issue: &str,
+        audio: Vec<f32>,
+        settings: &AppSettings,
+    ) -> Result<String> {
+        let fallback_local_model_id = self
+            .select_local_fallback_model_id(
+                self.get_current_model()
+                    .filter(|id| !is_cloud_model_id(id))
+                    .or_else(|| {
+                        if settings.selected_model.is_empty() {
+                            None
+                        } else {
+                            Some(settings.selected_model.clone())
+                        }
+                    })
+                    .as_deref(),
+            )
+            .ok_or_else(|| {
+                anyhow::anyhow!(
+                    "{} {}. No downloaded local model available for fallback.",
+                    provider_label,
+                    issue
+                )
+            })?;
+
+        let local_engine_loaded = {
+            let engine_guard = self.lock_engine();
+            engine_guard.is_some()
+        };
+        let current_model = self.get_current_model();
+        if current_model.as_deref() != Some(fallback_local_model_id.as_str())
+            || !local_engine_loaded
+        {
+            warn!(
+                "Switching transcription to local fallback model '{}' after {} issue: {}",
+                fallback_local_model_id, provider_label, issue
+            );
+            self.load_model(&fallback_local_model_id)
+                .map_err(|load_error| {
+                    anyhow::anyhow!(
+                        "{} {}. Local fallback model '{}' failed to load: {}",
+                        provider_label,
+                        issue,
+                        fallback_local_model_id,
+                        load_error
+                    )
+                })?;
+        }
+
+        self.transcribe_raw_local_with_settings_async(audio, settings)
+            .await
     }
 
     async fn transcribe_with_proxy_groq(
@@ -1117,6 +1376,15 @@ impl TranscriptionManager {
                     )
                     .await
                 }
+                CloudTranscriptionRoute::DirectOpenAi => {
+                    self.transcribe_with_direct_openai(
+                        model_id,
+                        audio,
+                        settings,
+                        allow_local_fallback_on_cloud_error,
+                    )
+                    .await
+                }
                 CloudTranscriptionRoute::BackendProxy => {
                     self.transcribe_with_proxy_groq(
                         model_id,
@@ -1158,6 +1426,15 @@ impl TranscriptionManager {
             let chunk_text = match route {
                 CloudTranscriptionRoute::DirectGroq => {
                     self.transcribe_with_direct_groq(
+                        model_id,
+                        chunk_audio,
+                        settings,
+                        allow_local_fallback_on_cloud_error,
+                    )
+                    .await?
+                }
+                CloudTranscriptionRoute::DirectOpenAi => {
+                    self.transcribe_with_direct_openai(
                         model_id,
                         chunk_audio,
                         settings,
@@ -1208,6 +1485,7 @@ impl TranscriptionManager {
             return Ok(String::new());
         }
 
+        let audio = prepare_transcription_audio(audio);
         let selected_model_id = if settings.selected_model.is_empty() {
             None
         } else {
@@ -1241,7 +1519,21 @@ impl TranscriptionManager {
                 .as_deref()
                 .ok_or_else(|| anyhow::anyhow!("No cloud model selected for transcription."))?;
 
-            if let Some(_) = self.resolve_byok_groq_api_key() {
+            if openai_api_model_name(model_id).is_some() {
+                debug!("Using direct OpenAI routing for cloud transcription");
+                return self
+                    .transcribe_cloud_with_settings(
+                        model_id,
+                        audio,
+                        settings,
+                        allow_local_fallback_on_cloud_error,
+                        proxy_metadata,
+                        CloudTranscriptionRoute::DirectOpenAi,
+                    )
+                    .await;
+            }
+
+            if self.resolve_byok_groq_api_key().is_some() {
                 debug!(
                     "Using direct Groq routing for cloud transcription because a local Groq key is present"
                 );
@@ -2110,6 +2402,31 @@ mod tests {
     }
 
     #[test]
+    fn prepare_transcription_audio_boosts_quiet_non_silent_audio() {
+        let mut audio = vec![0.0; 512];
+        audio[20] = 0.016;
+        audio[80] = -0.02;
+        audio[140] = 0.012;
+        audio[220] = -0.018;
+        audio[300] = 0.236;
+        let raw_levels = audio_levels(&audio).unwrap();
+
+        let prepared = prepare_transcription_audio(audio);
+        let prepared_levels = audio_levels(&prepared).unwrap();
+
+        assert!(prepared_levels.0 > raw_levels.0);
+        assert!(prepared_levels.1 <= QUIET_AUDIO_MAX_PEAK + f32::EPSILON);
+        assert!(prepared.iter().all(|sample| (-1.0..=1.0).contains(sample)));
+    }
+
+    #[test]
+    fn prepare_transcription_audio_does_not_boost_silence() {
+        let audio = vec![0.0, 0.0005, -0.0004, 0.0003, 0.0];
+
+        assert_eq!(prepare_transcription_audio(audio.clone()), audio);
+    }
+
+    #[test]
     fn network_error_detection_matches_common_offline_failures() {
         assert!(looks_like_network_error(
             "Groq request failed: error sending request for url: connection refused"
@@ -2202,6 +2519,17 @@ mod tests {
     }
 
     #[test]
+    fn live_openai_chunk_plan_stays_under_direct_limit() {
+        let limit = safe_live_chunk_limit_bytes(CloudTranscriptionRoute::DirectOpenAi);
+        let ranges = plan_live_chunk_ranges(SAMPLE_RATE * 60 * 31, limit).unwrap();
+        assert!(ranges.len() > 1);
+        for range in ranges {
+            let bytes = groq_client::estimate_wav_size_bytes(range.end - range.start).unwrap();
+            assert!(bytes <= limit);
+        }
+    }
+
+    #[test]
     fn live_proxy_chunk_plan_uses_fewer_chunks_than_direct() {
         let sample_count = SAMPLE_RATE * 60 * 80;
         let direct_ranges = plan_live_chunk_ranges(
@@ -2248,6 +2576,44 @@ mod tests {
             speech_levels,
             "thank you"
         ));
+    }
+
+    #[test]
+    fn empty_transcription_fallback_only_triggers_for_non_silent_audio() {
+        assert_eq!(
+            non_silent_empty_transcription_levels(&[0.0, 0.0005, -0.0004, 0.0003], ""),
+            None
+        );
+        assert_eq!(
+            non_silent_empty_transcription_levels(&[0.0, 0.08, -0.07, 0.06], "already heard"),
+            None
+        );
+        assert!(non_silent_empty_transcription_levels(&[0.0, 0.08, -0.07, 0.06], "").is_some());
+    }
+
+    #[test]
+    fn quiet_retry_boosts_low_speech_without_clipping() {
+        let mut audio = vec![0.0; 512];
+        audio[20] = 0.016;
+        audio[80] = -0.02;
+        audio[140] = 0.012;
+        audio[220] = -0.018;
+        audio[300] = 0.236;
+        let levels = audio_levels(&audio).unwrap();
+        let boosted = boost_audio_for_quiet_retry(&audio, levels).expect("expected boost");
+        let boosted_levels = audio_levels(&boosted).unwrap();
+
+        assert!(boosted_levels.0 > levels.0);
+        assert!(boosted_levels.1 <= QUIET_AUDIO_MAX_PEAK + f32::EPSILON);
+        assert!(boosted.iter().all(|sample| (-1.0..=1.0).contains(sample)));
+    }
+
+    #[test]
+    fn quiet_retry_skips_when_audio_is_already_loud_enough() {
+        let audio = vec![0.0, 0.2, -0.18, 0.16, -0.12];
+        let levels = audio_levels(&audio).unwrap();
+
+        assert!(boost_audio_for_quiet_retry(&audio, levels).is_none());
     }
 
     #[test]

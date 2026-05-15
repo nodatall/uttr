@@ -20,7 +20,8 @@ const modelSupportsLanguage = (model: ModelInfo, langCode: string): boolean => {
   return model.supported_languages.includes(langCode);
 };
 
-const isCloudModel = (modelId: string): boolean => modelId.startsWith("groq-");
+const isCloudModel = (modelId: string): boolean =>
+  modelId.startsWith("groq-") || modelId.startsWith("openai-");
 
 export const ModelsSettings: React.FC = () => {
   const { t, i18n } = useTranslation();

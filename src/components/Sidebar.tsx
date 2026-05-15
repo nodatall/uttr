@@ -150,10 +150,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
         if (isPlanSimulationActive) {
           return false;
         }
-
-        if (!settings?.debug_mode && !installAccess?.has_byok_secret) {
-          return false;
-        }
       }
 
       if (id === "models" && !showModelControls) {

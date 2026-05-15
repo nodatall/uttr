@@ -22,7 +22,7 @@ use tauri_plugin_autostart::ManagerExt;
 
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::full_system_audio::FullSystemAudioSessionManager;
-use crate::managers::model::GROQ_MODEL_WHISPER_LARGE_V3_TURBO;
+use crate::managers::model::GROQ_MODEL_WHISPER_LARGE_V3;
 use crate::settings::{
     self, get_settings, AutoSubmitKey, ByokValidationState, ClipboardHandling,
     KeyboardImplementation, OverlayPosition, PasteMethod, ShortcutBinding, SoundTheme, TypingTool,
@@ -940,7 +940,7 @@ pub fn change_post_process_api_key_setting(
             .post_process_api_keys
             .insert(provider_id, trimmed_api_key.to_string());
         if !trimmed_api_key.is_empty() && settings.selected_model.trim().is_empty() {
-            settings.selected_model = GROQ_MODEL_WHISPER_LARGE_V3_TURBO.to_string();
+            settings.selected_model = GROQ_MODEL_WHISPER_LARGE_V3.to_string();
         }
     } else {
         settings.post_process_api_keys.insert(provider_id, api_key);

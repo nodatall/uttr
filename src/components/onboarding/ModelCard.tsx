@@ -34,7 +34,10 @@ const getLanguageDisplayText = (
 };
 
 const isCloudModel = (model: ModelInfo): boolean =>
-  model.id.startsWith("groq-");
+  model.id.startsWith("groq-") || model.id.startsWith("openai-");
+
+const isDefaultLocalModel = (model: ModelInfo): boolean =>
+  model.id === "parakeet-tdt-0.6b-v3";
 
 export type ModelCardStatus =
   | "downloadable"
@@ -176,6 +179,11 @@ const ModelCard: React.FC<ModelCardProps> = ({
               <Badge variant="secondary">
                 <Cloud className="w-3 h-3 mr-1" />
                 {t("settings.models.groq.badge", { defaultValue: "Cloud" })}
+              </Badge>
+            )}
+            {isDefaultLocalModel(model) && (
+              <Badge variant="secondary">
+                {t("settings.models.localBadge", { defaultValue: "Local" })}
               </Badge>
             )}
             {status === "switching" && (

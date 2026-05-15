@@ -4,11 +4,13 @@ use crate::access::{
 };
 use crate::actions::finalize_transcription_output;
 use crate::audio_toolkit::import_audio_file;
-use crate::byok_secrets::load_groq_api_key;
+use crate::byok_secrets::{load_groq_api_key, load_openai_api_key};
 use crate::groq_client::{
     self, ProxyTranscriptionMetadata, DIRECT_GROQ_UPLOAD_LIMIT_BYTES, PROXY_GROQ_UPLOAD_LIMIT_BYTES,
 };
-use crate::managers::model::{groq_api_model_name, is_cloud_model_id, GROQ_MODEL_WHISPER_LARGE_V3};
+use crate::managers::model::{
+    groq_api_model_name, is_cloud_model_id, openai_api_model_name, GROQ_MODEL_WHISPER_LARGE_V3,
+};
 use crate::managers::transcription::{stitch_transcription_text, TranscriptionManager};
 use crate::settings::{get_settings, write_settings, ModelUnloadTimeout, SavedFileTranscription};
 use serde::Serialize;
@@ -48,6 +50,7 @@ struct FileTranscriptionProgressEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum FileTranscriptionRoute {
     DirectGroq,
+    DirectOpenAi,
     BackendProxy,
 }
 
@@ -84,7 +87,20 @@ fn nonempty_groq_api_key(app: &AppHandle) -> Option<String> {
         .filter(|key| !key.is_empty())
 }
 
-fn resolve_file_transcription_route(app: &AppHandle) -> FileTranscriptionRoute {
+fn nonempty_openai_api_key(app: &AppHandle) -> Option<String> {
+    let settings = get_settings(app);
+    load_openai_api_key(app, &settings)
+        .ok()
+        .flatten()
+        .map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty())
+}
+
+fn resolve_file_transcription_route(app: &AppHandle, model_id: &str) -> FileTranscriptionRoute {
+    if openai_api_model_name(model_id).is_some() {
+        return FileTranscriptionRoute::DirectOpenAi;
+    }
+
     if nonempty_groq_api_key(app).is_some() {
         FileTranscriptionRoute::DirectGroq
     } else {
@@ -105,6 +121,8 @@ fn safe_chunk_limit_bytes(route: FileTranscriptionRoute) -> usize {
         FileTranscriptionRoute::DirectGroq => {
             DIRECT_GROQ_UPLOAD_LIMIT_BYTES.saturating_sub(DIRECT_CHUNK_SAFETY_MARGIN_BYTES)
         }
+        FileTranscriptionRoute::DirectOpenAi => groq_client::DIRECT_OPENAI_UPLOAD_LIMIT_BYTES
+            .saturating_sub(DIRECT_CHUNK_SAFETY_MARGIN_BYTES),
         FileTranscriptionRoute::BackendProxy => {
             PROXY_GROQ_UPLOAD_LIMIT_BYTES.saturating_sub(PROXY_CHUNK_SAFETY_MARGIN_BYTES)
         }
@@ -248,11 +266,10 @@ async fn transcribe_chunk_with_groq(
     current_chunk: u32,
     total_chunks: u32,
 ) -> Result<String, String> {
-    let groq_model = groq_api_model_name(model_id)
-        .ok_or_else(|| format!("Unknown Groq model id: {}", model_id))?;
-
     match route {
         FileTranscriptionRoute::DirectGroq => {
+            let groq_model = groq_api_model_name(model_id)
+                .ok_or_else(|| format!("Unknown Groq model id: {}", model_id))?;
             let api_key = nonempty_groq_api_key(app).ok_or_else(|| {
                 "Groq API key is required for direct file transcription.".to_string()
             })?;
@@ -265,7 +282,24 @@ async fn transcribe_chunk_with_groq(
             )
             .await
         }
+        FileTranscriptionRoute::DirectOpenAi => {
+            let openai_model = openai_api_model_name(model_id)
+                .ok_or_else(|| format!("Unknown OpenAI model id: {}", model_id))?;
+            let api_key = nonempty_openai_api_key(app).ok_or_else(|| {
+                "OpenAI API key is required for direct file transcription.".to_string()
+            })?;
+            groq_client::transcribe_samples_direct_openai(
+                &api_key,
+                openai_model,
+                samples,
+                selected_language,
+                translate_to_english,
+            )
+            .await
+        }
         FileTranscriptionRoute::BackendProxy => {
+            let groq_model = groq_api_model_name(model_id)
+                .ok_or_else(|| format!("Unknown Groq model id: {}", model_id))?;
             let result = groq_client::transcribe_samples_with_metadata(
                 install_token
                     .ok_or_else(|| {
@@ -358,8 +392,8 @@ pub async fn transcribe_audio_file(
         .unwrap_or_else(|| imported.path.to_string_lossy().to_string());
 
     let settings = get_settings(&app);
-    let route = resolve_file_transcription_route(&app);
     let model_id = resolve_file_transcription_model_id(&settings.selected_model);
+    let route = resolve_file_transcription_route(&app, &model_id);
     let chunk_limit_bytes = safe_chunk_limit_bytes(route);
     let chunks = plan_chunk_ranges(imported.samples.len(), chunk_limit_bytes)?;
     if chunks.is_empty() {
@@ -502,6 +536,14 @@ mod tests {
         assert_eq!(
             resolve_file_transcription_model_id("groq-whisper-large-v3-turbo"),
             "groq-whisper-large-v3-turbo"
+        );
+    }
+
+    #[test]
+    fn resolves_selected_openai_model_when_available() {
+        assert_eq!(
+            resolve_file_transcription_model_id("openai-gpt-4o-transcribe"),
+            "openai-gpt-4o-transcribe"
         );
     }
 

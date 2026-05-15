@@ -4,6 +4,10 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { useSettings } from "@/hooks/useSettings";
 import { isDevPlanSimulationActive } from "@/lib/utils/premiumFeatures";
+import { openUrl } from "@tauri-apps/plugin-opener";
+
+const GROQ_KEYS_URL = "https://console.groq.com/keys";
+const OPENAI_KEYS_URL = "https://platform.openai.com/api-keys";
 
 export const ApiKeysSettings: React.FC = () => {
   const { t } = useTranslation();
@@ -16,6 +20,7 @@ export const ApiKeysSettings: React.FC = () => {
   } = useSettings();
 
   const [groqApiKeyDraft, setGroqApiKeyDraft] = useState("");
+  const [openAiApiKeyDraft, setOpenAiApiKeyDraft] = useState("");
 
   useEffect(() => {
     if (installAccess === null) {
@@ -24,23 +29,38 @@ export const ApiKeysSettings: React.FC = () => {
   }, [installAccess, refreshInstallAccess]);
 
   const savedGroqApiKey = settings?.post_process_api_keys?.groq ?? "";
+  const savedOpenAiApiKey = settings?.post_process_api_keys?.openai ?? "";
 
   useEffect(() => {
     setGroqApiKeyDraft(savedGroqApiKey);
   }, [savedGroqApiKey]);
 
-  const hasStoredSecret = installAccess?.has_byok_secret ?? false;
-  const isKeyUpdating = isUpdating("post_process_api_key:groq");
-  const isBusy = isKeyUpdating;
+  useEffect(() => {
+    setOpenAiApiKeyDraft(savedOpenAiApiKey);
+  }, [savedOpenAiApiKey]);
+
+  const hasStoredGroqSecret = savedGroqApiKey.trim().length > 0;
+  const hasStoredOpenAiSecret = savedOpenAiApiKey.trim().length > 0;
+  const isGroqKeyUpdating = isUpdating("post_process_api_key:groq");
+  const isOpenAiKeyUpdating = isUpdating("post_process_api_key:openai");
   const isPlanSimulationActive = isDevPlanSimulationActive(installAccess);
 
-  const handleSaveKey = async () => {
+  const handleSaveGroqKey = async () => {
     await updatePostProcessApiKey("groq", groqApiKeyDraft.trim());
   };
 
-  const handleClearKey = async () => {
+  const handleClearGroqKey = async () => {
     await updatePostProcessApiKey("groq", "");
     setGroqApiKeyDraft("");
+  };
+
+  const handleSaveOpenAiKey = async () => {
+    await updatePostProcessApiKey("openai", openAiApiKeyDraft.trim());
+  };
+
+  const handleClearOpenAiKey = async () => {
+    await updatePostProcessApiKey("openai", "");
+    setOpenAiApiKeyDraft("");
   };
 
   if (isPlanSimulationActive) {
@@ -49,51 +69,27 @@ export const ApiKeysSettings: React.FC = () => {
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-6">
-      <div className="space-y-2">
-        <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-text/34">
-          {t("settings.apiKeys.eyebrow", { defaultValue: "Cloud access" })}
-        </p>
+      <div>
         <h1 className="text-[28px] font-semibold tracking-tight text-text">
           {t("settings.apiKeys.title", { defaultValue: "API Keys" })}
         </h1>
-        <p className="max-w-2xl text-sm leading-relaxed text-text/52">
-          {t("settings.apiKeys.description", {
-            defaultValue:
-              "Add your Groq API key to use your own cloud transcription access.",
-          })}
-        </p>
       </div>
 
       <div className="rounded-[20px] border border-white/8 bg-[rgba(255,255,255,0.026)] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="space-y-1.5">
-            <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-text/34">
-              {t("settings.apiKeys.groq.sectionLabel", {
-                defaultValue: "Groq",
-              })}
-            </p>
-            <h2 className="text-xl font-semibold tracking-tight text-text">
-              {t("settings.apiKeys.groq.title", {
-                defaultValue: "Groq API key",
-              })}
-            </h2>
-            <p className="max-w-xl text-sm leading-relaxed text-text/50">
-              {t("settings.apiKeys.groq.description", {
-                defaultValue:
-                  "Use your own Groq key for transcription. Save a new key here any time to replace the current one.",
-              })}
-            </p>
-          </div>
-          <span className="inline-flex items-center rounded-full border border-white/8 bg-white/[0.03] px-3 py-1.5 text-xs font-medium text-text/62">
-            {hasStoredSecret
-              ? t("settings.apiKeys.groq.configured", {
-                  defaultValue: "Configured",
-                })
-              : t("settings.apiKeys.groq.notConfigured", {
-                  defaultValue: "Not configured",
-                })}
-          </span>
-        </div>
+        <h2 className="text-xl font-semibold tracking-tight text-text">
+          {t("settings.apiKeys.groq.title", {
+            defaultValue: "Groq Cloud",
+          })}
+        </h2>
+        <button
+          type="button"
+          onClick={() => {
+            void openUrl(GROQ_KEYS_URL);
+          }}
+          className="mt-1 cursor-pointer text-sm text-text/48 transition-colors hover:text-text/72"
+        >
+          {GROQ_KEYS_URL}
+        </button>
 
         <div className="mt-5 space-y-4">
           <div className="space-y-2.5">
@@ -107,7 +103,7 @@ export const ApiKeysSettings: React.FC = () => {
               value={groqApiKeyDraft}
               onChange={(event) => setGroqApiKeyDraft(event.target.value)}
               placeholder={
-                hasStoredSecret
+                hasStoredGroqSecret
                   ? t("settings.apiKeys.groq.stored", {
                       defaultValue: "Saved key",
                     })
@@ -115,15 +111,9 @@ export const ApiKeysSettings: React.FC = () => {
                       defaultValue: "gsk_...",
                     })
               }
-              disabled={isBusy}
+              disabled={isGroqKeyUpdating}
               className="w-full"
             />
-            <p className="text-xs leading-relaxed text-text/42">
-              {t("settings.apiKeys.groq.storageNote", {
-                defaultValue:
-                  "The saved key stays in this field so you can inspect, replace, or clear it.",
-              })}
-            </p>
           </div>
 
           <div className="flex flex-wrap gap-2 pt-1">
@@ -132,21 +122,101 @@ export const ApiKeysSettings: React.FC = () => {
               variant="primary-soft"
               size="sm"
               onClick={() => {
-                void handleSaveKey();
+                void handleSaveGroqKey();
               }}
-              disabled={isBusy || groqApiKeyDraft.trim().length === 0}
+              disabled={
+                isGroqKeyUpdating ||
+                hasStoredGroqSecret ||
+                groqApiKeyDraft.trim().length === 0
+              }
             >
               {t("settings.apiKeys.save", { defaultValue: "Save key" })}
             </Button>
-            {hasStoredSecret && (
+            {hasStoredGroqSecret && (
               <Button
                 type="button"
                 variant="ghost"
                 size="sm"
                 onClick={() => {
-                  void handleClearKey();
+                  void handleClearGroqKey();
                 }}
-                disabled={isBusy}
+                disabled={isGroqKeyUpdating}
+              >
+                {t("settings.apiKeys.clear", {
+                  defaultValue: "Clear key",
+                })}
+              </Button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      <div className="rounded-[20px] border border-white/8 bg-[rgba(255,255,255,0.026)] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]">
+        <h2 className="text-xl font-semibold tracking-tight text-text">
+          {t("settings.apiKeys.openai.title", {
+            defaultValue: "OpenAI",
+          })}
+        </h2>
+        <button
+          type="button"
+          onClick={() => {
+            void openUrl(OPENAI_KEYS_URL);
+          }}
+          className="mt-1 cursor-pointer text-sm text-text/48 transition-colors hover:text-text/72"
+        >
+          {OPENAI_KEYS_URL}
+        </button>
+
+        <div className="mt-5 space-y-4">
+          <div className="space-y-2.5">
+            <label className="text-xs font-medium uppercase tracking-[0.18em] text-text/34">
+              {t("settings.apiKeys.openai.keyLabel", {
+                defaultValue: "OpenAI API key",
+              })}
+            </label>
+            <Input
+              type="password"
+              value={openAiApiKeyDraft}
+              onChange={(event) => setOpenAiApiKeyDraft(event.target.value)}
+              placeholder={
+                hasStoredOpenAiSecret
+                  ? t("settings.apiKeys.openai.stored", {
+                      defaultValue: "Saved key",
+                    })
+                  : t("settings.apiKeys.openai.placeholder", {
+                      defaultValue: "sk-...",
+                    })
+              }
+              disabled={isOpenAiKeyUpdating}
+              className="w-full"
+            />
+          </div>
+
+          <div className="flex flex-wrap gap-2 pt-1">
+            <Button
+              type="button"
+              variant="primary-soft"
+              size="sm"
+              onClick={() => {
+                void handleSaveOpenAiKey();
+              }}
+              disabled={
+                isOpenAiKeyUpdating ||
+                hasStoredOpenAiSecret ||
+                openAiApiKeyDraft.trim().length === 0
+              }
+            >
+              {t("settings.apiKeys.save", { defaultValue: "Save key" })}
+            </Button>
+            {hasStoredOpenAiSecret && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  void handleClearOpenAiKey();
+                }}
+                disabled={isOpenAiKeyUpdating}
               >
                 {t("settings.apiKeys.clear", {
                   defaultValue: "Clear key",

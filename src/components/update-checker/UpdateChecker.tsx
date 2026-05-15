@@ -6,6 +6,19 @@ import { listen } from "@tauri-apps/api/event";
 import { ProgressBar } from "../shared";
 import { useSettings } from "../../hooks/useSettings";
 
+const AUTO_UPDATE_CHECK_DELAY_MS = 6000;
+let sharedUpdateCheckPromise: ReturnType<typeof check> | null = null;
+
+const runSharedUpdateCheck = () => {
+  if (!sharedUpdateCheckPromise) {
+    sharedUpdateCheckPromise = check().finally(() => {
+      sharedUpdateCheckPromise = null;
+    });
+  }
+
+  return sharedUpdateCheckPromise;
+};
+
 interface UpdateCheckerProps {
   className?: string;
 }
@@ -24,6 +37,8 @@ const UpdateChecker: React.FC<UpdateCheckerProps> = ({ className = "" }) => {
   const updateChecksEnabled = settings?.update_checks_enabled ?? false;
 
   const upToDateTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const autoCheckTimeoutRef = useRef<ReturnType<typeof setTimeout>>();
+  const isCheckingRef = useRef(false);
   const isManualCheckRef = useRef(false);
   const downloadedBytesRef = useRef(0);
   const contentLengthRef = useRef(0);
@@ -42,7 +57,9 @@ const UpdateChecker: React.FC<UpdateCheckerProps> = ({ className = "" }) => {
       return;
     }
 
-    checkForUpdates();
+    autoCheckTimeoutRef.current = setTimeout(() => {
+      void checkForUpdates();
+    }, AUTO_UPDATE_CHECK_DELAY_MS);
 
     // Listen for update check events
     const updateUnlisten = listen("check-for-updates", () => {
@@ -53,17 +70,22 @@ const UpdateChecker: React.FC<UpdateCheckerProps> = ({ className = "" }) => {
       if (upToDateTimeoutRef.current) {
         clearTimeout(upToDateTimeoutRef.current);
       }
+      if (autoCheckTimeoutRef.current) {
+        clearTimeout(autoCheckTimeoutRef.current);
+      }
       updateUnlisten.then((fn) => fn());
     };
   }, [settingsLoaded, updateChecksEnabled]);
 
   // Update checking functions
-  const checkForUpdates = async () => {
-    if (!updateChecksEnabled || isChecking) return;
+  const checkForUpdates = async (manual = false) => {
+    if (!updateChecksEnabled || isCheckingRef.current) return;
 
     try {
+      isCheckingRef.current = true;
+      isManualCheckRef.current = manual;
       setIsChecking(true);
-      const update = await check();
+      const update = await runSharedUpdateCheck();
 
       if (update) {
         setUpdateAvailable(true);
@@ -84,6 +106,7 @@ const UpdateChecker: React.FC<UpdateCheckerProps> = ({ className = "" }) => {
     } catch (error) {
       console.error("Failed to check for updates:", error);
     } finally {
+      isCheckingRef.current = false;
       setIsChecking(false);
       isManualCheckRef.current = false;
     }
@@ -91,8 +114,10 @@ const UpdateChecker: React.FC<UpdateCheckerProps> = ({ className = "" }) => {
 
   const handleManualUpdateCheck = () => {
     if (!updateChecksEnabled) return;
-    isManualCheckRef.current = true;
-    checkForUpdates();
+    if (autoCheckTimeoutRef.current) {
+      clearTimeout(autoCheckTimeoutRef.current);
+    }
+    void checkForUpdates(true);
   };
 
   const installUpdate = async () => {

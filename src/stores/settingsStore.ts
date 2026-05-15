@@ -14,6 +14,8 @@ const getBrowserE2ETestState = () =>
 
 let installAccessChangedListener: Promise<UnlistenFn> | null = null;
 let settingsChangedListener: Promise<UnlistenFn> | null = null;
+let initializePromise: Promise<void> | null = null;
+let refreshInstallAccessPromise: Promise<void> | null = null;
 
 type SettingsChangedPayload<K extends keyof Settings = keyof Settings> = {
   setting: K;
@@ -259,25 +261,35 @@ export const useSettingsStore = create<SettingsStore>()(
     },
 
     refreshInstallAccess: async () => {
-      try {
-        const testState = getBrowserE2ETestState();
-        if (testState?.installAccess) {
-          set({ installAccess: testState.installAccess });
-          return;
-        }
-
-        const result = await commands.refreshInstallEntitlement();
-        if (result.status === "ok") {
-          set({ installAccess: result.data });
-          return;
-        }
-
-        console.error("Failed to refresh install entitlement:", result.error);
-        await get().loadInstallAccessSnapshot();
-      } catch (error) {
-        console.error("Failed to refresh install entitlement:", error);
-        await get().loadInstallAccessSnapshot();
+      if (refreshInstallAccessPromise) {
+        return refreshInstallAccessPromise;
       }
+
+      refreshInstallAccessPromise = (async () => {
+        try {
+          const testState = getBrowserE2ETestState();
+          if (testState?.installAccess) {
+            set({ installAccess: testState.installAccess });
+            return;
+          }
+
+          const result = await commands.refreshInstallEntitlement();
+          if (result.status === "ok") {
+            set({ installAccess: result.data });
+            return;
+          }
+
+          console.error("Failed to refresh install entitlement:", result.error);
+          await get().loadInstallAccessSnapshot();
+        } catch (error) {
+          console.error("Failed to refresh install entitlement:", error);
+          await get().loadInstallAccessSnapshot();
+        } finally {
+          refreshInstallAccessPromise = null;
+        }
+      })();
+
+      return refreshInstallAccessPromise;
     },
 
     // Load audio devices
@@ -586,7 +598,7 @@ export const useSettingsStore = create<SettingsStore>()(
         },
       }));
       await get().updatePostProcessSetting("api_key", providerId, apiKey);
-      if (providerId === "groq") {
+      if (providerId === "groq" || providerId === "openai") {
         await get().refreshInstallAccess();
       }
     },
@@ -681,49 +693,59 @@ export const useSettingsStore = create<SettingsStore>()(
 
     // Initialize everything
     initialize: async () => {
-      const {
-        refreshSettings,
-        checkCustomSounds,
-        loadDefaultSettings,
-        loadInstallAccessSnapshot,
-        refreshInstallAccess,
-      } = get();
-
-      if (!installAccessChangedListener && typeof window !== "undefined") {
-        installAccessChangedListener = listen<InstallAccessSnapshot>(
-          "install-access-changed",
-          (event) => {
-            set({ installAccess: event.payload });
-          },
-        );
+      if (initializePromise) {
+        return initializePromise;
       }
 
-      if (!settingsChangedListener && typeof window !== "undefined") {
-        settingsChangedListener = listen<SettingsChangedPayload>(
-          "settings-changed",
-          (event) => {
-            const { setting, value } = event.payload;
-            set((state) => ({
-              settings: state.settings
-                ? { ...state.settings, [setting]: value }
-                : state.settings,
-            }));
-          },
-        );
-      }
+      initializePromise = (async () => {
+        const {
+          refreshSettings,
+          checkCustomSounds,
+          loadDefaultSettings,
+          loadInstallAccessSnapshot,
+          refreshInstallAccess,
+        } = get();
 
-      // Note: Audio devices are NOT refreshed here. The frontend (App.tsx)
-      // is responsible for calling refreshAudioDevices/refreshOutputDevices
-      // after onboarding completes. This avoids triggering permission dialogs
-      // on macOS before the user is ready.
-      await Promise.all([
-        loadDefaultSettings(),
-        refreshSettings(),
-        loadInstallAccessSnapshot(),
-        checkCustomSounds(),
-      ]);
+        if (!installAccessChangedListener && typeof window !== "undefined") {
+          installAccessChangedListener = listen<InstallAccessSnapshot>(
+            "install-access-changed",
+            (event) => {
+              set({ installAccess: event.payload });
+            },
+          );
+        }
 
-      void refreshInstallAccess();
+        if (!settingsChangedListener && typeof window !== "undefined") {
+          settingsChangedListener = listen<SettingsChangedPayload>(
+            "settings-changed",
+            (event) => {
+              const { setting, value } = event.payload;
+              set((state) => ({
+                settings: state.settings
+                  ? { ...state.settings, [setting]: value }
+                  : state.settings,
+              }));
+            },
+          );
+        }
+
+        // Note: Audio devices are NOT refreshed here. The frontend (App.tsx)
+        // is responsible for calling refreshAudioDevices/refreshOutputDevices
+        // after onboarding completes. This avoids triggering permission dialogs
+        // on macOS before the user is ready.
+        await Promise.all([
+          loadDefaultSettings(),
+          refreshSettings(),
+          loadInstallAccessSnapshot(),
+          checkCustomSounds(),
+        ]);
+
+        void refreshInstallAccess();
+      })().finally(() => {
+        initializePromise = null;
+      });
+
+      return initializePromise;
     },
   })),
 );

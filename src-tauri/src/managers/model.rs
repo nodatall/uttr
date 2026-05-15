@@ -27,10 +27,11 @@ pub enum EngineType {
 
 pub const GROQ_MODEL_WHISPER_LARGE_V3_TURBO: &str = "groq-whisper-large-v3-turbo";
 pub const GROQ_MODEL_WHISPER_LARGE_V3: &str = "groq-whisper-large-v3";
+pub const OPENAI_MODEL_GPT_4O_TRANSCRIBE: &str = "openai-gpt-4o-transcribe";
 pub const DEFAULT_LOCAL_MODEL_ID: &str = "parakeet-tdt-0.6b-v3";
 
 pub fn is_cloud_model_id(model_id: &str) -> bool {
-    model_id.starts_with("groq-")
+    model_id.starts_with("groq-") || model_id.starts_with("openai-")
 }
 
 fn is_user_visible_model_id(model_id: &str) -> bool {
@@ -41,6 +42,13 @@ pub fn groq_api_model_name(model_id: &str) -> Option<&'static str> {
     match model_id {
         GROQ_MODEL_WHISPER_LARGE_V3_TURBO => Some("whisper-large-v3-turbo"),
         GROQ_MODEL_WHISPER_LARGE_V3 => Some("whisper-large-v3"),
+        _ => None,
+    }
+}
+
+pub fn openai_api_model_name(model_id: &str) -> Option<&'static str> {
+    match model_id {
+        OPENAI_MODEL_GPT_4O_TRANSCRIBE => Some("gpt-4o-transcribe"),
         _ => None,
     }
 }
@@ -258,7 +266,7 @@ impl ModelManager {
             ModelInfo {
                 id: GROQ_MODEL_WHISPER_LARGE_V3_TURBO.to_string(),
                 name: "Groq Whisper Large V3 Turbo".to_string(),
-                description: "Cloud model. Extremely fast. Requires internet.".to_string(),
+                description: "Extremely fast.".to_string(),
                 filename: GROQ_MODEL_WHISPER_LARGE_V3_TURBO.to_string(),
                 url: None,
                 size_mb: 0,
@@ -281,7 +289,7 @@ impl ModelManager {
             ModelInfo {
                 id: GROQ_MODEL_WHISPER_LARGE_V3.to_string(),
                 name: "Groq Whisper Large V3".to_string(),
-                description: "Cloud model. Higher quality. Requires internet.".to_string(),
+                description: "Higher quality.".to_string(),
                 filename: GROQ_MODEL_WHISPER_LARGE_V3.to_string(),
                 url: None,
                 size_mb: 0,
@@ -293,6 +301,29 @@ impl ModelManager {
                 accuracy_score: 0.88,
                 speed_score: 0.92,
                 supports_translation: true,
+                is_recommended: false,
+                supported_languages: whisper_languages.clone(),
+                is_custom: false,
+            },
+        );
+
+        available_models.insert(
+            OPENAI_MODEL_GPT_4O_TRANSCRIBE.to_string(),
+            ModelInfo {
+                id: OPENAI_MODEL_GPT_4O_TRANSCRIBE.to_string(),
+                name: "OpenAI GPT-4o Transcribe".to_string(),
+                description: "Accuracy-first dictation.".to_string(),
+                filename: OPENAI_MODEL_GPT_4O_TRANSCRIBE.to_string(),
+                url: None,
+                size_mb: 0,
+                is_downloaded: true,
+                is_downloading: false,
+                partial_size: 0,
+                is_directory: false,
+                engine_type: EngineType::Whisper,
+                accuracy_score: 0.94,
+                speed_score: 0.88,
+                supports_translation: false,
                 is_recommended: false,
                 supported_languages: whisper_languages.clone(),
                 is_custom: false,

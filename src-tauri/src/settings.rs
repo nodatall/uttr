@@ -908,11 +908,14 @@ fn ensure_onboarding_defaults(settings: &mut AppSettings) -> bool {
 }
 
 pub fn ensure_default_selected_transcription_model(settings: &mut AppSettings) -> bool {
-    if !settings.selected_model.trim().is_empty() {
+    let selected_model = settings.selected_model.trim();
+    if !selected_model.is_empty()
+        && selected_model != crate::managers::model::GROQ_MODEL_WHISPER_LARGE_V3_TURBO
+    {
         return false;
     }
 
-    settings.selected_model = crate::managers::model::GROQ_MODEL_WHISPER_LARGE_V3_TURBO.to_string();
+    settings.selected_model = crate::managers::model::GROQ_MODEL_WHISPER_LARGE_V3.to_string();
     true
 }
 
@@ -1413,7 +1416,7 @@ mod tests {
         assert!(ensure_default_selected_transcription_model(&mut settings));
         assert_eq!(
             settings.selected_model,
-            crate::managers::model::GROQ_MODEL_WHISPER_LARGE_V3_TURBO
+            crate::managers::model::GROQ_MODEL_WHISPER_LARGE_V3
         );
     }
 
@@ -1431,6 +1434,20 @@ mod tests {
     }
 
     #[test]
+    fn default_transcription_model_migrates_old_turbo_default_to_full_groq() {
+        let mut settings = get_default_settings();
+        settings.onboarding_completed = true;
+        settings.selected_model =
+            crate::managers::model::GROQ_MODEL_WHISPER_LARGE_V3_TURBO.to_string();
+
+        assert!(ensure_default_selected_transcription_model(&mut settings));
+        assert_eq!(
+            settings.selected_model,
+            crate::managers::model::GROQ_MODEL_WHISPER_LARGE_V3
+        );
+    }
+
+    #[test]
     fn onboarding_defaults_repair_completed_install_without_model() {
         let mut settings = get_default_settings();
         settings.onboarding_completed = true;
@@ -1440,7 +1457,7 @@ mod tests {
         assert!(settings.onboarding_completed);
         assert_eq!(
             settings.selected_model,
-            crate::managers::model::GROQ_MODEL_WHISPER_LARGE_V3_TURBO
+            crate::managers::model::GROQ_MODEL_WHISPER_LARGE_V3
         );
     }
 

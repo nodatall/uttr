@@ -245,6 +245,10 @@ fn apply_dev_access_override(snapshot: &mut InstallAccessSnapshot) {
 #[cfg(not(debug_assertions))]
 fn apply_dev_access_override(_snapshot: &mut InstallAccessSnapshot) {}
 
+fn has_transcription_api_secret(app: &AppHandle, settings: &AppSettings) -> bool {
+    crate::byok_secrets::has_any_transcription_api_key(app, settings)
+}
+
 fn has_groq_secret(app: &AppHandle, settings: &AppSettings) -> bool {
     crate::byok_secrets::load_groq_api_key(app, settings)
         .map(|value| value.is_some())
@@ -260,7 +264,7 @@ fn ensure_identity(app: &AppHandle) -> AppSettings {
 }
 
 fn byok_access_snapshot(app: &AppHandle, settings: &AppSettings) -> InstallAccessSnapshot {
-    access_snapshot(settings, has_groq_secret(app, settings))
+    access_snapshot(settings, has_transcription_api_secret(app, settings))
 }
 
 async fn bootstrap_install_state_internal(
@@ -307,7 +311,7 @@ async fn bootstrap_install_state_internal(
     let refreshed_settings = get_settings(app);
     Ok(access_snapshot(
         &refreshed_settings,
-        has_groq_secret(app, &refreshed_settings),
+        has_transcription_api_secret(app, &refreshed_settings),
     ))
 }
 
@@ -368,14 +372,14 @@ async fn refresh_entitlement_state_internal(
     let refreshed_settings = get_settings(app);
     Ok(access_snapshot(
         &refreshed_settings,
-        has_groq_secret(app, &refreshed_settings),
+        has_transcription_api_secret(app, &refreshed_settings),
     ))
 }
 
 async fn request_claim_token_internal(app: &AppHandle) -> Result<ClaimTokenResult, String> {
     let mut settings = ensure_identity(app);
     if has_groq_secret(app, &settings) {
-        return Err("Claim flow is not required when using a Groq BYOK key.".to_string());
+        return Err("Claim flow is not required when using a BYOK transcription key.".to_string());
     }
 
     if settings.install_token.trim().is_empty() {
@@ -490,7 +494,7 @@ pub fn install_access_allows_premium_features(snapshot: &InstallAccessSnapshot) 
 
 pub fn get_install_access_snapshot(app: &AppHandle) -> InstallAccessSnapshot {
     let settings = ensure_identity(app);
-    access_snapshot(&settings, has_groq_secret(app, &settings))
+    access_snapshot(&settings, has_transcription_api_secret(app, &settings))
 }
 
 #[cfg(debug_assertions)]
