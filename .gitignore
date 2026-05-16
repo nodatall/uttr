@@ -42,5 +42,6 @@ blob-report/
 .direnv
 .envrc
 .env.local
+.codex/
 marketing-site/supabase/.branches/
 marketing-site/supabase/.temp/
