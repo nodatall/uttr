@@ -22,7 +22,7 @@ use tauri_plugin_autostart::ManagerExt;
 
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::full_system_audio::FullSystemAudioSessionManager;
-use crate::managers::model::GROQ_MODEL_WHISPER_LARGE_V3;
+use crate::managers::model::{GROQ_MODEL_WHISPER_LARGE_V3, OPENAI_MODEL_GPT_4O_TRANSCRIBE};
 use crate::settings::{
     self, get_settings, AutoSubmitKey, ByokValidationState, ClipboardHandling,
     KeyboardImplementation, OverlayPosition, PasteMethod, ShortcutBinding, SoundTheme, TypingTool,
@@ -923,6 +923,38 @@ fn validate_provider_exists(
     Ok(())
 }
 
+fn any_post_process_api_key_configured(settings: &settings::AppSettings) -> bool {
+    settings
+        .post_process_api_keys
+        .values()
+        .any(|api_key| !api_key.trim().is_empty())
+}
+
+fn first_api_key_transcription_model(provider_id: &str) -> Option<&'static str> {
+    match provider_id {
+        "groq" => Some(GROQ_MODEL_WHISPER_LARGE_V3),
+        "openai" => Some(OPENAI_MODEL_GPT_4O_TRANSCRIBE),
+        _ => None,
+    }
+}
+
+fn maybe_select_first_api_key_transcription_model(
+    settings: &mut settings::AppSettings,
+    provider_id: &str,
+    api_key: &str,
+) -> bool {
+    if api_key.trim().is_empty() || any_post_process_api_key_configured(settings) {
+        return false;
+    }
+
+    let Some(model_id) = first_api_key_transcription_model(provider_id) else {
+        return false;
+    };
+
+    settings.selected_model = model_id.to_string();
+    true
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn change_post_process_api_key_setting(
@@ -932,20 +964,28 @@ pub fn change_post_process_api_key_setting(
 ) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     validate_provider_exists(&settings, &provider_id)?;
+    let trimmed_api_key = api_key.trim();
+    let selected_model_changed = maybe_select_first_api_key_transcription_model(
+        &mut settings,
+        &provider_id,
+        trimmed_api_key,
+    );
+
     if provider_id == "groq" {
-        let trimmed_api_key = api_key.trim();
         settings.byok_validation_state = ByokValidationState::Unknown;
         settings.byok_enabled = false;
         settings
             .post_process_api_keys
             .insert(provider_id, trimmed_api_key.to_string());
-        if !trimmed_api_key.is_empty() && settings.selected_model.trim().is_empty() {
-            settings.selected_model = GROQ_MODEL_WHISPER_LARGE_V3.to_string();
-        }
     } else {
-        settings.post_process_api_keys.insert(provider_id, api_key);
+        settings
+            .post_process_api_keys
+            .insert(provider_id, trimmed_api_key.to_string());
     }
     settings::write_settings(&app, settings);
+    if selected_model_changed {
+        let _ = app.emit("model-state-changed", ());
+    }
     Ok(())
 }
 
@@ -1102,4 +1142,72 @@ pub fn change_show_tray_icon_setting(app: AppHandle, enabled: bool) -> Result<()
     tray::set_tray_visibility(&app, enabled);
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::managers::model::DEFAULT_LOCAL_MODEL_ID;
+
+    #[test]
+    fn first_groq_api_key_selects_groq_transcription_model() {
+        let mut settings = settings::get_default_settings();
+        settings.selected_model = DEFAULT_LOCAL_MODEL_ID.to_string();
+
+        assert!(maybe_select_first_api_key_transcription_model(
+            &mut settings,
+            "groq",
+            "gsk_test"
+        ));
+        assert_eq!(settings.selected_model, GROQ_MODEL_WHISPER_LARGE_V3);
+    }
+
+    #[test]
+    fn first_openai_api_key_selects_openai_transcription_model() {
+        let mut settings = settings::get_default_settings();
+        settings.selected_model = DEFAULT_LOCAL_MODEL_ID.to_string();
+
+        assert!(maybe_select_first_api_key_transcription_model(
+            &mut settings,
+            "openai",
+            "sk-test"
+        ));
+        assert_eq!(settings.selected_model, OPENAI_MODEL_GPT_4O_TRANSCRIBE);
+    }
+
+    #[test]
+    fn later_api_key_does_not_change_existing_transcription_model() {
+        let mut settings = settings::get_default_settings();
+        settings.selected_model = GROQ_MODEL_WHISPER_LARGE_V3.to_string();
+        settings
+            .post_process_api_keys
+            .insert("groq".to_string(), "gsk_existing".to_string());
+
+        assert!(!maybe_select_first_api_key_transcription_model(
+            &mut settings,
+            "openai",
+            "sk-test"
+        ));
+        assert_eq!(settings.selected_model, GROQ_MODEL_WHISPER_LARGE_V3);
+    }
+
+    #[test]
+    fn empty_or_unrelated_api_key_does_not_change_transcription_model() {
+        let mut settings = settings::get_default_settings();
+        settings.selected_model = DEFAULT_LOCAL_MODEL_ID.to_string();
+
+        assert!(!maybe_select_first_api_key_transcription_model(
+            &mut settings,
+            "groq",
+            "  "
+        ));
+        assert_eq!(settings.selected_model, DEFAULT_LOCAL_MODEL_ID);
+
+        assert!(!maybe_select_first_api_key_transcription_model(
+            &mut settings,
+            "anthropic",
+            "sk-ant-test"
+        ));
+        assert_eq!(settings.selected_model, DEFAULT_LOCAL_MODEL_ID);
+    }
 }
