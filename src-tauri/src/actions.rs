@@ -747,14 +747,49 @@ fn silent_audio_levels(samples: &[f32]) -> Option<(f32, f32)> {
 }
 
 fn is_effectively_silent_audio(samples: &[f32]) -> bool {
-    const MAX_SILENT_RMS: f32 = 0.0015;
-    const MAX_SILENT_PEAK: f32 = 0.01;
+    const MAX_SILENT_RMS: f32 = 0.005;
+    const MAX_SILENT_PEAK: f32 = 0.05;
 
     let Some((rms, peak)) = silent_audio_levels(samples) else {
         return true;
     };
 
     rms <= MAX_SILENT_RMS && peak <= MAX_SILENT_PEAK
+}
+
+fn should_refresh_microphone_stream_after_suspected_no_input(
+    settings: &AppSettings,
+    completion_mode: TranscriptionCompletionMode,
+) -> bool {
+    completion_mode == TranscriptionCompletionMode::Standard
+        && settings.always_on_microphone
+        && settings.selected_microphone.is_some()
+}
+
+fn refresh_microphone_stream_after_suspected_no_input(
+    app: &AppHandle,
+    binding_id: &str,
+    completion_mode: TranscriptionCompletionMode,
+) {
+    let settings = get_settings(app);
+    if !should_refresh_microphone_stream_after_suspected_no_input(&settings, completion_mode) {
+        return;
+    }
+
+    let Some(recorder) = app.try_state::<Arc<AudioRecordingManager>>() else {
+        return;
+    };
+
+    log::info!(
+        "Refreshing microphone stream after suspected no-input capture for '{}'",
+        binding_id
+    );
+    if let Err(err) = recorder.update_selected_device() {
+        warn!(
+            "Failed to refresh microphone stream after suspected no-input capture: {}",
+            err
+        );
+    }
 }
 
 fn should_use_incremental_transcription(settings: &AppSettings, tm: &TranscriptionManager) -> bool {
@@ -1015,6 +1050,11 @@ fn handle_transcription_stop(
         match transcription_result {
             Ok(transcription) => {
                 if suspected_no_input && transcription.trim().is_empty() {
+                    refresh_microphone_stream_after_suspected_no_input(
+                        &ah,
+                        &binding_id,
+                        completion_mode,
+                    );
                     ui_guard.suppress();
                     spawn_no_input_overlay_feedback(&ah, post_process);
                     return;
@@ -1151,6 +1191,11 @@ fn handle_transcription_stop(
             }
             Err(err) => {
                 if suspected_no_input {
+                    refresh_microphone_stream_after_suspected_no_input(
+                        &ah,
+                        &binding_id,
+                        completion_mode,
+                    );
                     ui_guard.suppress();
                     spawn_no_input_overlay_feedback(&ah, post_process);
                     return;
@@ -1715,10 +1760,11 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
-        clean_post_process_response, is_supported_post_process_model, select_preferred_groq_model,
+        clean_post_process_response, is_effectively_silent_audio, is_supported_post_process_model,
+        select_preferred_groq_model, should_refresh_microphone_stream_after_suspected_no_input,
         toggle_post_process_enabled, transcription_timeout_for_samples,
-        transcription_watchdog_delay, usable_post_processed_text, ACTION_MAP,
-        FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT,
+        transcription_watchdog_delay, usable_post_processed_text, TranscriptionCompletionMode,
+        ACTION_MAP, FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT,
     };
     use crate::settings::get_default_settings;
 
@@ -1774,6 +1820,40 @@ mod tests {
         let long_timeout = transcription_timeout_for_samples(16_000 * 60 * 31);
         let long_watchdog = transcription_watchdog_delay(16_000 * 60 * 31);
         assert!(long_watchdog > long_timeout);
+    }
+
+    #[test]
+    fn observed_stale_microphone_levels_count_as_silent_audio() {
+        let mut samples = vec![0.003402; 20_000];
+        samples[100] = 0.030187;
+
+        assert!(is_effectively_silent_audio(&samples));
+        assert!(!is_effectively_silent_audio(&[
+            0.0, 0.08, -0.07, 0.06, -0.05, 0.04
+        ]));
+    }
+
+    #[test]
+    fn microphone_refresh_only_applies_to_named_always_on_standard_recording() {
+        let mut settings = get_default_settings();
+        settings.always_on_microphone = true;
+        settings.selected_microphone = Some("DJI MIC MINI".to_string());
+
+        assert!(should_refresh_microphone_stream_after_suspected_no_input(
+            &settings,
+            TranscriptionCompletionMode::Standard
+        ));
+
+        assert!(!should_refresh_microphone_stream_after_suspected_no_input(
+            &settings,
+            TranscriptionCompletionMode::FullSystemOverlay
+        ));
+
+        settings.selected_microphone = None;
+        assert!(!should_refresh_microphone_stream_after_suspected_no_input(
+            &settings,
+            TranscriptionCompletionMode::Standard
+        ));
     }
 
     #[test]

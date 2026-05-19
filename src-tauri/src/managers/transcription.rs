@@ -223,18 +223,34 @@ fn is_effectively_silent(levels: (f32, f32)) -> bool {
     levels.0 <= MAX_SILENT_RMS && levels.1 <= MAX_SILENT_PEAK
 }
 
+fn is_near_silent_punctuation_candidate(levels: (f32, f32)) -> bool {
+    const MAX_PUNCTUATION_RMS: f32 = 0.005;
+    const MAX_PUNCTUATION_PEAK: f32 = 0.05;
+
+    levels.0 <= MAX_PUNCTUATION_RMS && levels.1 <= MAX_PUNCTUATION_PEAK
+}
+
+fn is_punctuation_only_transcription(text: &str) -> bool {
+    let trimmed = text.trim();
+    !trimmed.is_empty() && trimmed.chars().all(|ch| ch.is_ascii_punctuation())
+}
+
 fn should_suppress_silence_hallucination(levels: Option<(f32, f32)>, transcription: &str) -> bool {
     const SILENCE_HALLUCINATIONS: &[&str] =
         &["thank you", "thanks for watching", "thank you for watching"];
+
+    let Some(levels) = levels else {
+        return false;
+    };
+
+    if is_punctuation_only_transcription(transcription) {
+        return is_near_silent_punctuation_candidate(levels);
+    }
 
     let normalized = normalized_silence_hallucination_text(transcription);
     if !SILENCE_HALLUCINATIONS.contains(&normalized.as_str()) {
         return false;
     }
-
-    let Some(levels) = levels else {
-        return false;
-    };
 
     is_effectively_silent(levels)
 }
@@ -2590,12 +2606,27 @@ mod tests {
     }
 
     #[test]
+    fn silence_hallucination_detection_suppresses_near_silent_punctuation() {
+        let near_silent_levels = Some((0.003402, 0.030187));
+
+        assert!(should_suppress_silence_hallucination(
+            near_silent_levels,
+            "?"
+        ));
+        assert!(should_suppress_silence_hallucination(
+            near_silent_levels,
+            "..."
+        ));
+    }
+
+    #[test]
     fn silence_hallucination_detection_does_not_suppress_real_speech_levels() {
         let speech_levels = audio_levels(&[0.0, 0.08, -0.07, 0.06, -0.05, 0.04]);
         assert!(!should_suppress_silence_hallucination(
             speech_levels,
             "thank you"
         ));
+        assert!(!should_suppress_silence_hallucination(speech_levels, "?"));
     }
 
     #[test]
