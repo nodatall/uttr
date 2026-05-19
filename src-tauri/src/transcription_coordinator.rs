@@ -10,6 +10,7 @@ use tauri::{AppHandle, Manager};
 
 const DEBOUNCE: Duration = Duration::from_millis(30);
 const PROCESSING_WATCHDOG: Duration = Duration::from_secs(20);
+const SUPPRESS_AFTER_IGNORED_PUSH_TO_TALK_RELEASE: Duration = Duration::from_millis(1500);
 
 /// Commands processed sequentially by the coordinator thread.
 #[derive(Clone)]
@@ -31,6 +32,45 @@ enum Stage {
     Idle,
     Recording(String), // binding_id
     Processing,
+}
+
+#[derive(Default)]
+struct PushToTalkSuppression {
+    ignored_press_binding: Option<String>,
+    suppress_until: Option<Instant>,
+}
+
+impl PushToTalkSuppression {
+    fn note_ignored_processing_press(&mut self, binding_id: &str) {
+        self.ignored_press_binding = Some(binding_id.to_string());
+    }
+
+    fn consume_release_after_ignored_press(&mut self, binding_id: &str, now: Instant) -> bool {
+        if self.ignored_press_binding.as_deref() != Some(binding_id) {
+            return false;
+        }
+
+        self.ignored_press_binding = None;
+        self.suppress_until = Some(now + SUPPRESS_AFTER_IGNORED_PUSH_TO_TALK_RELEASE);
+        true
+    }
+
+    fn suppresses_press(&mut self, binding_id: &str, now: Instant) -> bool {
+        match self.suppress_until {
+            Some(until) if now <= until => {
+                debug!(
+                    "Suppressing push-to-talk press for '{}' after ignored processing press",
+                    binding_id
+                );
+                true
+            }
+            Some(_) => {
+                self.suppress_until = None;
+                false
+            }
+            None => false,
+        }
+    }
 }
 
 /// Serialises all transcription lifecycle events through a single thread
@@ -81,6 +121,7 @@ impl TranscriptionCoordinator {
             let mut stage = Stage::Idle;
             let mut last_press: Option<Instant> = None;
             let mut processing_started_at: Option<Instant> = None;
+            let mut push_to_talk_suppression = PushToTalkSuppression::default();
 
             while let Ok(cmd) = rx.recv() {
                 match cmd {
@@ -126,6 +167,11 @@ impl TranscriptionCoordinator {
 
                         if push_to_talk {
                             if is_pressed && matches!(stage, Stage::Idle) {
+                                if push_to_talk_suppression
+                                    .suppresses_press(&binding_id, Instant::now())
+                                {
+                                    continue;
+                                }
                                 start(&app, &mut stage, &binding_id, &hotkey_string);
                             } else if is_pressed
                                 && matches!(&stage, Stage::Recording(id) if id == &binding_id)
@@ -141,6 +187,25 @@ impl TranscriptionCoordinator {
                             {
                                 stop(&app, &mut stage, &binding_id, &hotkey_string);
                                 processing_started_at = Some(Instant::now());
+                            } else if is_pressed && matches!(stage, Stage::Processing) {
+                                debug!(
+                                    "Ignoring push-to-talk press for '{}' while transcription is processing",
+                                    binding_id
+                                );
+                                push_to_talk_suppression.note_ignored_processing_press(&binding_id);
+                            } else if !is_pressed
+                                && (matches!(stage, Stage::Idle)
+                                    || matches!(stage, Stage::Processing))
+                            {
+                                if push_to_talk_suppression.consume_release_after_ignored_press(
+                                    &binding_id,
+                                    Instant::now(),
+                                ) {
+                                    debug!(
+                                        "Consumed push-to-talk release for '{}' after ignored processing press",
+                                        binding_id
+                                    );
+                                }
                             }
                         } else if is_pressed {
                             match &stage {
@@ -284,7 +349,9 @@ fn stop(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &st
 mod tests {
     use super::{
         is_transcribe_binding, transcribe_binding_push_to_talk, transcription_session_is_active,
+        PushToTalkSuppression, SUPPRESS_AFTER_IGNORED_PUSH_TO_TALK_RELEASE,
     };
+    use std::time::{Duration, Instant};
 
     #[test]
     fn full_system_binding_routes_through_transcribe_coordinator() {
@@ -324,5 +391,33 @@ mod tests {
         assert!(transcription_session_is_active(false, true));
         assert!(transcription_session_is_active(true, true));
         assert!(!transcription_session_is_active(false, false));
+    }
+
+    #[test]
+    fn ignored_processing_press_release_suppresses_immediate_next_press() {
+        let mut suppression = PushToTalkSuppression::default();
+        let now = Instant::now();
+
+        suppression.note_ignored_processing_press("transcribe");
+
+        assert!(suppression.consume_release_after_ignored_press("transcribe", now));
+        assert!(suppression.suppresses_press("transcribe", now + Duration::from_millis(500)));
+        assert!(!suppression.suppresses_press(
+            "transcribe",
+            now + SUPPRESS_AFTER_IGNORED_PUSH_TO_TALK_RELEASE + Duration::from_millis(1)
+        ));
+    }
+
+    #[test]
+    fn ignored_processing_press_release_is_binding_scoped() {
+        let mut suppression = PushToTalkSuppression::default();
+        let now = Instant::now();
+
+        suppression.note_ignored_processing_press("transcribe");
+
+        assert!(
+            !suppression.consume_release_after_ignored_press("transcribe_full_system_audio", now)
+        );
+        assert!(!suppression.suppresses_press("transcribe", now));
     }
 }
