@@ -64,6 +64,38 @@ const OVERLAY_BOTTOM_OFFSET: f64 = 10.0;
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 const OVERLAY_BOTTOM_OFFSET: f64 = 35.0;
 
+#[derive(Clone, Copy, Debug)]
+struct OverlayBounds {
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+}
+
+fn calculate_overlay_position_in_bounds(
+    monitor_bounds: OverlayBounds,
+    work_area_bounds: OverlayBounds,
+    scale: f64,
+    overlay_width: f64,
+    overlay_height: f64,
+    overlay_position: OverlayPosition,
+) -> (f64, f64) {
+    let overlay_width = overlay_width * scale;
+    let overlay_height = overlay_height * scale;
+    let top_offset = OVERLAY_TOP_OFFSET * scale;
+    let bottom_offset = OVERLAY_BOTTOM_OFFSET * scale;
+
+    let x = work_area_bounds.x + (work_area_bounds.width - overlay_width) / 2.0;
+    let y = match overlay_position {
+        OverlayPosition::Top => monitor_bounds.y + top_offset,
+        OverlayPosition::Bottom | OverlayPosition::None => {
+            work_area_bounds.y + work_area_bounds.height - overlay_height - bottom_offset
+        }
+    };
+
+    (x, y)
+}
+
 #[cfg(target_os = "linux")]
 fn update_gtk_layer_shell_anchors(overlay_window: &tauri::webview::WebviewWindow) {
     let window_clone = overlay_window.clone();
@@ -163,27 +195,30 @@ fn calculate_overlay_position_for_monitor(
     let scale = monitor.scale_factor();
     let monitor_pos = monitor.position();
     let monitor_size = monitor.size();
+    let work_area = monitor.work_area();
 
-    let monitor_x = monitor_pos.x as f64;
-    let monitor_y = monitor_pos.y as f64;
-    let monitor_width = monitor_size.width as f64;
-    let monitor_height = monitor_size.height as f64;
-
-    let overlay_width = overlay_width * scale;
-    let overlay_height = overlay_height * scale;
-
-    let top_offset = OVERLAY_TOP_OFFSET * scale;
-    let bottom_offset = OVERLAY_BOTTOM_OFFSET * scale;
+    let monitor_bounds = OverlayBounds {
+        x: monitor_pos.x as f64,
+        y: monitor_pos.y as f64,
+        width: monitor_size.width as f64,
+        height: monitor_size.height as f64,
+    };
+    let work_area_bounds = OverlayBounds {
+        x: work_area.position.x as f64,
+        y: work_area.position.y as f64,
+        width: work_area.size.width as f64,
+        height: work_area.size.height as f64,
+    };
 
     let settings = settings::get_settings(app_handle);
-
-    let x = monitor_x + (monitor_width - overlay_width) / 2.0;
-    let y = match settings.overlay_position {
-        OverlayPosition::Top => monitor_y + top_offset,
-        OverlayPosition::Bottom | OverlayPosition::None => {
-            monitor_y + monitor_height - overlay_height - bottom_offset
-        }
-    };
+    let (x, y) = calculate_overlay_position_in_bounds(
+        monitor_bounds,
+        work_area_bounds,
+        scale,
+        overlay_width,
+        overlay_height,
+        settings.overlay_position,
+    );
 
     (x, y, scale)
 }
@@ -747,9 +782,18 @@ pub fn cancel_pending_overlay_transitions() {
 #[cfg(test)]
 mod tests {
     use super::{
-        cancel_pending_overlay_transitions, current_overlay_session_epoch,
-        overlay_session_epoch_is_current,
+        calculate_overlay_position_in_bounds, cancel_pending_overlay_transitions,
+        current_overlay_session_epoch, overlay_session_epoch_is_current, OverlayBounds,
+        OVERLAY_BOTTOM_OFFSET, OVERLAY_TOP_OFFSET,
     };
+    use crate::settings::OverlayPosition;
+
+    fn assert_f64_eq(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < f64::EPSILON,
+            "expected {expected}, got {actual}"
+        );
+    }
 
     #[test]
     fn stale_overlay_session_epoch_is_rejected() {
@@ -762,6 +806,112 @@ mod tests {
         assert!(overlay_session_epoch_is_current(
             current_overlay_session_epoch()
         ));
+    }
+
+    #[test]
+    fn bottom_overlay_uses_visible_work_area_bottom_edge() {
+        let monitor = OverlayBounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1728.0,
+            height: 1117.0,
+        };
+        let work_area = OverlayBounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1728.0,
+            height: 1040.0,
+        };
+
+        let (x, y) = calculate_overlay_position_in_bounds(
+            monitor,
+            work_area,
+            2.0,
+            172.0,
+            42.0,
+            OverlayPosition::Bottom,
+        );
+
+        assert_f64_eq(x, 692.0);
+        assert_f64_eq(y, 936.0);
+    }
+
+    #[test]
+    fn bottom_overlay_centers_inside_left_or_right_dock_work_area() {
+        let monitor = OverlayBounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1728.0,
+            height: 1117.0,
+        };
+        let work_area = OverlayBounds {
+            x: 96.0,
+            y: 0.0,
+            width: 1632.0,
+            height: 1117.0,
+        };
+
+        let (x, y) = calculate_overlay_position_in_bounds(
+            monitor,
+            work_area,
+            2.0,
+            172.0,
+            42.0,
+            OverlayPosition::Bottom,
+        );
+
+        assert_f64_eq(x, 740.0);
+        assert_f64_eq(y, 1117.0 - 84.0 - (OVERLAY_BOTTOM_OFFSET * 2.0));
+    }
+
+    #[test]
+    fn bottom_overlay_matches_old_result_when_work_area_matches_monitor() {
+        let monitor = OverlayBounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1728.0,
+            height: 1117.0,
+        };
+
+        let (x, y) = calculate_overlay_position_in_bounds(
+            monitor,
+            monitor,
+            2.0,
+            172.0,
+            42.0,
+            OverlayPosition::None,
+        );
+
+        assert_f64_eq(x, 692.0);
+        assert_f64_eq(y, 1117.0 - 84.0 - (OVERLAY_BOTTOM_OFFSET * 2.0));
+    }
+
+    #[test]
+    fn top_overlay_preserves_full_monitor_vertical_offset() {
+        let monitor = OverlayBounds {
+            x: 0.0,
+            y: 24.0,
+            width: 1728.0,
+            height: 1117.0,
+        };
+        let work_area = OverlayBounds {
+            x: 96.0,
+            y: 72.0,
+            width: 1632.0,
+            height: 1000.0,
+        };
+
+        let (x, y) = calculate_overlay_position_in_bounds(
+            monitor,
+            work_area,
+            2.0,
+            172.0,
+            42.0,
+            OverlayPosition::Top,
+        );
+
+        assert_f64_eq(x, 740.0);
+        assert_f64_eq(y, 24.0 + (OVERLAY_TOP_OFFSET * 2.0));
     }
 }
 
