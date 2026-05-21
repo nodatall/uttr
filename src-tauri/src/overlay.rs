@@ -80,6 +80,7 @@ fn calculate_overlay_position_in_bounds(
     overlay_height: f64,
     overlay_position: OverlayPosition,
 ) -> (f64, f64) {
+    let work_area_bounds = clamp_bounds_to_monitor(work_area_bounds, monitor_bounds);
     let overlay_width = overlay_width * scale;
     let overlay_height = overlay_height * scale;
     let top_offset = OVERLAY_TOP_OFFSET * scale;
@@ -94,6 +95,24 @@ fn calculate_overlay_position_in_bounds(
     };
 
     (x, y)
+}
+
+fn clamp_bounds_to_monitor(bounds: OverlayBounds, monitor_bounds: OverlayBounds) -> OverlayBounds {
+    let x1 = bounds.x.max(monitor_bounds.x);
+    let y1 = bounds.y.max(monitor_bounds.y);
+    let x2 = (bounds.x + bounds.width).min(monitor_bounds.x + monitor_bounds.width);
+    let y2 = (bounds.y + bounds.height).min(monitor_bounds.y + monitor_bounds.height);
+
+    if x2 <= x1 || y2 <= y1 {
+        return monitor_bounds;
+    }
+
+    OverlayBounds {
+        x: x1,
+        y: y1,
+        width: x2 - x1,
+        height: y2 - y1,
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -228,8 +247,12 @@ fn get_monitor_with_cursor(app_handle: &AppHandle) -> Option<tauri::Monitor> {
         let mouse_location = (mouse_position.x, mouse_position.y);
         if let Ok(monitors) = app_handle.available_monitors() {
             for monitor in monitors {
-                let is_within =
-                    is_mouse_within_monitor(mouse_location, monitor.position(), monitor.size());
+                let is_within = is_mouse_within_monitor(
+                    mouse_location,
+                    monitor.position(),
+                    monitor.size(),
+                    monitor.scale_factor(),
+                );
                 if is_within {
                     return Some(monitor);
                 }
@@ -244,8 +267,9 @@ fn is_mouse_within_monitor(
     mouse_pos: (f64, f64),
     monitor_pos: &PhysicalPosition<i32>,
     monitor_size: &PhysicalSize<u32>,
+    scale: f64,
 ) -> bool {
-    let (mouse_x, mouse_y) = mouse_pos;
+    let (mouse_x, mouse_y) = (mouse_pos.0 * scale, mouse_pos.1 * scale);
     let PhysicalPosition {
         x: monitor_x,
         y: monitor_y,
@@ -783,10 +807,11 @@ pub fn cancel_pending_overlay_transitions() {
 mod tests {
     use super::{
         calculate_overlay_position_in_bounds, cancel_pending_overlay_transitions,
-        current_overlay_session_epoch, overlay_session_epoch_is_current, OverlayBounds,
-        OVERLAY_BOTTOM_OFFSET, OVERLAY_TOP_OFFSET,
+        current_overlay_session_epoch, is_mouse_within_monitor, overlay_session_epoch_is_current,
+        OverlayBounds, OVERLAY_BOTTOM_OFFSET, OVERLAY_TOP_OFFSET,
     };
     use crate::settings::OverlayPosition;
+    use tauri::{PhysicalPosition, PhysicalSize};
 
     fn assert_f64_eq(actual: f64, expected: f64) {
         assert!(
@@ -884,6 +909,57 @@ mod tests {
 
         assert_f64_eq(x, 692.0);
         assert_f64_eq(y, 1117.0 - 84.0 - (OVERLAY_BOTTOM_OFFSET * 2.0));
+    }
+
+    #[test]
+    fn bottom_overlay_clamps_work_area_that_extends_past_monitor() {
+        let monitor = OverlayBounds {
+            x: -5120.0,
+            y: 178.0,
+            width: 5120.0,
+            height: 2880.0,
+        };
+        let bad_work_area = OverlayBounds {
+            x: -5120.0,
+            y: 356.0,
+            width: 5120.0,
+            height: 2880.0,
+        };
+
+        let (x, y) = calculate_overlay_position_in_bounds(
+            monitor,
+            bad_work_area,
+            2.0,
+            172.0,
+            42.0,
+            OverlayPosition::Bottom,
+        );
+
+        assert_f64_eq(x, -2732.0);
+        assert_f64_eq(y, 2954.0);
+    }
+
+    #[test]
+    fn cursor_monitor_check_scales_logical_cursor_for_physical_monitor_bounds() {
+        let retina_monitor_pos = PhysicalPosition { x: -5120, y: 178 };
+        let retina_monitor_size = PhysicalSize {
+            width: 5120,
+            height: 2880,
+        };
+
+        assert!(is_mouse_within_monitor(
+            (-1280.0, 631.0),
+            &retina_monitor_pos,
+            &retina_monitor_size,
+            2.0
+        ));
+
+        assert!(!is_mouse_within_monitor(
+            (-3280.0, 565.0),
+            &retina_monitor_pos,
+            &retina_monitor_size,
+            2.0
+        ));
     }
 
     #[test]
