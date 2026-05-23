@@ -386,6 +386,29 @@ async function ensureNoRunningUttrInstance() {
       "Uttr is already running. Quit Uttr before running the release smoke test so the isolated test instance can start.",
     );
   }
+
+  const processList = await execFileText("ps", ["-axo", "pid=,args="]);
+  const running = processList
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => {
+      if (line.includes("scripts/release-transcribe-smoke.mjs")) {
+        return false;
+      }
+      return (
+        line.includes("/target/debug/uttr") ||
+        line.includes("/Contents/MacOS/uttr") ||
+        line.includes("/Contents/MacOS/Uttr") ||
+        line.includes("node_modules/.bin/tauri dev")
+      );
+    });
+
+  if (running.length > 0) {
+    throw new Error(
+      `Uttr or Tauri dev is already running. Quit it before running the isolated release smoke test:\n${running.join("\n")}`,
+    );
+  }
 }
 
 async function startTauriDev({ homeDir, stdoutPath, stderrPath, provider }) {
@@ -394,6 +417,12 @@ async function startTauriDev({ homeDir, stdoutPath, stderrPath, provider }) {
   const env = {
     ...process.env,
     HOME: homeDir,
+    CARGO_HOME:
+      process.env.CARGO_HOME ??
+      path.join(process.env.HOME ?? homeDir, ".cargo"),
+    RUSTUP_HOME:
+      process.env.RUSTUP_HOME ??
+      path.join(process.env.HOME ?? homeDir, ".rustup"),
     XDG_CONFIG_HOME: path.join(homeDir, ".config"),
     XDG_DATA_HOME: path.join(homeDir, ".local", "share"),
     UTTR_RELEASE_SMOKE: "1",
