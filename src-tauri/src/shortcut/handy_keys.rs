@@ -46,6 +46,7 @@ use super::handler::handle_shortcut_event;
 
 const MODIFIER_ONLY_STALE_TIMEOUT: Duration = Duration::from_millis(750);
 const MODIFIER_ONLY_CHORD_WINDOW: Duration = Duration::from_millis(500);
+const MODIFIER_ONLY_RELEASE_DEBOUNCE: Duration = Duration::from_millis(100);
 
 /// Commands that can be sent to the hotkey manager thread
 enum ManagerCommand {
@@ -94,6 +95,12 @@ pub struct FrontendKeyEvent {
 struct ActivePushToTalkGuard {
     hotkey: Hotkey,
     hotkey_string: String,
+}
+
+#[derive(Clone)]
+struct PendingModifierOnlyRelease {
+    hotkey_string: String,
+    due_at: Instant,
 }
 
 #[derive(Default)]
@@ -227,6 +234,8 @@ impl HandyKeysState {
         let mut pressed_modifier_only: HashSet<String> = HashSet::new();
         let mut modifier_only_tracker = ModifierOnlyTracker::default();
         let mut active_push_to_talk: HashMap<String, ActivePushToTalkGuard> = HashMap::new();
+        let mut pending_modifier_only_releases: HashMap<String, PendingModifierOnlyRelease> =
+            HashMap::new();
 
         loop {
             // Check for hotkey events (non-blocking)
@@ -269,17 +278,38 @@ impl HandyKeysState {
                         &mut pressed_modifier_only,
                         &modifier_only_tracker,
                         &mut active_push_to_talk,
+                        &mut pending_modifier_only_releases,
                         modifier_only_modifiers,
                         &event,
+                    );
+                    Self::process_pending_modifier_only_releases(
+                        &app,
+                        &modifier_only_bindings,
+                        &mut pressed_modifier_only,
+                        &mut active_push_to_talk,
+                        &mut pending_modifier_only_releases,
+                        modifier_only_tracker.modifiers(),
+                        Instant::now(),
                     );
                     Self::dispatch_push_to_talk_release_guards(
                         &app,
                         &mut active_push_to_talk,
+                        &pending_modifier_only_releases,
                         modifier_only_modifiers,
                         &event,
                     );
                 }
             }
+
+            Self::process_pending_modifier_only_releases(
+                &app,
+                &modifier_only_bindings,
+                &mut pressed_modifier_only,
+                &mut active_push_to_talk,
+                &mut pending_modifier_only_releases,
+                modifier_only_tracker.modifiers(),
+                Instant::now(),
+            );
 
             // Check for commands (non-blocking with timeout)
             match cmd_rx.recv_timeout(std::time::Duration::from_millis(10)) {
@@ -312,6 +342,7 @@ impl HandyKeysState {
                             &mut modifier_only_bindings,
                             &mut pressed_modifier_only,
                             &mut active_push_to_talk,
+                            &mut pending_modifier_only_releases,
                             &binding_id,
                         );
                         let _ = response.send(result);
@@ -400,11 +431,13 @@ impl HandyKeysState {
         modifier_only_bindings: &mut HashMap<String, (Hotkey, String)>,
         pressed_modifier_only: &mut HashSet<String>,
         active_push_to_talk: &mut HashMap<String, ActivePushToTalkGuard>,
+        pending_modifier_only_releases: &mut HashMap<String, PendingModifierOnlyRelease>,
         binding_id: &str,
     ) -> Result<(), String> {
         if modifier_only_bindings.remove(binding_id).is_some() {
             pressed_modifier_only.remove(binding_id);
             active_push_to_talk.remove(binding_id);
+            pending_modifier_only_releases.remove(binding_id);
             debug!(
                 "Unregistered handy-keys modifier-only shortcut: {}",
                 binding_id
@@ -418,6 +451,7 @@ impl HandyKeysState {
                 .map_err(|e| format!("Failed to unregister hotkey: {}", e))?;
             hotkey_to_binding.remove(&id);
             active_push_to_talk.remove(binding_id);
+            pending_modifier_only_releases.remove(binding_id);
             debug!("Unregistered handy-keys shortcut: {}", binding_id);
         }
         Ok(())
@@ -429,6 +463,7 @@ impl HandyKeysState {
         pressed_modifier_only: &mut HashSet<String>,
         modifier_only_tracker: &ModifierOnlyTracker,
         active_push_to_talk: &mut HashMap<String, ActivePushToTalkGuard>,
+        pending_modifier_only_releases: &mut HashMap<String, PendingModifierOnlyRelease>,
         modifier_only_modifiers: handy_keys::Modifiers,
         event: &KeyEvent,
     ) {
@@ -467,16 +502,68 @@ impl HandyKeysState {
                     handle_shortcut_event(app, binding_id, hotkey_string, true);
                 }
                 Some(false) => {
-                    pressed_modifier_only.remove(binding_id);
-                    active_push_to_talk.remove(binding_id);
+                    pending_modifier_only_releases.insert(
+                        binding_id.clone(),
+                        PendingModifierOnlyRelease {
+                            hotkey_string: hotkey_string.clone(),
+                            due_at: Instant::now() + MODIFIER_ONLY_RELEASE_DEBOUNCE,
+                        },
+                    );
                     debug!(
-                        "handy-keys modifier-only event: binding={}, hotkey={}, state=Released",
+                        "Debouncing handy-keys modifier-only release: binding={}, hotkey={}",
                         binding_id, hotkey_string
                     );
-                    handle_shortcut_event(app, binding_id, hotkey_string, false);
                 }
                 None => {}
             }
+        }
+    }
+
+    fn process_pending_modifier_only_releases(
+        app: &AppHandle,
+        modifier_only_bindings: &HashMap<String, (Hotkey, String)>,
+        pressed_modifier_only: &mut HashSet<String>,
+        active_push_to_talk: &mut HashMap<String, ActivePushToTalkGuard>,
+        pending_modifier_only_releases: &mut HashMap<String, PendingModifierOnlyRelease>,
+        modifier_only_modifiers: handy_keys::Modifiers,
+        now: Instant,
+    ) {
+        let mut completed_releases = Vec::new();
+        let mut cancelled_releases = Vec::new();
+
+        for (binding_id, pending) in pending_modifier_only_releases.iter() {
+            let Some((hotkey, _)) = modifier_only_bindings.get(binding_id) else {
+                cancelled_releases.push(binding_id.clone());
+                continue;
+            };
+
+            if modifier_families_match_exact(hotkey.modifiers, modifier_only_modifiers) {
+                cancelled_releases.push(binding_id.clone());
+                continue;
+            }
+
+            if now >= pending.due_at {
+                completed_releases.push((binding_id.clone(), pending.hotkey_string.clone()));
+            }
+        }
+
+        for binding_id in cancelled_releases {
+            pending_modifier_only_releases.remove(&binding_id);
+            debug!(
+                "Cancelled handy-keys modifier-only release debounce: binding={}",
+                binding_id
+            );
+        }
+
+        for (binding_id, hotkey_string) in completed_releases {
+            pending_modifier_only_releases.remove(&binding_id);
+            pressed_modifier_only.remove(&binding_id);
+            active_push_to_talk.remove(&binding_id);
+            debug!(
+                "handy-keys modifier-only event: binding={}, hotkey={}, state=Released",
+                binding_id, hotkey_string
+            );
+            handle_shortcut_event(app, &binding_id, &hotkey_string, false);
         }
     }
 
@@ -518,12 +605,17 @@ impl HandyKeysState {
     fn dispatch_push_to_talk_release_guards(
         app: &AppHandle,
         active_push_to_talk: &mut HashMap<String, ActivePushToTalkGuard>,
+        pending_modifier_only_releases: &HashMap<String, PendingModifierOnlyRelease>,
         modifier_only_modifiers: handy_keys::Modifiers,
         event: &KeyEvent,
     ) {
         let mut released_bindings = Vec::new();
 
         for (binding_id, guard) in active_push_to_talk.iter() {
+            if guard.hotkey.key.is_none() && pending_modifier_only_releases.contains_key(binding_id)
+            {
+                continue;
+            }
             if push_to_talk_guard_should_release(guard.hotkey, modifier_only_modifiers, event) {
                 released_bindings.push((binding_id.clone(), guard.hotkey_string.to_string()));
             }
