@@ -54,6 +54,7 @@ const preflightOnly = Boolean(args["preflight-only"]);
 let tauriProcess = null;
 let tauriStdioFds = [];
 let scratchDir = "";
+let cleaningUpTauri = false;
 
 main().catch(async (error) => {
   await cleanup(false);
@@ -89,11 +90,13 @@ async function main() {
   const stdoutPath = path.join(scratchDir, "tauri-dev.stdout.log");
   const stderrPath = path.join(scratchDir, "tauri-dev.stderr.log");
   const logPath = path.join(logDir, "uttr.log");
+  const smokeAudioPath = path.join(scratchDir, "release-smoke-phrase.wav");
 
   await mkdir(appDataDir, { recursive: true });
   await mkdir(logDir, { recursive: true });
   await seedSettings(appDataDir, provider);
   await prepareModelDirectory(appDataDir, provider);
+  await prepareSmokeAudio(smokeAudioPath, phrase);
 
   console.log(`Smoke provider: ${provider.label}`);
   console.log(`Expected phrase: "${phrase}"`);
@@ -116,8 +119,15 @@ async function main() {
     stdoutPath,
     stderrPath,
     provider,
+    smokeAudioPath,
   });
 
+  await waitForLog(
+    logPath,
+    "SIGUSR2 transcription toggle enabled",
+    startupTimeoutMs,
+    "release smoke signal toggle",
+  );
   await waitForLog(
     logPath,
     "Shortcuts initialized successfully",
@@ -134,11 +144,10 @@ async function main() {
   await openTextEditTarget();
 
   console.log("");
-  console.log("When recording starts, speak this phrase clearly:");
-  console.log(`  ${phrase}`);
-  await promptEnter("Press Enter to start recording.");
+  console.log(`Starting recording with generated smoke audio: "${phrase}"`);
 
-  await triggerSmokeShortcut();
+  const recordingStartedAt = Date.now();
+  await triggerSmokeToggle();
   await waitForLog(
     logPath,
     "overlay shown state=recording",
@@ -146,13 +155,18 @@ async function main() {
     "recording overlay",
   );
 
-  for (let remaining = recordSeconds; remaining > 0; remaining -= 1) {
-    process.stdout.write(`Recording... ${remaining}s remaining\r`);
-    await sleep(1_000);
-  }
-  process.stdout.write("\n");
+  await sleep(500);
 
-  await triggerSmokeShortcut();
+  const elapsedMs = Date.now() - recordingStartedAt;
+  const remainingMs = Math.max(0, recordSeconds * 1_000 - elapsedMs);
+  if (remainingMs > 0) {
+    console.log(
+      `Waiting ${Math.ceil(remainingMs / 1_000)}s before stopping recording...`,
+    );
+    await sleep(remainingMs);
+  }
+
+  await triggerSmokeToggle();
   await waitForLog(
     logPath,
     "Transcription completed",
@@ -204,12 +218,12 @@ function printHelp() {
   console.log(`Usage: node scripts/release-transcribe-smoke.mjs [options]
 
 Runs the local native Uttr transcription smoke test against an isolated app
-profile. The test opens TextEdit, triggers the configured global shortcut,
-records from the live microphone, waits for transcription, and verifies pasted
-text.
+profile. The test opens TextEdit, triggers the release smoke transcription
+toggle, records generated smoke audio through the app's microphone path, waits
+for transcription, and verifies pasted text.
 
 Options:
-  --phrase <text>                 Spoken phrase to ask the operator to say.
+  --phrase <text>                 Phrase to render into generated smoke audio.
   --tokens <a,b,c>                Comma-separated tokens expected in pasted text.
   --record-seconds <seconds>      Recording duration. Default: 5.
   --preflight-only                Verify provider/settings setup without launching Uttr.
@@ -494,7 +508,13 @@ async function ensureNoRunningUttrInstance() {
   }
 }
 
-async function startTauriDev({ homeDir, stdoutPath, stderrPath, provider }) {
+async function startTauriDev({
+  homeDir,
+  stdoutPath,
+  stderrPath,
+  provider,
+  smokeAudioPath,
+}) {
   const stdoutHandle = await openAppend(stdoutPath);
   const stderrHandle = await openAppend(stderrPath);
   const env = {
@@ -509,6 +529,8 @@ async function startTauriDev({ homeDir, stdoutPath, stderrPath, provider }) {
     XDG_CONFIG_HOME: path.join(homeDir, ".config"),
     XDG_DATA_HOME: path.join(homeDir, ".local", "share"),
     UTTR_RELEASE_SMOKE: "1",
+    UTTR_RELEASE_SMOKE_AUDIO_FILE: smokeAudioPath,
+    UTTR_ENABLE_SIGUSR2_TRANSCRIPTION: "1",
     VITE_PORT: process.env.UTTR_RELEASE_SMOKE_VITE_PORT ?? "1420",
     VITE_HMR_PORT: process.env.UTTR_RELEASE_SMOKE_VITE_HMR_PORT ?? "1421",
     RUST_LOG: process.env.RUST_LOG ?? "info",
@@ -529,7 +551,7 @@ async function startTauriDev({ homeDir, stdoutPath, stderrPath, provider }) {
   });
 
   child.on("exit", (code, signal) => {
-    if (tauriProcess === child) {
+    if (tauriProcess === child && !cleaningUpTauri) {
       console.error(
         `tauri dev exited unexpectedly: code=${code} signal=${signal}`,
       );
@@ -560,11 +582,52 @@ async function openTextEditTarget() {
   ]);
 }
 
-async function triggerSmokeShortcut() {
-  await osascript([
-    'tell application "System Events"',
-    'keystroke "9" using {command down, shift down}',
-    "end tell",
+async function triggerSmokeToggle() {
+  const pid = await findUttrProcessId();
+  await execFileText("kill", ["-USR2", String(pid)]);
+}
+
+async function findUttrProcessId() {
+  const processList = await execFileText("ps", ["-axo", "pid=,args="]);
+  const targetSuffixes = [
+    path.join("src-tauri", "target", "debug", "uttr"),
+    path.join("target", "debug", "uttr"),
+  ];
+  const match = processList
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) =>
+      targetSuffixes.some(
+        (targetSuffix) =>
+          line.includes(targetSuffix) && !line.includes("ps -axo"),
+      ),
+    );
+
+  if (!match) {
+    throw new Error("Could not find the running Uttr smoke app process.");
+  }
+
+  const pid = Number(match.split(/\s+/, 1)[0]);
+  if (!Number.isInteger(pid) || pid <= 0) {
+    throw new Error(`Could not parse Uttr smoke app process id from: ${match}`);
+  }
+
+  return pid;
+}
+
+async function prepareSmokeAudio(outputPath, text) {
+  const aiffPath = path.join(
+    path.dirname(outputPath),
+    "release-smoke-phrase.aiff",
+  );
+  await execFileText("say", ["-o", aiffPath, text]);
+  await execFileText("afconvert", [
+    aiffPath,
+    "-f",
+    "WAVE",
+    "-d",
+    "LEI16@16000",
+    outputPath,
   ]);
 }
 
@@ -649,19 +712,9 @@ async function execFileText(command, commandArgs, options = {}) {
   });
 }
 
-async function promptEnter(message) {
-  process.stdout.write(`${message} `);
-  process.stdin.resume();
-  return new Promise((resolve) => {
-    process.stdin.once("data", () => {
-      process.stdin.pause();
-      resolve();
-    });
-  });
-}
-
 async function cleanup(success) {
   if (tauriProcess) {
+    cleaningUpTauri = true;
     try {
       process.kill(-tauriProcess.pid, "SIGTERM");
     } catch {}
@@ -670,6 +723,7 @@ async function cleanup(success) {
       process.kill(-tauriProcess.pid, "SIGKILL");
     } catch {}
     tauriProcess = null;
+    cleaningUpTauri = false;
   }
 
   for (const fd of tauriStdioFds) {

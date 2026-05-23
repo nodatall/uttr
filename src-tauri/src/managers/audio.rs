@@ -1,10 +1,11 @@
 use crate::audio_toolkit::{
-    list_input_devices, vad::SmoothedVad, AudioRecorder, DrainResult, SileroVad,
+    import_audio_file, list_input_devices, vad::SmoothedVad, AudioRecorder, DrainResult, SileroVad,
 };
 use crate::helpers::clamshell;
 use crate::settings::{get_settings, AppSettings};
 use crate::utils;
 use log::{debug, error, info, warn};
+use std::path::PathBuf;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -152,6 +153,19 @@ fn create_audio_recorder(
     Ok(recorder)
 }
 
+fn release_smoke_audio_file() -> Option<PathBuf> {
+    let smoke_enabled = std::env::var("UTTR_RELEASE_SMOKE")
+        .map(|value| value.trim() == "1")
+        .unwrap_or(false);
+    if !smoke_enabled {
+        return None;
+    }
+
+    std::env::var_os("UTTR_RELEASE_SMOKE_AUDIO_FILE")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+}
+
 /* ──────────────────────────────────────────────────────────────── */
 
 #[derive(Clone)]
@@ -263,6 +277,15 @@ impl AudioRecordingManager {
         // Don't mute immediately - caller will handle muting after audio feedback
         let mut did_mute_guard = self.did_mute.lock().unwrap();
         *did_mute_guard = false;
+
+        if let Some(audio_file) = release_smoke_audio_file() {
+            info!(
+                "Release smoke microphone using synthetic audio file: {}",
+                audio_file.display()
+            );
+            *open_flag = true;
+            return Ok(());
+        }
 
         let vad_path = self
             .app_handle
@@ -376,6 +399,10 @@ impl AudioRecordingManager {
     /* ---------- recording --------------------------------------------------- */
 
     fn start_recorder_command(&self) -> Result<(), String> {
+        if release_smoke_audio_file().is_some() {
+            return Ok(());
+        }
+
         let recorder_guard = self.recorder.lock().unwrap();
         let rec = recorder_guard
             .as_ref()
@@ -462,21 +489,40 @@ impl AudioRecordingManager {
                 *state = RecordingState::Idle;
                 drop(state);
 
-                let (samples, should_reset_stream) = {
-                    let recorder_guard = self.recorder.lock().unwrap();
-                    if let Some(rec) = recorder_guard.as_ref() {
-                        match rec.stop() {
-                            Ok(buf) => (buf, false),
-                            Err(e) => {
-                                error!("stop() failed: {e}");
-                                (Vec::new(), true)
+                let (samples, should_reset_stream) =
+                    if let Some(audio_file) = release_smoke_audio_file() {
+                        match import_audio_file(&audio_file) {
+                            Ok(imported) => {
+                                info!(
+                                    "Release smoke microphone loaded {} samples from {}",
+                                    imported.samples.len(),
+                                    imported.path.display()
+                                );
+                                (imported.samples, false)
+                            }
+                            Err(err) => {
+                                error!(
+                                    "Failed to load release smoke microphone audio from {}: {err}",
+                                    audio_file.display()
+                                );
+                                (Vec::new(), false)
                             }
                         }
                     } else {
-                        error!("Recorder not available");
-                        (Vec::new(), true)
-                    }
-                };
+                        let recorder_guard = self.recorder.lock().unwrap();
+                        if let Some(rec) = recorder_guard.as_ref() {
+                            match rec.stop() {
+                                Ok(buf) => (buf, false),
+                                Err(e) => {
+                                    error!("stop() failed: {e}");
+                                    (Vec::new(), true)
+                                }
+                            }
+                        } else {
+                            error!("Recorder not available");
+                            (Vec::new(), true)
+                        }
+                    };
 
                 *self.is_recording.lock().unwrap() = false;
                 *self.recording_started_at.lock().unwrap() = None;
