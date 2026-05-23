@@ -923,13 +923,6 @@ fn validate_provider_exists(
     Ok(())
 }
 
-fn any_post_process_api_key_configured(settings: &settings::AppSettings) -> bool {
-    settings
-        .post_process_api_keys
-        .values()
-        .any(|api_key| !api_key.trim().is_empty())
-}
-
 fn first_api_key_transcription_model(provider_id: &str) -> Option<&'static str> {
     match provider_id {
         "groq" => Some(GROQ_MODEL_WHISPER_LARGE_V3),
@@ -942,8 +935,9 @@ fn maybe_select_first_api_key_transcription_model(
     settings: &mut settings::AppSettings,
     provider_id: &str,
     api_key: &str,
+    already_had_api_key: bool,
 ) -> bool {
-    if api_key.trim().is_empty() || any_post_process_api_key_configured(settings) {
+    if api_key.trim().is_empty() || already_had_api_key {
         return false;
     }
 
@@ -965,23 +959,27 @@ pub fn change_post_process_api_key_setting(
     let mut settings = settings::get_settings(&app);
     validate_provider_exists(&settings, &provider_id)?;
     let trimmed_api_key = api_key.trim();
+    let already_had_api_key = crate::byok_secrets::has_any_post_process_api_key(&app, &settings);
     let selected_model_changed = maybe_select_first_api_key_transcription_model(
         &mut settings,
         &provider_id,
         trimmed_api_key,
+        already_had_api_key,
     );
+
+    if trimmed_api_key.is_empty() {
+        crate::byok_secrets::clear_provider_api_key(&app, &provider_id)?;
+    } else {
+        crate::byok_secrets::save_provider_api_key(&app, &provider_id, trimmed_api_key)?;
+    }
 
     if provider_id == "groq" {
         settings.byok_validation_state = ByokValidationState::Unknown;
         settings.byok_enabled = false;
-        settings
-            .post_process_api_keys
-            .insert(provider_id, trimmed_api_key.to_string());
-    } else {
-        settings
-            .post_process_api_keys
-            .insert(provider_id, trimmed_api_key.to_string());
     }
+    settings
+        .post_process_api_keys
+        .insert(provider_id, String::new());
     settings::write_settings(&app, settings);
     if selected_model_changed {
         let _ = app.emit("model-state-changed", ());
@@ -1053,17 +1051,9 @@ pub async fn fetch_post_process_models(
     }
 
     // Get API key
-    let api_key = if provider.id == "groq" {
-        crate::byok_secrets::load_groq_api_key(&app, &settings)
-            .map_err(|error| format!("Failed to load Groq BYOK key: {}", error))?
-            .unwrap_or_default()
-    } else {
-        settings
-            .post_process_api_keys
-            .get(&provider_id)
-            .cloned()
-            .unwrap_or_default()
-    };
+    let api_key = crate::byok_secrets::load_provider_api_key(&app, &settings, &provider_id)
+        .map_err(|error| format!("Failed to load API key: {}", error))?
+        .unwrap_or_default();
 
     // Skip fetching if no API key for providers that typically need one
     if api_key.trim().is_empty() && provider.id != "custom" {
@@ -1157,7 +1147,8 @@ mod tests {
         assert!(maybe_select_first_api_key_transcription_model(
             &mut settings,
             "groq",
-            "gsk_test"
+            "gsk_test",
+            false
         ));
         assert_eq!(settings.selected_model, GROQ_MODEL_WHISPER_LARGE_V3);
     }
@@ -1170,7 +1161,8 @@ mod tests {
         assert!(maybe_select_first_api_key_transcription_model(
             &mut settings,
             "openai",
-            "sk-test"
+            "sk-test",
+            false
         ));
         assert_eq!(settings.selected_model, OPENAI_MODEL_GPT_4O_TRANSCRIBE);
     }
@@ -1186,7 +1178,8 @@ mod tests {
         assert!(!maybe_select_first_api_key_transcription_model(
             &mut settings,
             "openai",
-            "sk-test"
+            "sk-test",
+            true
         ));
         assert_eq!(settings.selected_model, GROQ_MODEL_WHISPER_LARGE_V3);
     }
@@ -1199,14 +1192,16 @@ mod tests {
         assert!(!maybe_select_first_api_key_transcription_model(
             &mut settings,
             "groq",
-            "  "
+            "  ",
+            false
         ));
         assert_eq!(settings.selected_model, DEFAULT_LOCAL_MODEL_ID);
 
         assert!(!maybe_select_first_api_key_transcription_model(
             &mut settings,
             "anthropic",
-            "sk-ant-test"
+            "sk-ant-test",
+            false
         ));
         assert_eq!(settings.selected_model, DEFAULT_LOCAL_MODEL_ID);
     }

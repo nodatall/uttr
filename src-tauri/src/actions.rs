@@ -265,25 +265,18 @@ async fn post_process_transcription(
         }
     };
 
-    let api_key = if provider.id == "groq" {
-        match crate::byok_secrets::load_groq_api_key(app_handle, settings) {
+    let api_key =
+        match crate::byok_secrets::load_provider_api_key(app_handle, settings, &provider.id) {
             Ok(Some(key)) => key,
             Ok(None) => String::new(),
             Err(error) => {
                 warn!(
-                    "Failed to load Groq BYOK key for post-processing: {}",
-                    error
+                    "Failed to load API key for post-processing provider '{}': {}",
+                    provider.id, error
                 );
                 String::new()
             }
-        }
-    } else {
-        settings
-            .post_process_api_keys
-            .get(&provider.id)
-            .cloned()
-            .unwrap_or_default()
-    };
+        };
 
     let model = match resolve_post_process_model(&provider, settings, &api_key).await {
         Some(model) => model,

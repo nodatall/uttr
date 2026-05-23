@@ -3,7 +3,6 @@ import { useTranslation } from "react-i18next";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { useSettings } from "@/hooks/useSettings";
-import { isDevPlanSimulationActive } from "@/lib/utils/premiumFeatures";
 import { openUrl } from "@tauri-apps/plugin-opener";
 
 const GROQ_KEYS_URL = "https://console.groq.com/keys";
@@ -12,8 +11,8 @@ const OPENAI_KEYS_URL = "https://platform.openai.com/api-keys";
 export const ApiKeysSettings: React.FC = () => {
   const { t } = useTranslation();
   const {
-    settings,
     installAccess,
+    postProcessApiKeyStatuses,
     refreshInstallAccess,
     updatePostProcessApiKey,
     isUpdating,
@@ -28,22 +27,19 @@ export const ApiKeysSettings: React.FC = () => {
     }
   }, [installAccess, refreshInstallAccess]);
 
-  const savedGroqApiKey = settings?.post_process_api_keys?.groq ?? "";
-  const savedOpenAiApiKey = settings?.post_process_api_keys?.openai ?? "";
+  const hasStoredGroqSecret = postProcessApiKeyStatuses.groq ?? false;
+  const hasStoredOpenAiSecret = postProcessApiKeyStatuses.openai ?? false;
 
   useEffect(() => {
-    setGroqApiKeyDraft(savedGroqApiKey);
-  }, [savedGroqApiKey]);
+    setGroqApiKeyDraft("");
+  }, [hasStoredGroqSecret]);
 
   useEffect(() => {
-    setOpenAiApiKeyDraft(savedOpenAiApiKey);
-  }, [savedOpenAiApiKey]);
+    setOpenAiApiKeyDraft("");
+  }, [hasStoredOpenAiSecret]);
 
-  const hasStoredGroqSecret = savedGroqApiKey.trim().length > 0;
-  const hasStoredOpenAiSecret = savedOpenAiApiKey.trim().length > 0;
   const isGroqKeyUpdating = isUpdating("post_process_api_key:groq");
   const isOpenAiKeyUpdating = isUpdating("post_process_api_key:openai");
-  const isPlanSimulationActive = isDevPlanSimulationActive(installAccess);
 
   const handleSaveGroqKey = async () => {
     await updatePostProcessApiKey("groq", groqApiKeyDraft.trim());
@@ -62,10 +58,6 @@ export const ApiKeysSettings: React.FC = () => {
     await updatePostProcessApiKey("openai", "");
     setOpenAiApiKeyDraft("");
   };
-
-  if (isPlanSimulationActive) {
-    return null;
-  }
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-6">

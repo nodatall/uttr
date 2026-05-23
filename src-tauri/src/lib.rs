@@ -371,6 +371,7 @@ pub fn run() {
         commands::get_app_dir_path,
         commands::log_frontend_startup,
         commands::get_app_settings,
+        commands::get_post_process_api_key_statuses,
         commands::get_default_settings,
         commands::complete_onboarding,
         commands::get_log_dir_path,

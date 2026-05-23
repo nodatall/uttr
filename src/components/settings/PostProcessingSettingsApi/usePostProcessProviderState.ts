@@ -42,6 +42,7 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
     updatePostProcessModel,
     fetchPostProcessModels,
     postProcessModelOptions,
+    postProcessApiKeyStatuses,
   } = useSettings();
 
   // Settings are guaranteed to have providers after migration
@@ -89,7 +90,8 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
 
   // Use settings directly as single source of truth
   const baseUrl = selectedProvider?.base_url ?? "";
-  const apiKey = settings?.post_process_api_keys?.[selectedProviderId] ?? "";
+  const hasStoredApiKey = postProcessApiKeyStatuses[selectedProviderId] ?? false;
+  const apiKey = hasStoredApiKey ? "stored" : "";
   const model = settings?.post_process_models?.[selectedProviderId] ?? "";
 
   const providerOptions = useMemo<DropdownOption[]>(() => {

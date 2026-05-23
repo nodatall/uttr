@@ -6,6 +6,7 @@ pub mod transcription;
 
 use crate::settings::{get_settings, write_settings, AppSettings, ByokValidationState, LogLevel};
 use crate::utils::cancel_current_operation;
+use std::collections::HashMap;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
@@ -63,7 +64,31 @@ pub fn log_frontend_startup(message: String) {
 #[tauri::command]
 #[specta::specta]
 pub fn get_app_settings(app: AppHandle) -> Result<AppSettings, String> {
-    Ok(get_settings(&app))
+    let mut settings = get_settings(&app);
+    match crate::byok_secrets::migrate_plaintext_api_keys(&app, &mut settings) {
+        Ok(true) => write_settings(&app, settings.clone()),
+        Ok(false) => {}
+        Err(error) => log::warn!("Failed to migrate plaintext API keys: {}", error),
+    }
+    crate::byok_secrets::spawn_legacy_groq_api_key_migration(app.clone(), settings.clone());
+    crate::byok_secrets::redact_api_keys_for_renderer(&app, &mut settings);
+    Ok(settings)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_post_process_api_key_statuses(app: AppHandle) -> Result<HashMap<String, bool>, String> {
+    let settings = get_settings(&app);
+    Ok(settings
+        .post_process_providers
+        .iter()
+        .map(|provider| {
+            let has_key = crate::byok_secrets::load_provider_api_key(&app, &settings, &provider.id)
+                .map(|value| value.is_some())
+                .unwrap_or(false);
+            (provider.id.clone(), has_key)
+        })
+        .collect())
 }
 
 #[tauri::command]
