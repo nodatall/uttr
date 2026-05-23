@@ -49,12 +49,14 @@ const transcriptionTimeoutMs = Number(
   args["transcription-timeout-ms"] ?? 120_000,
 );
 const keepArtifacts = Boolean(args["keep-artifacts"]);
+const screenshotsEnabled = !Boolean(args["no-screenshots"]);
 const preflightOnly = Boolean(args["preflight-only"]);
 
 let tauriProcess = null;
 let tauriStdioFds = [];
 let scratchDir = "";
 let cleaningUpTauri = false;
+let preserveArtifacts = false;
 
 main().catch(async (error) => {
   await cleanup(false);
@@ -154,6 +156,7 @@ async function main() {
     15_000,
     "recording overlay",
   );
+  await captureScreenshot("01-recording");
 
   await sleep(500);
 
@@ -167,6 +170,13 @@ async function main() {
   }
 
   await triggerSmokeToggle();
+  await waitForLog(
+    logPath,
+    "overlay shown state=transcribing",
+    15_000,
+    "transcribing overlay",
+  );
+  await captureScreenshot("02-transcribing");
   await waitForLog(
     logPath,
     "Transcription completed",
@@ -185,8 +195,22 @@ async function main() {
     transcriptionTimeoutMs,
   );
   await writeFile(path.join(scratchDir, "pasted-text.txt"), pastedText, "utf8");
+  await captureScreenshot("03-pasted-result");
+
+  const historyEntry = await waitForHistoryEntry(appDataDir, expectedTokens);
+  await openHistoryInUttr();
+  await waitForLog(
+    logPath,
+    `Release smoke history entry saved id=${historyEntry.id}`,
+    20_000,
+    "release smoke history entry",
+  );
+  await captureScreenshot("04-history");
 
   console.log(`Pasted text: ${pastedText.trim()}`);
+  if (screenshotsEnabled) {
+    console.log(`Screenshot evidence: ${path.join(scratchDir, "screenshots")}`);
+  }
   console.log("Release transcription smoke test passed.");
 
   await cleanup(true);
@@ -200,7 +224,11 @@ function parseArgs(rawArgs) {
       throw new Error(`Unexpected argument: ${arg}`);
     }
     const key = arg.slice(2);
-    if (key === "keep-artifacts" || key === "preflight-only") {
+    if (
+      key === "keep-artifacts" ||
+      key === "preflight-only" ||
+      key === "no-screenshots"
+    ) {
       parsed[key] = true;
       continue;
     }
@@ -227,6 +255,7 @@ Options:
   --tokens <a,b,c>                Comma-separated tokens expected in pasted text.
   --record-seconds <seconds>      Recording duration. Default: 5.
   --preflight-only                Verify provider/settings setup without launching Uttr.
+  --no-screenshots                Skip desktop screenshot evidence capture.
   --keep-artifacts                Keep scratch evidence after a successful run.
 
 Provider setup:
@@ -531,6 +560,8 @@ async function startTauriDev({
     UTTR_RELEASE_SMOKE: "1",
     UTTR_RELEASE_SMOKE_AUDIO_FILE: smokeAudioPath,
     UTTR_ENABLE_SIGUSR2_TRANSCRIPTION: "1",
+    UTTR_RELEASE_SMOKE_TRANSCRIBING_HOLD_MS:
+      process.env.UTTR_RELEASE_SMOKE_TRANSCRIBING_HOLD_MS ?? "1500",
     VITE_PORT: process.env.UTTR_RELEASE_SMOKE_VITE_PORT ?? "1420",
     VITE_HMR_PORT: process.env.UTTR_RELEASE_SMOKE_VITE_HMR_PORT ?? "1421",
     RUST_LOG: process.env.RUST_LOG ?? "info",
@@ -582,6 +613,26 @@ async function openTextEditTarget() {
   ]);
 }
 
+async function openHistoryInUttr() {
+  const pid = await findUttrProcessId();
+  await osascript([
+    'tell application "System Events"',
+    `set targetProcesses to every process whose unix id is ${pid}`,
+    'if (count of targetProcesses) is 0 then error "Uttr process not found"',
+    "set targetProcess to item 1 of targetProcesses",
+    "set frontmost of targetProcess to true",
+    "repeat 20 times",
+    "if exists window 1 of targetProcess then exit repeat",
+    "delay 0.25",
+    "end repeat",
+    "try",
+    'click (first button of entire contents of window 1 of targetProcess whose name is "History")',
+    "end try",
+    "end tell",
+    "delay 0.75",
+  ]);
+}
+
 async function triggerSmokeToggle() {
   const pid = await findUttrProcessId();
   await execFileText("kill", ["-USR2", String(pid)]);
@@ -629,6 +680,45 @@ async function prepareSmokeAudio(outputPath, text) {
     "LEI16@16000",
     outputPath,
   ]);
+}
+
+async function captureScreenshot(label) {
+  if (!screenshotsEnabled) {
+    return;
+  }
+
+  const screenshotsDir = path.join(scratchDir, "screenshots");
+  await mkdir(screenshotsDir, { recursive: true });
+  const screenshotPath = path.join(screenshotsDir, `${label}.png`);
+  await execFileText("screencapture", ["-x", screenshotPath]);
+  const screenshotStat = await stat(screenshotPath).catch(() => null);
+  if (!screenshotStat?.isFile() || screenshotStat.size === 0) {
+    throw new Error(`Screenshot capture failed for ${label}.`);
+  }
+  preserveArtifacts = true;
+  console.log(`Captured screenshot: ${screenshotPath}`);
+}
+
+async function waitForHistoryEntry(appDataDir, tokens, timeoutMs = 20_000) {
+  const dbPath = path.join(appDataDir, "history.db");
+  const started = Date.now();
+  while (Date.now() - started < timeoutMs) {
+    const output = await execFileText("sqlite3", [
+      "-json",
+      dbPath,
+      "SELECT id, transcription_text, COALESCE(post_processed_text, '') AS post_processed_text FROM transcription_history ORDER BY timestamp DESC LIMIT 1;",
+    ]).catch(() => "");
+    if (output.trim()) {
+      const [entry] = JSON.parse(output);
+      const text = `${entry.transcription_text ?? ""} ${entry.post_processed_text ?? ""}`;
+      if (containsExpectedTokens(text, tokens)) {
+        return entry;
+      }
+    }
+    await sleep(500);
+  }
+
+  throw new Error("Timed out waiting for matching transcript in history.");
 }
 
 async function waitForPastedText(tokens, timeoutMs) {
@@ -733,7 +823,7 @@ async function cleanup(success) {
   }
   tauriStdioFds = [];
 
-  if (success && scratchDir && !keepArtifacts) {
+  if (success && scratchDir && !keepArtifacts && !preserveArtifacts) {
     await rm(scratchDir, { recursive: true, force: true });
   }
 }

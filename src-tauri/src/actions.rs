@@ -41,6 +41,7 @@ use tokio::time::timeout;
 
 const NO_INPUT_OVERLAY_MIN_DURATION: Duration = Duration::from_secs(4);
 const PROCESSING_OVERLAY_DELAY: Duration = Duration::from_millis(500);
+const RELEASE_SMOKE_TRANSCRIBING_HOLD_MS_DEFAULT: u64 = 1_500;
 
 #[derive(Clone, Copy)]
 enum DeferredOverlayState {
@@ -719,6 +720,25 @@ fn spawn_no_input_overlay_feedback(app: &AppHandle, include_processing: bool) {
     });
 }
 
+fn release_smoke_enabled() -> bool {
+    std::env::var("UTTR_RELEASE_SMOKE")
+        .map(|value| value.trim() == "1")
+        .unwrap_or(false)
+}
+
+fn release_smoke_transcribing_hold_duration() -> Option<Duration> {
+    if !release_smoke_enabled() {
+        return None;
+    }
+
+    let hold_ms = std::env::var("UTTR_RELEASE_SMOKE_TRANSCRIBING_HOLD_MS")
+        .ok()
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .unwrap_or(RELEASE_SMOKE_TRANSCRIBING_HOLD_MS_DEFAULT);
+
+    (hold_ms > 0).then(|| Duration::from_millis(hold_ms))
+}
+
 fn silent_audio_levels(samples: &[f32]) -> Option<(f32, f32)> {
     if samples.is_empty() {
         return None;
@@ -964,6 +984,15 @@ fn handle_transcription_stop(
                 &full_system_progress_payload(FullSystemProgressStage::Transcribing, None, None),
             );
         }
+
+        if let Some(duration) = release_smoke_transcribing_hold_duration() {
+            log::info!(
+                "Release smoke holding transcribing state for {}ms",
+                duration.as_millis()
+            );
+            tokio::time::sleep(duration).await;
+        }
+
         let transcription_result = if use_incremental
             && samples.len() >= SHORT_UTTERANCE_SAMPLES
             && has_incremental_progress
@@ -1125,9 +1154,10 @@ fn handle_transcription_stop(
                         }
                     } else {
                         let hm_clone = Arc::clone(&hm);
+                        let ah_for_history = ah.clone();
                         let transcription_for_history = transcription.clone();
                         tauri::async_runtime::spawn(async move {
-                            if let Err(e) = hm_clone
+                            match hm_clone
                                 .save_transcription(
                                     samples_clone,
                                     transcription_for_history,
@@ -1136,7 +1166,23 @@ fn handle_transcription_stop(
                                 )
                                 .await
                             {
-                                error!("Failed to save transcription to history: {}", e);
+                                Ok(history_entry_id) => {
+                                    if release_smoke_enabled() {
+                                        log::info!(
+                                            "Release smoke history entry saved id={}",
+                                            history_entry_id
+                                        );
+                                        let _ = ah_for_history.emit(
+                                            "show-history-entry",
+                                            serde_json::json!({
+                                                "entryId": history_entry_id,
+                                            }),
+                                        );
+                                    }
+                                }
+                                Err(e) => {
+                                    error!("Failed to save transcription to history: {}", e);
+                                }
                             }
                         });
                     }
