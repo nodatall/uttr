@@ -20,6 +20,8 @@
     "format:backend": "cd src-tauri && cargo fmt",
     "test:playwright": "playwright test",
     "test:playwright:ui": "playwright test --ui",
+    "test:e2e:release-transcribe": "node scripts/release-transcribe-smoke.mjs",
+    "release:local": "bash scripts/release-local.sh",
     "check:translations": "bun scripts/check-translations.ts",
     "task:prompt": "node scripts/generate-task-prompt.js"
   },
