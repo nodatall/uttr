@@ -206,6 +206,7 @@ async function main() {
     "release smoke history entry",
   );
   await captureScreenshot("04-history");
+  await closeTextEditDocumentsContaining(pastedText);
 
   console.log(`Pasted text: ${pastedText.trim()}`);
   if (screenshotsEnabled) {
@@ -748,6 +749,33 @@ async function getTextEditText() {
   } catch {
     return "";
   }
+}
+
+async function closeTextEditDocumentsContaining(text) {
+  const needle = String(text).trim();
+  if (!needle) {
+    return;
+  }
+
+  const result = await osascript([
+    'tell application "TextEdit"',
+    "set closedCount to 0",
+    "repeat with docRef in documents",
+    "try",
+    `if text of docRef contains ${appleScriptString(needle)} then`,
+    "close docRef saving no",
+    "set closedCount to closedCount + 1",
+    "end if",
+    "end try",
+    "end repeat",
+    "return closedCount",
+    "end tell",
+  ]);
+  console.log(`Closed ${result.trim()} matching TextEdit smoke document(s).`);
+}
+
+function appleScriptString(value) {
+  return `"${String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
 }
 
 function containsExpectedTokens(text, tokens) {
