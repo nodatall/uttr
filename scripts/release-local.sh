@@ -12,8 +12,10 @@ Usage: bun run release:local
 Runs the local native transcription smoke test, then triggers:
   gh workflow run release.yml --ref main
 
-The smoke test requires macOS, local automation permission, and one real
-transcription provider:
+The smoke test requires macOS and local automation permission. By default it
+copies the current Uttr app profile into an isolated smoke profile, including
+the configured transcription model and encrypted BYOK files. Optional provider
+overrides:
   - UTTR_OPENAI_API_KEY or OPENAI_API_KEY
   - UTTR_GROQ_API_KEY or GROQ_API_KEY
   - UTTR_RELEASE_SMOKE_MODEL_DIR pointing to a local Parakeet v3 model directory

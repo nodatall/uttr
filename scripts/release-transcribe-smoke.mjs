@@ -2,6 +2,7 @@
 import { spawn, execFile } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
 import {
+  copyFile,
   mkdir,
   readFile,
   rm,
@@ -215,6 +216,11 @@ Options:
   --keep-artifacts                Keep scratch evidence after a successful run.
 
 Provider setup:
+  By default, the smoke test copies your current Uttr app profile, including
+  stored provider settings and encrypted BYOK files, into an isolated test
+  profile. The real profile is not modified.
+
+Explicit provider overrides:
   UTTR_OPENAI_API_KEY or OPENAI_API_KEY
   UTTR_GROQ_API_KEY or GROQ_API_KEY
   UTTR_RELEASE_SMOKE_MODEL_DIR=/path/to/parakeet-tdt-0.6b-v3-int8
@@ -247,8 +253,71 @@ function resolveProvider() {
     };
   }
 
+  const currentProfileDir = currentAppDataDir();
+  return {
+    type: "app_profile",
+    label: "current Uttr app profile",
+    selectedModel: null,
+    sourceProfileDir: currentProfileDir,
+  };
+}
+
+function currentAppDataDir() {
+  if (!process.env.HOME) {
+    throw new Error(
+      "HOME is not set, so the current Uttr app profile cannot be located.",
+    );
+  }
+
+  return path.join(
+    process.env.HOME,
+    "Library",
+    "Application Support",
+    appIdentifier,
+  );
+}
+
+async function copyCurrentAppProfile(appDataDir, provider) {
+  if (provider.type !== "app_profile") {
+    return;
+  }
+
+  const sourceSettings = path.join(
+    provider.sourceProfileDir,
+    "settings_store.json",
+  );
+  const settingsStat = await stat(sourceSettings).catch(() => null);
+  if (!settingsStat?.isFile()) {
+    throw new Error(
+      `No current Uttr settings profile was found at ${sourceSettings}. Open Uttr once or set a provider override.`,
+    );
+  }
+
+  for (const fileName of [
+    "settings_store.json",
+    "byok_secrets.json",
+    "byok_secrets.key",
+  ]) {
+    const sourcePath = path.join(provider.sourceProfileDir, fileName);
+    const sourceStat = await stat(sourcePath).catch(() => null);
+    if (sourceStat?.isFile()) {
+      await copyFile(sourcePath, path.join(appDataDir, fileName));
+    }
+  }
+}
+
+function selectedModelForProvider(provider, existingSettings) {
+  if (provider.selectedModel) {
+    return provider.selectedModel;
+  }
+
+  const selectedModel = existingSettings?.selected_model;
+  if (typeof selectedModel === "string" && selectedModel.trim()) {
+    return selectedModel;
+  }
+
   throw new Error(
-    "No real transcription provider is available. Set UTTR_OPENAI_API_KEY, OPENAI_API_KEY, UTTR_GROQ_API_KEY, GROQ_API_KEY, or UTTR_RELEASE_SMOKE_MODEL_DIR.",
+    "No selected transcription model was found in the current Uttr app profile. Select a transcription model in Uttr or set a provider override.",
   );
 }
 
@@ -257,6 +326,10 @@ function hasEnv(name) {
 }
 
 async function seedSettings(appDataDir, provider) {
+  await copyCurrentAppProfile(appDataDir, provider);
+  const settingsPath = path.join(appDataDir, "settings_store.json");
+  const existingStore = await readSettingsStore(settingsPath);
+  const existingSettings = existingStore.settings ?? {};
   const bindings = {
     transcribe: {
       id: "transcribe",
@@ -297,17 +370,14 @@ async function seedSettings(appDataDir, provider) {
   };
 
   const store = {
+    ...existingStore,
     settings: {
+      ...existingSettings,
       bindings,
       push_to_talk: false,
       audio_feedback: false,
       onboarding_completed: true,
-      selected_model: provider.selectedModel,
-      anonymous_trial_state: "new",
-      access_state: "blocked",
-      entitlement_state: "inactive",
-      byok_enabled: false,
-      byok_validation_state: "unknown",
+      selected_model: selectedModelForProvider(provider, existingSettings),
       always_on_microphone: false,
       selected_microphone: null,
       clamshell_microphone: null,
@@ -338,6 +408,19 @@ async function seedSettings(appDataDir, provider) {
     `${JSON.stringify(store, null, 2)}\n`,
     "utf8",
   );
+}
+
+async function readSettingsStore(settingsPath) {
+  try {
+    return JSON.parse(await readFile(settingsPath, "utf8"));
+  } catch (error) {
+    if (error.code !== "ENOENT") {
+      throw new Error(
+        `Failed to read smoke settings profile: ${error.message}`,
+      );
+    }
+    return {};
+  }
 }
 
 async function prepareModelDirectory(appDataDir, provider) {
