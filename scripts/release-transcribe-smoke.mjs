@@ -851,8 +851,30 @@ async function cleanup(success) {
   }
   tauriStdioFds = [];
 
+  if (scratchDir) {
+    await scrubSensitiveProfileArtifacts();
+  }
+
   if (success && scratchDir && !keepArtifacts && !preserveArtifacts) {
     await rm(scratchDir, { recursive: true, force: true });
+  }
+}
+
+async function scrubSensitiveProfileArtifacts() {
+  const appDataDir = path.join(
+    scratchDir,
+    "home",
+    "Library",
+    "Application Support",
+    appIdentifier,
+  );
+  for (const fileName of [
+    "byok_secrets.json",
+    "byok_secrets.key",
+    "byok.vault",
+    "settings_store.json",
+  ]) {
+    await rm(path.join(appDataDir, fileName), { force: true }).catch(() => {});
   }
 }
 
