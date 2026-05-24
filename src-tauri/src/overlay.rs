@@ -865,7 +865,7 @@ mod tests {
         );
 
         assert_f64_eq(x, 692.0);
-        assert_f64_eq(y, 936.0);
+        assert_f64_eq(y, 1040.0 - 84.0 - (OVERLAY_BOTTOM_OFFSET * 2.0));
     }
 
     #[test]
@@ -943,7 +943,7 @@ mod tests {
         );
 
         assert_f64_eq(x, -2732.0);
-        assert_f64_eq(y, 2954.0);
+        assert_f64_eq(y, 178.0 + 2880.0 - 84.0 - (OVERLAY_BOTTOM_OFFSET * 2.0));
     }
 
     #[test]
