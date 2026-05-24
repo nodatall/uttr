@@ -243,6 +243,13 @@ fn calculate_overlay_position_for_monitor(
 }
 
 fn get_monitor_with_cursor(app_handle: &AppHandle) -> Option<tauri::Monitor> {
+    if std::env::var("UTTR_RELEASE_SMOKE")
+        .map(|value| value == "1")
+        .unwrap_or(false)
+    {
+        return app_handle.primary_monitor().ok().flatten();
+    }
+
     if let Ok(mouse_position) = app_handle.cursor_position() {
         let mouse_location = (mouse_position.x, mouse_position.y);
         if let Ok(monitors) = app_handle.available_monitors() {

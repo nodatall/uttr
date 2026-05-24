@@ -260,3 +260,67 @@ Notes:
 - TextEdit remained running after the final smoke only because a pre-existing non-smoke `Untitled 4` document contained `probe`; the smoke-created document was closed.
   
 - Retained smoke artifacts were scrubbed of `settings_store.json`, `byok_secrets.json`, `byok_secrets.key`, and `byok.vault`.
+  
+## Final Loop Continuation - 2026-05-23
+### Fresh Resweep Result
+- A final read-only resweep found one remaining `Disposition: fix` gap: `05-history.png` existed, but the smoke did not yet have robust app-owned proof that the requested History entry had rendered.
+  
+- The same live rerun exposed two release-smoke harness failures that could make the test flaky in this workstation setup:
+  
+  - a stale Vite dev server on `1420` could block startup;
+    
+  - changing only `build.devUrl` left Tauri `devCsp` pinned to `1420`, so a dynamically selected dev port could load inconsistently.
+    
+### Final Repairs
+- Added dynamic Vite dev-port selection to `scripts/release-transcribe-smoke.mjs`.
+  
+- Updated `scripts/tauri-build-local.sh` so dev mode passes both `build.devUrl` and matching `app.security.devCsp` for the selected Vite port.
+  
+- Added a focused frontend log signal from History settings: `history settings visible id=<entryId>`. The smoke waits for this exact app-owned line before taking `05-history.png`.
+  
+- Removed the stale AppleScript accessibility traversal for History visibility.
+  
+- Hardened TextEdit focusing before shortcut delivery, before stopping recording, and before paste validation.
+  
+- Added release-smoke-only backend input initialization so the real shortcut path does not depend on a hidden WebView render before the smoke starts.
+  
+- Pinned overlay placement to the primary monitor only when `UTTR_RELEASE_SMOKE=1`, so release screenshots consistently include visible overlay and tray evidence on this multi-monitor setup.
+  
+- Extended the smoke-only transcribing hold and captured `02-transcribing.png` immediately after the transcribing overlay log, before waiting for transcription completion.
+  
+### Final Verification
+- `node --check scripts/release-transcribe-smoke.mjs`
+  
+- `bash -n scripts/tauri-build-local.sh`
+  
+- `git diff --check`
+  
+- `bun run format:check`
+  
+- `bun run lint`
+  
+- `bun run check:translations`
+  
+- `cargo test --manifest-path src-tauri/Cargo.toml --quiet`
+  
+- `bun run build`
+  
+- `bun run test:playwright`
+  
+- `bun run test:e2e:release-transcribe` Latest smoke evidence: `/Volumes/Code/uttr/agents-scratch/release-transcribe-smoke/2026-05-24T03-23-57-326Z/screenshots`. Visual inspection confirmed:
+  
+- `01-recording.png` shows the recording overlay glow on the primary display and the Uttr tray icon in the menu bar.
+  
+- `02-transcribing.png` shows the transcribing overlay state before paste completes.
+  
+- `03-pasted-result.png` shows `Release smoke test.` pasted into TextEdit.
+  
+- `04-settings.png` shows the Uttr settings window open.
+  
+- `05-history.png` shows History selected with the `Release smoke test.` entry visible. Residual non-blocking risks from the sweep remain:
+  
+- malformed marketing API request bodies can still produce inconsistent client errors;
+  
+- successful smoke artifacts are intentionally retained as release evidence;
+  
+- tracked `.playwright-mcp` snapshots remain noisy generated artifacts.

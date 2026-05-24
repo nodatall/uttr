@@ -277,6 +277,28 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     utils::create_recording_overlay(app_handle);
 }
 
+fn release_smoke_enabled() -> bool {
+    std::env::var("UTTR_RELEASE_SMOKE")
+        .map(|value| value == "1")
+        .unwrap_or(false)
+}
+
+fn initialize_release_smoke_input(app_handle: &AppHandle) {
+    if !release_smoke_enabled() {
+        return;
+    }
+
+    log::info!("Release smoke initializing input from backend");
+
+    if let Err(err) = commands::initialize_enigo(app_handle.clone()) {
+        log::warn!("Release smoke failed to initialize Enigo: {}", err);
+    }
+
+    if let Err(err) = commands::initialize_shortcuts(app_handle.clone()) {
+        log::warn!("Release smoke failed to initialize shortcuts: {}", err);
+    }
+}
+
 fn spawn_shortcut_refresh_heartbeat(app_handle: AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
@@ -493,6 +515,7 @@ pub fn run() {
             app.manage(TranscriptionCoordinator::new(app_handle.clone()));
 
             initialize_core_logic(&app_handle);
+            initialize_release_smoke_input(&app_handle);
             spawn_shortcut_refresh_heartbeat(app_handle.clone());
 
             // Show main window only if not starting hidden

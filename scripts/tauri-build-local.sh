@@ -42,7 +42,26 @@ fi
 
 if [[ "${TAURI_CMD}" == "dev" ]]; then
   VITE_PORT="${VITE_PORT:-1420}"
-  exec "${TAURI_BIN}" dev --config "{\"build\":{\"devUrl\":\"http://localhost:${VITE_PORT}\"}}" "${@:2}"
+  DEV_CONFIG="$(node -e '
+const port = process.argv[1];
+const origin = `http://localhost:${port}`;
+const devCsp = [
+  `default-src '\''self'\'' ${origin} ipc: http://ipc.localhost`,
+  `script-src '\''self'\'' '\''unsafe-inline'\'' ${origin}`,
+  `style-src '\''self'\'' '\''unsafe-inline'\'' https://fonts.googleapis.com ${origin}`,
+  "font-src '\''self'\'' https://fonts.gstatic.com data:",
+  `img-src '\''self'\'' asset: http://asset.localhost data: blob: ${origin}`,
+  "connect-src ipc: http://ipc.localhost http://localhost:* ws://localhost:*",
+  "object-src '\''none'\''",
+  "base-uri '\''self'\''",
+  "frame-ancestors '\''none'\''",
+].join("; ");
+process.stdout.write(JSON.stringify({
+  build: { devUrl: origin },
+  app: { security: { devCsp } },
+}));
+' "${VITE_PORT}")"
+  exec "${TAURI_BIN}" dev --config "${DEV_CONFIG}" "${@:2}"
 fi
 
 exec "${TAURI_BIN}" "$@"

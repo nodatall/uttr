@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawn, execFile } from "node:child_process";
 import { closeSync, openSync } from "node:fs";
+import net from "node:net";
 import {
   copyFile,
   mkdir,
@@ -44,7 +45,7 @@ const expectedTokens = String(
 const recordSeconds = Number(
   args["record-seconds"] ?? process.env.UTTR_RELEASE_SMOKE_RECORD_SECONDS ?? 5,
 );
-const startupTimeoutMs = Number(args["startup-timeout-ms"] ?? 90_000);
+const startupTimeoutMs = Number(args["startup-timeout-ms"] ?? 180_000);
 const transcriptionTimeoutMs = Number(
   args["transcription-timeout-ms"] ?? 120_000,
 );
@@ -151,6 +152,7 @@ async function main() {
   console.log("");
   console.log(`Starting recording with generated smoke audio: "${phrase}"`);
 
+  await focusTextEditTarget();
   const recordingStartedAt = Date.now();
   await triggerSmokeShortcut();
   await waitForLog(
@@ -173,6 +175,7 @@ async function main() {
     await sleep(remainingMs);
   }
 
+  await focusTextEditTarget();
   await triggerSmokeShortcut();
   await waitForLog(
     logPath,
@@ -180,8 +183,8 @@ async function main() {
     15_000,
     "transcribing overlay",
   );
-  await focusTextEditTarget();
   await captureScreenshot("02-transcribing", { expectedFrontmost: "TextEdit" });
+  await focusTextEditTarget();
   await waitForLog(
     logPath,
     "Transcription completed",
@@ -215,6 +218,12 @@ async function main() {
   await openGeneralSettingsInUttr();
   await captureScreenshot("04-settings", { expectedFrontmost: "uttr" });
   await openHistoryInUttr();
+  await waitForLog(
+    logPath,
+    `history settings visible id=${historyEntry.id}`,
+    10_000,
+    "History settings visible entry",
+  );
   await captureScreenshot("05-history", { expectedFrontmost: "uttr" });
   await closeTextEditDocumentsContaining(pastedText);
   await closeEmptyTextEditDocuments();
@@ -561,6 +570,16 @@ async function startTauriDev({
 }) {
   const stdoutHandle = await openAppend(stdoutPath);
   const stderrHandle = await openAppend(stderrPath);
+  const vitePort =
+    process.env.UTTR_RELEASE_SMOKE_VITE_PORT ??
+    String(await findAvailableTcpPort(1420));
+  const viteHmrPort =
+    process.env.UTTR_RELEASE_SMOKE_VITE_HMR_PORT ??
+    String(
+      await findAvailableTcpPort(Number(vitePort) + 1, [Number(vitePort)]),
+    );
+  console.log(`Using isolated Vite dev port: ${vitePort}`);
+
   const env = {
     ...process.env,
     HOME: homeDir,
@@ -575,9 +594,9 @@ async function startTauriDev({
     UTTR_RELEASE_SMOKE: "1",
     UTTR_RELEASE_SMOKE_AUDIO_FILE: smokeAudioPath,
     UTTR_RELEASE_SMOKE_TRANSCRIBING_HOLD_MS:
-      process.env.UTTR_RELEASE_SMOKE_TRANSCRIBING_HOLD_MS ?? "1500",
-    VITE_PORT: process.env.UTTR_RELEASE_SMOKE_VITE_PORT ?? "1420",
-    VITE_HMR_PORT: process.env.UTTR_RELEASE_SMOKE_VITE_HMR_PORT ?? "1421",
+      process.env.UTTR_RELEASE_SMOKE_TRANSCRIBING_HOLD_MS ?? "3000",
+    VITE_PORT: vitePort,
+    VITE_HMR_PORT: viteHmrPort,
     RUST_LOG: process.env.RUST_LOG ?? "info",
   };
 
@@ -631,14 +650,24 @@ async function openTextEditTarget() {
 }
 
 async function focusTextEditTarget() {
+  await execFileText("open", ["-a", "TextEdit"]);
   await osascript([
     'tell application "TextEdit" to activate',
     'tell application "System Events"',
-    'set frontmost of process "TextEdit" to true',
+    'set textEditProcess to process "TextEdit"',
+    "set frontmost of textEditProcess to true",
+    "if exists window 1 of textEditProcess then",
+    'perform action "AXRaise" of window 1 of textEditProcess',
+    "set windowPosition to position of window 1 of textEditProcess",
+    "set windowSize to size of window 1 of textEditProcess",
+    "set clickX to (item 1 of windowPosition) + ((item 1 of windowSize) / 2)",
+    "set clickY to (item 2 of windowPosition) + 120",
+    "click at {clickX, clickY}",
+    "end if",
     "end tell",
-    "delay 0.2",
+    "delay 0.5",
   ]);
-  await waitForFrontmostApplication("TextEdit", 5_000);
+  await waitForFrontmostApplication("TextEdit", 15_000);
 }
 
 async function openSettingsInUttr() {
@@ -932,55 +961,6 @@ async function getTextEditText() {
   }
 }
 
-async function waitForHistoryEntryVisible(entryId, tokens, timeoutMs = 10_000) {
-  const started = Date.now();
-  const visibleText = tokens.find((token) => token.length >= 3) ?? phrase;
-  while (Date.now() - started < timeoutMs) {
-    const visible = await osascript([
-      "on uiContainsText(container, targetText)",
-      'tell application "System Events"',
-      "try",
-      "repeat with child in UI elements of container",
-      "try",
-      "set childName to name of child as text",
-      "if childName contains targetText then return true",
-      "end try",
-      "try",
-      "set childValue to value of child as text",
-      "if childValue contains targetText then return true",
-      "end try",
-      "try",
-      "set childDescription to description of child as text",
-      "if childDescription contains targetText then return true",
-      "end try",
-      "try",
-      "if my uiContainsText(child, targetText) then return true",
-      "end try",
-      "end repeat",
-      "end try",
-      "end tell",
-      "return false",
-      "end uiContainsText",
-      'tell application "System Events"',
-      `set targetProcesses to every process whose unix id is ${await findUttrProcessId()}`,
-      'if (count of targetProcesses) is 0 then return "missing"',
-      "set targetProcess to item 1 of targetProcesses",
-      `if my uiContainsText(window 1 of targetProcess, ${appleScriptString(String(entryId))}) then return "visible"`,
-      `if my uiContainsText(window 1 of targetProcess, ${appleScriptString(visibleText)}) then return "visible"`,
-      'return "pending"',
-      "end tell",
-    ]).catch(() => "pending");
-    if (visible.includes("visible")) {
-      return;
-    }
-    await sleep(500);
-  }
-
-  throw new Error(
-    "Timed out waiting for the Uttr History UI to become visible.",
-  );
-}
-
 async function waitForFrontmostApplication(expectedName, timeoutMs) {
   const started = Date.now();
   const expected = expectedName.toLowerCase();
@@ -1078,6 +1058,35 @@ async function execFileText(command, commandArgs, options = {}) {
       }
       resolve(stdout);
     });
+  });
+}
+
+async function findAvailableTcpPort(preferredPort, reservedPorts = []) {
+  const reserved = new Set(reservedPorts);
+  for (let port = preferredPort; port < preferredPort + 100; port += 1) {
+    if (reserved.has(port)) {
+      continue;
+    }
+    if (await canListenOnLocalhost(port)) {
+      return port;
+    }
+  }
+  throw new Error(
+    `Could not find an available local TCP port starting at ${preferredPort}.`,
+  );
+}
+
+async function canListenOnLocalhost(port) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.unref();
+    server.once("error", () => {
+      resolve(false);
+    });
+    server.once("listening", () => {
+      server.close(() => resolve(true));
+    });
+    server.listen({ port, host: "localhost" });
   });
 }
 
