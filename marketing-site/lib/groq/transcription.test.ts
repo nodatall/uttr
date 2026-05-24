@@ -34,10 +34,13 @@ describe("Groq transcription helpers", () => {
 
   test("resolves translation model defaults and turbo fallbacks", () => {
     expect(resolveGroqTranscriptionModel(null, false)).toBe("whisper-large-v3");
-    expect(resolveGroqTranscriptionModel("  custom-model  ", false)).toBe(
-      "custom-model",
+    expect(resolveGroqTranscriptionModel("whisper-large-v3-turbo", false)).toBe(
+      "whisper-large-v3-turbo",
     );
-    expect(resolveGroqTranscriptionModel("super-turbo", true)).toBe(
+    expect(resolveGroqTranscriptionModel("custom-model", false)).toBe(
+      "whisper-large-v3",
+    );
+    expect(resolveGroqTranscriptionModel("whisper-large-v3-turbo", true)).toBe(
       "whisper-large-v3",
     );
   });
@@ -72,5 +75,22 @@ describe("Groq transcription helpers", () => {
 
     expect(result.text).toBe("retry success");
     expect(attempts).toBe(2);
+  });
+
+  test("redacts provider error bodies from thrown messages", async () => {
+    globalThis.fetch = (async () =>
+      new Response("provider included sensitive detail", {
+        status: 400,
+        statusText: "Bad Request",
+      })) as typeof fetch;
+
+    await expect(
+      transcribeWithGroq({
+        audioFile: new File([new Uint8Array([1, 2, 3])], "uttr.wav", {
+          type: "audio/wav",
+        }),
+        translateToEnglish: false,
+      }),
+    ).rejects.toThrow("Groq API request failed (400 Bad Request)");
   });
 });

@@ -66,4 +66,20 @@ describe("/api/auth/convert-anonymous rate limiting", () => {
       error: "Too many anonymous conversion requests.",
     });
   });
+
+  test("returns a client error for malformed JSON payloads", async () => {
+    delete process.env.UTTR_FORCE_DURABLE_RATE_LIMITS;
+
+    const response = await POST(
+      new Request("https://uttr.test/api/auth/convert-anonymous", {
+        method: "POST",
+        body: "{",
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid conversion payload.",
+    });
+  });
 });

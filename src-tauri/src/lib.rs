@@ -267,10 +267,14 @@ fn initialize_core_logic(app_handle: &AppHandle) {
 
     if settings.autostart_enabled {
         // Enable autostart if user has opted in
-        let _ = autostart_manager.enable();
+        if let Err(error) = autostart_manager.enable() {
+            log::warn!("Failed to apply enabled autostart setting: {}", error);
+        }
     } else {
         // Disable autostart if user has opted out
-        let _ = autostart_manager.disable();
+        if let Err(error) = autostart_manager.disable() {
+            log::warn!("Failed to apply disabled autostart setting: {}", error);
+        }
     }
 
     // Create the recording overlay window (hidden by default)

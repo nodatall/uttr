@@ -60,6 +60,8 @@ let scratchDir = "";
 let cleaningUpTauri = false;
 let preserveArtifacts = false;
 let smokeDocumentCreated = false;
+let smokeDocumentName = null;
+let smokeDocumentPath = null;
 let lastScreenshotPath = null;
 
 main().catch(async (error) => {
@@ -637,33 +639,86 @@ async function openAppend(filePath) {
 }
 
 async function openTextEditTarget() {
+  smokeDocumentName = `release-smoke-textedit-target-${process.pid}.txt`;
+  smokeDocumentPath = path.join(scratchDir, smokeDocumentName);
+  await writeFile(smokeDocumentPath, smokeDocumentMarker, "utf8");
+  await execFileText("open", ["-a", "TextEdit", smokeDocumentPath]);
+  smokeDocumentCreated = true;
   await osascript([
     'tell application "TextEdit"',
     "activate",
-    `make new document with properties {text:${appleScriptString(smokeDocumentMarker)}}`,
-    'set text of front document to ""',
+    `set targetName to ${appleScriptString(smokeDocumentName)}`,
+    `set targetMarker to ${appleScriptString(smokeDocumentMarker)}`,
+    "set targetDocument to missing value",
+    "repeat 50 times",
+    "repeat with docRef in documents",
+    "try",
+    "if (name of docRef is targetName) and (text of docRef contains targetMarker) then",
+    "set targetDocument to docRef",
+    "exit repeat",
+    "end if",
+    "end try",
+    "end repeat",
+    "if targetDocument is not missing value then exit repeat",
+    "delay 0.1",
+    "end repeat",
+    'if targetDocument is missing value then error "TextEdit smoke target document did not open"',
+    'set text of targetDocument to ""',
     "end tell",
     "delay 0.5",
   ]);
-  smokeDocumentCreated = true;
   await waitForFrontmostApplication("TextEdit", 5_000);
 }
 
 async function focusTextEditTarget() {
-  await execFileText("open", ["-a", "TextEdit"]);
+  if (smokeDocumentPath) {
+    await execFileText("open", ["-a", "TextEdit", smokeDocumentPath]);
+  } else {
+    await execFileText("open", ["-a", "TextEdit"]);
+  }
   await osascript([
-    'tell application "TextEdit" to activate',
+    'tell application "TextEdit"',
+    "activate",
+    `set targetName to ${appleScriptString(smokeDocumentName || "")}`,
+    'if targetName is not "" then',
+    "repeat 50 times",
+    "if exists window targetName then exit repeat",
+    "delay 0.1",
+    "end repeat",
+    'if not (exists window targetName) then error "TextEdit target window not found"',
+    "set index of window targetName to 1",
+    "set bounds of window targetName to {120, 120, 920, 620}",
+    "end if",
+    "end tell",
     'tell application "System Events"',
     'set textEditProcess to process "TextEdit"',
     "set frontmost of textEditProcess to true",
+    `set targetName to ${appleScriptString(smokeDocumentName || "")}`,
+    "set targetWindow to missing value",
+    "repeat 50 times",
+    "repeat with windowRef in windows of textEditProcess",
+    'if targetName is not "" and (name of windowRef is targetName) then',
+    "set targetWindow to windowRef",
+    "exit repeat",
+    "end if",
+    "end repeat",
+    "if targetWindow is not missing value then exit repeat",
+    "delay 0.1",
+    "end repeat",
+    "if targetWindow is missing value then",
+    'if targetName is not "" then error "TextEdit target window not found"',
     "if exists window 1 of textEditProcess then",
-    'perform action "AXRaise" of window 1 of textEditProcess',
-    "set windowPosition to position of window 1 of textEditProcess",
-    "set windowSize to size of window 1 of textEditProcess",
+    "set targetWindow to window 1 of textEditProcess",
+    "else",
+    'error "TextEdit target window not found"',
+    "end if",
+    "end if",
+    'perform action "AXRaise" of targetWindow',
+    "set windowPosition to position of targetWindow",
+    "set windowSize to size of targetWindow",
     "set clickX to (item 1 of windowPosition) + ((item 1 of windowSize) / 2)",
     "set clickY to (item 2 of windowPosition) + 120",
     "click at {clickX, clickY}",
-    "end if",
     "end tell",
     "delay 0.5",
   ]);
@@ -952,6 +1007,13 @@ async function getTextEditText() {
   try {
     return await osascript([
       'tell application "TextEdit"',
+      `set targetName to ${appleScriptString(smokeDocumentName || "")}`,
+      'if targetName is not "" then',
+      "repeat with docRef in documents",
+      "if name of docRef is targetName then return text of docRef",
+      "end repeat",
+      'return ""',
+      "end if",
       'if not (exists front document) then return ""',
       "return text of front document",
       "end tell",
@@ -1091,6 +1153,12 @@ async function canListenOnLocalhost(port) {
 }
 
 async function cleanup(success) {
+  if (!success) {
+    await closeSmokeTextEditDocument().catch(() => {});
+  }
+  if (success) {
+    await closeSmokeTextEditDocument().catch(() => {});
+  }
   if (!success && smokeDocumentCreated) {
     await closeEmptyFrontTextEditDocument().catch(() => {});
     await closeTextEditDocumentsContaining(phrase).catch(() => {});
@@ -1154,6 +1222,37 @@ async function closeEmptyFrontTextEditDocument() {
     "end if",
     "end tell",
   ]);
+}
+
+async function closeSmokeTextEditDocument() {
+  if (!smokeDocumentPath && !smokeDocumentName) {
+    return;
+  }
+
+  const result = await osascript([
+    'tell application "TextEdit"',
+    "set closedCount to 0",
+    `set targetPath to ${appleScriptString(smokeDocumentPath || "")}`,
+    `set targetName to ${appleScriptString(smokeDocumentName || "")}`,
+    "repeat with docRef in documents",
+    "set shouldClose to false",
+    "try",
+    "set docPath to POSIX path of (file of docRef as alias)",
+    "if docPath is targetPath then set shouldClose to true",
+    "end try",
+    'if (shouldClose is false) and (targetName is not "") and (name of docRef is targetName) then set shouldClose to true',
+    "if shouldClose then",
+    "close docRef saving no",
+    "set closedCount to closedCount + 1",
+    "end if",
+    "end repeat",
+    "return closedCount",
+    "end tell",
+  ]);
+  const closedCount = Number(result.trim());
+  console.log(
+    `Closed ${Number.isFinite(closedCount) ? closedCount : 0} TextEdit smoke target document(s).`,
+  );
 }
 
 async function closeEmptyTextEditDocuments() {

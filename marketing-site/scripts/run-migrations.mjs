@@ -4,6 +4,7 @@ import pg from "pg";
 
 const migrationsDir = path.join(process.cwd(), "db", "migrations");
 const databaseUrl = process.env.DATABASE_URL;
+const migrationLockId = 14200420;
 
 if (!databaseUrl) {
   throw new Error("DATABASE_URL is required to run database migrations.");
@@ -14,6 +15,10 @@ const client = new pg.Client({ connectionString: databaseUrl });
 await client.connect();
 
 try {
+  await client.query("set lock_timeout = '10s'");
+  await client.query("set statement_timeout = '5min'");
+  await client.query("select pg_advisory_lock($1)", [migrationLockId]);
+
   await client.query(`
     create table if not exists public.schema_migrations (
       version text primary key,
@@ -53,5 +58,8 @@ try {
     }
   }
 } finally {
+  try {
+    await client.query("select pg_advisory_unlock($1)", [migrationLockId]);
+  } catch {}
   await client.end();
 }

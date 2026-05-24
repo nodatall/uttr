@@ -29,6 +29,10 @@ const requestSchema = z.object({
   claim_token: z.string().min(1).max(4096),
 });
 
+async function readJsonPayload(request: Request) {
+  return request.json().catch(() => ({}));
+}
+
 function claimConversionStatusCode(status: ClaimConversionStatus) {
   switch (status) {
     case "linked":
@@ -71,7 +75,7 @@ export async function POST(request: Request) {
       return respondToRateLimit(rateLimit);
     }
 
-    const parsedBody = requestSchema.safeParse(await request.json());
+    const parsedBody = requestSchema.safeParse(await readJsonPayload(request));
     if (!parsedBody.success) {
       return NextResponse.json(
         { error: "Invalid conversion payload." },

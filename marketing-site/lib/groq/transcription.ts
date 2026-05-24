@@ -4,6 +4,10 @@ import { readCloudProxyConfig } from "@/lib/env";
 export const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
 export const GROQ_UPLOAD_LIMIT_BYTES = 100 * 1024 * 1024;
 export const GROQ_DEFAULT_TRANSLATION_MODEL = "whisper-large-v3";
+const GROQ_ALLOWED_TRANSCRIPTION_MODELS = new Set([
+  "whisper-large-v3",
+  "whisper-large-v3-turbo",
+]);
 
 export type GroqTranscriptionEndpoint =
   | "audio/transcriptions"
@@ -46,7 +50,13 @@ export function resolveGroqTranscriptionModel(
   translateToEnglish: boolean,
 ) {
   const { groqModelDefault } = readCloudProxyConfig();
-  const resolved = requestedModel?.trim() || groqModelDefault;
+  const requested = requestedModel?.trim();
+  const configuredDefault =
+    groqModelDefault.trim() || GROQ_DEFAULT_TRANSLATION_MODEL;
+  const resolved =
+    requested && GROQ_ALLOWED_TRANSCRIPTION_MODELS.has(requested)
+      ? requested
+      : configuredDefault;
 
   if (translateToEnglish && resolved.toLowerCase().includes("turbo")) {
     return GROQ_DEFAULT_TRANSLATION_MODEL;
@@ -187,9 +197,9 @@ export async function transcribeWithGroq({
   );
 
   if (!response.ok) {
-    const responseBody = await response.text().catch(() => "");
+    await response.arrayBuffer().catch(() => null);
     throw new Error(
-      `Groq API request failed (${response.status} ${response.statusText}): ${responseBody || "empty response body"}`,
+      `Groq API request failed (${response.status} ${response.statusText})`,
     );
   }
 

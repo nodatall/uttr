@@ -7,6 +7,44 @@ export function readEnv(name: string): string {
   return value;
 }
 
+function isProductionRuntime() {
+  return (
+    process.env.NODE_ENV === "production" ||
+    process.env.VERCEL === "1" ||
+    process.env.RAILWAY_ENVIRONMENT !== undefined ||
+    process.env.FLY_APP_NAME !== undefined
+  );
+}
+
+export function readSecretEnv(name: string): string {
+  const value = readEnv(name);
+  if (!isProductionRuntime()) {
+    return value;
+  }
+
+  const trimmed = value.trim();
+  const unsafeValues = new Set([
+    "replace-with-a-long-random-secret",
+    "install-secret-test",
+    "claim-secret-test",
+    "test-session-secret-with-enough-entropy",
+  ]);
+  const unsafePattern =
+    /\b(test|example|dummy|placeholder|change-?me|replace)\b/i;
+
+  if (
+    trimmed.length < 32 ||
+    unsafeValues.has(trimmed) ||
+    unsafePattern.test(trimmed)
+  ) {
+    throw new Error(
+      `Environment variable ${name} must be a strong production secret.`,
+    );
+  }
+
+  return value;
+}
+
 export function readOptionalEnv(name: string): string | null {
   return process.env[name] || null;
 }
@@ -67,13 +105,13 @@ export function readCloudProxyConfig() {
 
 export function readAccessTokenConfig() {
   return {
-    installTokenSecret: readEnv("UTTR_INSTALL_TOKEN_SECRET"),
-    claimTokenSecret: readEnv("UTTR_CLAIM_TOKEN_SECRET"),
+    installTokenSecret: readSecretEnv("UTTR_INSTALL_TOKEN_SECRET"),
+    claimTokenSecret: readSecretEnv("UTTR_CLAIM_TOKEN_SECRET"),
   };
 }
 
 export function readSessionConfig() {
   return {
-    sessionSecret: readEnv("UTTR_SESSION_SECRET"),
+    sessionSecret: readSecretEnv("UTTR_SESSION_SECRET"),
   };
 }

@@ -190,6 +190,9 @@ function buildRequest(
 
   return new Request("https://uttr.test/api/transcribe/cloud", {
     method: "POST",
+    headers: {
+      "content-length": String(file.size),
+    },
     body: formData,
   });
 }
@@ -323,5 +326,71 @@ describe("/api/transcribe/cloud usage accounting", () => {
     expect(callOrder).toEqual([]);
     expect(transcribeInputs).toHaveLength(0);
     expect(usageEventCalls).toHaveLength(0);
+  });
+
+  test("rejects uploads without a known content length before parsing multipart data", async () => {
+    const request = new Request("https://uttr.test/api/transcribe/cloud", {
+      method: "POST",
+    });
+    Object.defineProperty(request, "formData", {
+      configurable: true,
+      value: async () => {
+        throw new Error("multipart body should not be parsed without length");
+      },
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(411);
+    await expect(response.json()).resolves.toEqual({
+      error: "Audio upload requires a Content-Length header.",
+    });
+    expect(callOrder).toEqual([]);
+  });
+
+  test("rejects malformed content length values before parsing multipart data", async () => {
+    const request = new Request("https://uttr.test/api/transcribe/cloud", {
+      method: "POST",
+      headers: {
+        "content-length": "10x",
+      },
+    });
+    Object.defineProperty(request, "formData", {
+      configurable: true,
+      value: async () => {
+        throw new Error("multipart body should not be parsed with bad length");
+      },
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(411);
+    await expect(response.json()).resolves.toEqual({
+      error: "Audio upload requires a Content-Length header.",
+    });
+    expect(callOrder).toEqual([]);
+  });
+
+  test("returns a client error for malformed multipart uploads", async () => {
+    const request = new Request("https://uttr.test/api/transcribe/cloud", {
+      method: "POST",
+      headers: {
+        "content-length": "10",
+      },
+    });
+    Object.defineProperty(request, "formData", {
+      configurable: true,
+      value: async () => {
+        throw new Error("invalid multipart payload");
+      },
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toEqual({
+      error: "Invalid multipart audio upload.",
+    });
+    expect(callOrder).toEqual([]);
   });
 });

@@ -29,6 +29,14 @@ const requestSchema = z.object({
   source: z.string().max(120).optional(),
 });
 
+async function readJsonPayload(request: Request) {
+  try {
+    return await request.json();
+  } catch {
+    return null;
+  }
+}
+
 function normalizeSource(source: string | undefined) {
   return source?.trim() || "direct";
 }
@@ -124,7 +132,15 @@ export async function POST(request: Request) {
       return respondToRateLimit(rateLimit);
     }
 
-    const parsedBody = requestSchema.safeParse(await request.json());
+    const jsonPayload = await readJsonPayload(request);
+    if (!jsonPayload) {
+      return NextResponse.json(
+        { error: "Invalid checkout payload." },
+        { status: 400 },
+      );
+    }
+
+    const parsedBody = requestSchema.safeParse(jsonPayload);
     if (!parsedBody.success) {
       return NextResponse.json(
         { error: "Invalid checkout payload." },

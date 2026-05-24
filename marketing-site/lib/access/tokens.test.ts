@@ -10,16 +10,23 @@ import {
 import type { ClaimTokenPayload, InstallTokenPayload } from "./types";
 
 const originalEnv = {
+  NODE_ENV: process.env.NODE_ENV,
   UTTR_INSTALL_TOKEN_SECRET: process.env.UTTR_INSTALL_TOKEN_SECRET,
   UTTR_CLAIM_TOKEN_SECRET: process.env.UTTR_CLAIM_TOKEN_SECRET,
 };
 
 beforeEach(() => {
-  process.env.UTTR_INSTALL_TOKEN_SECRET = "install-secret-test";
-  process.env.UTTR_CLAIM_TOKEN_SECRET = "claim-secret-test";
+  process.env.UTTR_INSTALL_TOKEN_SECRET =
+    "install-secret-test-with-enough-entropy";
+  process.env.UTTR_CLAIM_TOKEN_SECRET = "claim-secret-test-with-enough-entropy";
 });
 
 afterEach(() => {
+  if (originalEnv.NODE_ENV === undefined) {
+    delete process.env.NODE_ENV;
+  } else {
+    process.env.NODE_ENV = originalEnv.NODE_ENV;
+  }
   process.env.UTTR_INSTALL_TOKEN_SECRET = originalEnv.UTTR_INSTALL_TOKEN_SECRET;
   process.env.UTTR_CLAIM_TOKEN_SECRET = originalEnv.UTTR_CLAIM_TOKEN_SECRET;
 });
@@ -91,5 +98,15 @@ describe("token helpers", () => {
     const token = signClaimToken(claimPayload);
     expect(verifyClaimToken(token)).toEqual(claimPayload);
     expect(hashClaimToken(token)).toHaveLength(64);
+  });
+
+  test("rejects placeholder signing secrets in production", () => {
+    process.env.NODE_ENV = "production";
+    process.env.UTTR_INSTALL_TOKEN_SECRET =
+      "install-secret-test-with-enough-entropy";
+
+    expect(() => signInstallToken(installPayload)).toThrow(
+      "Environment variable UTTR_INSTALL_TOKEN_SECRET must be a strong production secret.",
+    );
   });
 });

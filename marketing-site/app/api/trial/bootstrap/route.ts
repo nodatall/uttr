@@ -24,6 +24,10 @@ const requestSchema = z.object({
   app_version: z.string().min(1).max(100),
 });
 
+async function readJsonPayload(request: Request) {
+  return request.json().catch(() => ({}));
+}
+
 function respondToRateLimit(
   rateLimit: RateLimitBlockedDecision,
   exhaustedMessage: string,
@@ -55,7 +59,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const parsedBody = requestSchema.safeParse(await request.json());
+    const parsedBody = requestSchema.safeParse(await readJsonPayload(request));
     if (!parsedBody.success) {
       return NextResponse.json(
         { error: "Invalid bootstrap payload." },

@@ -1,7 +1,7 @@
 import { createHmac, randomBytes, scrypt, timingSafeEqual } from "node:crypto";
 import { promisify } from "node:util";
 import { dbQuery } from "@/lib/db";
-import { readEnv } from "@/lib/env";
+import { readSecretEnv } from "@/lib/env";
 import type { AuthenticatedUser } from "@/lib/access/types";
 
 const scryptAsync = promisify(scrypt);
@@ -61,7 +61,7 @@ async function verifyPassword(password: string, passwordHash: string) {
 }
 
 function signPayload(encodedPayload: string) {
-  return createHmac("sha256", readEnv("UTTR_SESSION_SECRET"))
+  return createHmac("sha256", readSecretEnv("UTTR_SESSION_SECRET"))
     .update(encodedPayload)
     .digest("base64url");
 }

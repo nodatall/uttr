@@ -2,6 +2,25 @@ name: "test"
 on: [pull_request]
 
 jobs:
+  rust-production-check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev libasound2-dev libssl-dev libgtk-layer-shell-dev libopenblas-dev libx11-dev libxtst-dev libxrandr-dev libvulkan-dev mesa-vulkan-drivers
+
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+          key: production-check
+
+      - name: Check production Rust modules
+        working-directory: src-tauri
+        run: cargo check --locked --lib --bin uttr
+
   rust-tests:
     runs-on: ubuntu-24.04
     steps:

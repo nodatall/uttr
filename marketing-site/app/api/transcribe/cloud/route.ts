@@ -149,7 +149,7 @@ function resolvePostTranscriptionAccessState(
 
 function requestBodyIsClearlyTooLarge(request: Request) {
   const contentLength = request.headers.get("content-length");
-  if (!contentLength) {
+  if (!contentLength || !/^\d+$/.test(contentLength)) {
     return false;
   }
 
@@ -158,6 +158,24 @@ function requestBodyIsClearlyTooLarge(request: Request) {
     Number.isFinite(parsed) &&
     parsed > CLOUD_TRANSCRIPTION_REQUEST_BODY_LIMIT_BYTES
   );
+}
+
+function requestBodyHasKnownLength(request: Request) {
+  const contentLength = request.headers.get("content-length");
+  if (!contentLength || !/^\d+$/.test(contentLength)) {
+    return false;
+  }
+
+  const parsed = Number.parseInt(contentLength, 10);
+  return Number.isFinite(parsed) && parsed > 0;
+}
+
+async function readMultipartPayload(request: Request) {
+  try {
+    return await request.formData();
+  } catch {
+    return null;
+  }
 }
 
 export async function POST(request: Request) {
@@ -246,7 +264,20 @@ export async function POST(request: Request) {
       );
     }
 
-    const formData = await request.formData();
+    if (!requestBodyHasKnownLength(request)) {
+      return NextResponse.json(
+        { error: "Audio upload requires a Content-Length header." },
+        { status: 411 },
+      );
+    }
+
+    const formData = await readMultipartPayload(request);
+    if (!formData) {
+      return NextResponse.json(
+        { error: "Invalid multipart audio upload." },
+        { status: 400 },
+      );
+    }
     const fileEntry = formData.get("file");
 
     if (!isFileEntry(fileEntry)) {
