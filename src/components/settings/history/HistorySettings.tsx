@@ -9,6 +9,7 @@ import { readFile } from "@tauri-apps/plugin-fs";
 import { commands, type HistoryEntry } from "@/bindings";
 import { formatDateTime } from "@/utils/dateFormat";
 import { useOsType } from "@/hooks/useOsType";
+import { logFrontendStartup } from "@/lib/startupLog";
 
 const MAX_VISIBLE_HISTORY = 20;
 
@@ -53,6 +54,10 @@ export const HistorySettings: React.FC<HistorySettingsProps> = ({
     null,
   );
   const visibleEntries = historyEntries.slice(0, MAX_VISIBLE_HISTORY);
+  const focusedEntryId = focusRequest?.entryId ?? null;
+  const focusedEntryVisible =
+    focusedEntryId !== null &&
+    visibleEntries.some((entry) => entry.id === focusedEntryId);
 
   const loadHistoryEntries = useCallback(async () => {
     try {
@@ -93,11 +98,11 @@ export const HistorySettings: React.FC<HistorySettingsProps> = ({
   }, [loadHistoryEntries]);
 
   useEffect(() => {
-    if (!focusRequest?.entryId || loading) {
+    if (focusedEntryId === null || loading) {
       return;
     }
 
-    const targetEntryId = focusRequest.entryId;
+    const targetEntryId = focusedEntryId;
     const entryElement = document.querySelector<HTMLElement>(
       `[data-history-entry-id="${targetEntryId}"]`,
     );
@@ -121,7 +126,15 @@ export const HistorySettings: React.FC<HistorySettingsProps> = ({
     return () => {
       window.clearTimeout(timeoutId);
     };
-  }, [focusRequest, loading, visibleEntries]);
+  }, [focusedEntryId, loading, visibleEntries]);
+
+  useEffect(() => {
+    if (loading || focusedEntryId === null || !focusedEntryVisible) {
+      return;
+    }
+
+    logFrontendStartup(`history settings visible id=${focusedEntryId}`);
+  }, [focusedEntryId, focusedEntryVisible, loading]);
 
   const toggleSaved = async (id: number) => {
     try {

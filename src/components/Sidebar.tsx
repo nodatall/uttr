@@ -21,10 +21,7 @@ import {
 import UpdateChecker from "./update-checker";
 import { ManageSubscriptionButton } from "./settings/ManageSubscriptionButton";
 import { UpgradeButton } from "./settings/UpgradeButton";
-import {
-  isDevPlanSimulationActive,
-  shouldShowModelControls,
-} from "@/lib/utils/premiumFeatures";
+import { shouldShowModelControls } from "@/lib/utils/premiumFeatures";
 
 export type SidebarSection = keyof typeof SECTIONS_CONFIG;
 
@@ -98,7 +95,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const [version, setVersion] = useState("");
   const versionTapCountRef = useRef(0);
   const versionTapTimerRef = useRef<number | null>(null);
-  const isPlanSimulationActive = isDevPlanSimulationActive(installAccess);
   const showModelControls = shouldShowModelControls(installAccess);
 
   useEffect(() => {
@@ -137,21 +133,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
         versionTapTimerRef.current = null;
       }
       versionTapCountRef.current = 0;
-      if (isPlanSimulationActive) {
-        return;
-      }
       onSectionChange("apiKeys");
     }
   };
 
   const availableSections = Object.entries(SECTIONS_CONFIG)
     .filter(([id, config]) => {
-      if (id === "apiKeys") {
-        if (isPlanSimulationActive) {
-          return false;
-        }
-      }
-
       if (id === "models" && !showModelControls) {
         return false;
       }

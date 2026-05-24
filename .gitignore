@@ -45,3 +45,6 @@ blob-report/
 .codex/
 marketing-site/supabase/.branches/
 marketing-site/supabase/.temp/
+
+.env
+/agents-scratch

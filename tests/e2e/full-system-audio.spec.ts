@@ -8,6 +8,7 @@ type FullSystemAudioTestState = {
     clamshell_microphone: string;
     selected_output_device: string;
     push_to_talk: boolean;
+    onboarding_completed: boolean;
     keyboard_implementation: "tauri";
     post_process_enabled: boolean;
     byok_enabled: boolean;
@@ -30,6 +31,7 @@ type FullSystemAudioTestState = {
     clamshell_microphone: string;
     selected_output_device: string;
     push_to_talk: boolean;
+    onboarding_completed: boolean;
     keyboard_implementation: "tauri";
     post_process_enabled: boolean;
     byok_enabled: boolean;
@@ -49,12 +51,13 @@ type FullSystemAudioTestState = {
     install_id: string;
     device_fingerprint_hash: string;
     trial_state: "linked";
-    access_state: "granted";
+    access_state: "subscribed";
     entitlement_state: "active";
     byok_enabled: boolean;
     byok_validation_state: "unvalidated";
     has_byok_secret: boolean;
     has_install_token: boolean;
+    dev_access_override: string | null;
   };
   customSounds: { start: boolean; stop: boolean };
   fullSystemAudio: {
@@ -81,8 +84,8 @@ const bindings = {
     name: "Full-System Recording Shortcut",
     description:
       "A dedicated toggle shortcut that starts and stops system audio plus microphone capture.",
-    default_binding: "ctrl+alt+space",
-    current_binding: "ctrl+alt+space",
+    default_binding: "ctrl+fn",
+    current_binding: "ctrl+fn",
   },
   transcribe_with_post_process: {
     name: "Post-Processing Hotkey",
@@ -110,6 +113,7 @@ const createTestState = (
     clamshell_microphone: "Default",
     selected_output_device: "Default",
     push_to_talk: false,
+    onboarding_completed: true,
     keyboard_implementation: "tauri",
     post_process_enabled: false,
     byok_enabled: false,
@@ -124,6 +128,7 @@ const createTestState = (
     clamshell_microphone: "Default",
     selected_output_device: "Default",
     push_to_talk: false,
+    onboarding_completed: true,
     keyboard_implementation: "tauri",
     post_process_enabled: false,
     byok_enabled: false,
@@ -135,12 +140,13 @@ const createTestState = (
     install_id: "test-install-id",
     device_fingerprint_hash: "test-fingerprint",
     trial_state: "linked",
-    access_state: "granted",
+    access_state: "subscribed",
     entitlement_state: "active",
     byok_enabled: false,
     byok_validation_state: "unvalidated",
     has_byok_secret: false,
     has_install_token: false,
+    dev_access_override: null,
   },
   customSounds: { start: true, stop: true },
   fullSystemAudio: supported
@@ -399,16 +405,12 @@ test.describe("full-system audio settings", () => {
     await expect(toggle).toBeVisible();
     await expect(toggle).toBeEnabled();
     await expect(page.getByText("Transcribe Shortcut")).toBeVisible();
-    await expect(page.getByText("Full-System Recording Shortcut")).toHaveCount(
-      0,
-    );
+    await expect(page.getByText("Ctrl + fn")).toHaveCount(0);
 
     await toggle.check({ force: true });
 
     await expect(toggle).toBeChecked();
-    await expect(
-      page.getByText("Full-System Recording Shortcut"),
-    ).toBeVisible();
+    await expect(page.getByText("Ctrl + fn")).toBeVisible();
     await expect(page.getByText("Transcribe Shortcut")).toBeVisible();
   });
 
@@ -426,8 +428,6 @@ test.describe("full-system audio settings", () => {
       page.getByText("This feature is available only on macOS 13 or later."),
     ).toBeVisible();
     await expect(page.getByText("Transcribe Shortcut")).toBeVisible();
-    await expect(page.getByText("Full-System Recording Shortcut")).toHaveCount(
-      0,
-    );
+    await expect(page.getByText("Ctrl + fn")).toHaveCount(0);
   });
 });

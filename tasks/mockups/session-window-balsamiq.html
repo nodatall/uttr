@@ -1,0 +1,1702 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Uttr Session Window Wireframe</title>
+    <style>
+      :root {
+        --ink: #1c1c1c;
+        --muted: #666;
+        --paper: #fbfbf7;
+        --line: #222;
+        --soft: #efefea;
+        --blue: #e8f3ff;
+        --green: #e7f6e8;
+        --yellow: #fff5ca;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        min-height: 100%;
+      }
+
+      body {
+        margin: 0;
+        color: var(--ink);
+        background: #d9d9d4;
+        font-family:
+          "Comic Sans MS", "Comic Neue", "Bradley Hand", cursive, sans-serif;
+        font-size: 15px;
+        letter-spacing: 0;
+      }
+
+      .page {
+        width: 100vw;
+        min-height: 100vh;
+        margin: 0;
+        padding: 0;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin: 0;
+      }
+
+      h1 {
+        font-size: 25px;
+      }
+
+      .note {
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .shell {
+        display: grid;
+        grid-template-columns: 78px 1fr;
+        min-height: 100vh;
+        background: white;
+        overflow: hidden;
+      }
+
+      .rail {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 12px 8px;
+        border-right: 3px solid var(--line);
+        background: #f2f2ec;
+        min-height: 100vh;
+      }
+
+      .logo {
+        display: grid;
+        place-items: center;
+        width: 48px;
+        height: 36px;
+        margin: 0 auto 8px;
+        border: 2px solid var(--line);
+        border-radius: 6px;
+        font-weight: 700;
+        background: white;
+      }
+
+      .rail-btn {
+        display: grid;
+        place-items: center;
+        gap: 3px;
+        min-height: 58px;
+        width: 100%;
+        padding: 6px 2px;
+        border: 2px solid transparent;
+        border-radius: 8px;
+        text-align: center;
+        color: var(--muted);
+        font-size: 11px;
+        font-family: inherit;
+        background: transparent;
+        cursor: pointer;
+      }
+
+      .rail-btn.active {
+        color: var(--ink);
+        border-color: var(--line);
+        background: white;
+        box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.1);
+      }
+
+      .rail-btn:focus-visible {
+        outline: 3px solid #2b87ff;
+        outline-offset: 2px;
+      }
+
+      .rail-icon {
+        width: 23px;
+        height: 23px;
+        border: 2px solid currentColor;
+        border-radius: 50%;
+      }
+
+      .main {
+        display: grid;
+        grid-template-rows: auto 1fr;
+        min-width: 0;
+        min-height: 100vh;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 18px;
+        padding: 14px 18px;
+        border-bottom: 3px solid var(--line);
+        background: #fff;
+      }
+
+      .session-name {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+      }
+
+      .session-title-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        flex-wrap: wrap;
+      }
+
+      .elapsed-time {
+        color: var(--muted);
+        font-size: 15px;
+      }
+
+      .status-row {
+        display: flex;
+        align-items: center;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+
+      .session-only[hidden] {
+        display: none;
+      }
+
+      .pill,
+      .button {
+        border: 2px solid var(--line);
+        background: white;
+        border-radius: 999px;
+      }
+
+      .pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 5px 10px;
+        font-size: 12px;
+      }
+
+      .pill.live {
+        background: var(--green);
+      }
+
+      .pill.sum {
+        background: var(--blue);
+      }
+
+      .button {
+        padding: 9px 13px;
+        font-weight: 700;
+        box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.12);
+      }
+
+      .button.small {
+        padding: 6px 10px;
+        font-size: 13px;
+      }
+
+      .button.stop {
+        background: #ffe1e1;
+      }
+
+      .icon-button {
+        display: inline-grid;
+        place-items: center;
+        width: 42px;
+        height: 42px;
+        padding: 0;
+        font-size: 22px;
+        line-height: 1;
+      }
+
+      .content {
+        display: grid;
+        grid-template-columns: 1fr;
+        gap: 14px;
+        padding: 0 18px;
+        min-height: 0;
+        overflow: auto;
+      }
+
+      .view {
+        display: none;
+      }
+
+      .view.active {
+        display: block;
+      }
+
+      .view:not(.active) {
+        display: none;
+      }
+
+      .content > .view.active {
+        min-height: 100%;
+      }
+
+      .panel {
+        border: 3px solid var(--line);
+        border-radius: 8px;
+        background: white;
+        box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.1);
+      }
+
+      .summary-panel {
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        background: transparent;
+        display: grid;
+        grid-template-rows: auto 1fr;
+        min-height: 100%;
+      }
+
+      .summary-panel.view.active {
+        display: grid;
+      }
+
+      .settings-panel {
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        background: transparent;
+      }
+
+      .history-panel {
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+        background: transparent;
+      }
+
+      .panel-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 10px;
+        padding: 10px 12px;
+        border-bottom: 2px solid var(--line);
+        background: #f8f8f2;
+      }
+
+      .panel-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .transcript {
+        min-height: 420px;
+        padding: 14px;
+      }
+
+      .session-canvas {
+        display: grid;
+        gap: 14px;
+        min-height: 420px;
+        padding: 14px;
+        align-content: start;
+      }
+
+      .focus-card {
+        padding: 16px;
+        border: 3px solid var(--line);
+        border-radius: 9px;
+        background: var(--yellow);
+        box-shadow: 4px 4px 0 rgba(0, 0, 0, 0.1);
+      }
+
+      .focus-card h3 {
+        margin-bottom: 9px;
+      }
+
+      .metric-grid {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+      }
+
+      .metric {
+        min-height: 82px;
+        padding: 10px;
+        border: 2px solid var(--line);
+        border-radius: 8px;
+        background: white;
+      }
+
+      .summary-board {
+        display: grid;
+        min-height: 0;
+        height: 100%;
+        padding: 14px 0;
+      }
+
+      .summary-main {
+        min-height: 100%;
+        padding: 12px;
+      }
+
+      .summary-main h3 {
+        margin-bottom: 10px;
+      }
+
+      .summary-main p {
+        line-height: 1.45;
+      }
+
+      .two-column-grid {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) minmax(260px, 0.7fr);
+        gap: 14px;
+      }
+
+      .list-panel {
+        display: grid;
+        gap: 10px;
+        padding: 14px;
+      }
+
+      .utility-panel {
+        display: grid;
+        gap: 16px;
+        max-width: 680px;
+        padding: 28px 34px 34px;
+        border: 3px solid var(--line);
+        border-radius: 16px;
+        background: #f7f8f2;
+      }
+
+      .utility-kicker {
+        color: var(--muted);
+        font-size: 12px;
+        letter-spacing: 2px;
+        text-transform: uppercase;
+      }
+
+      .utility-heading {
+        display: grid;
+        gap: 4px;
+      }
+
+      .utility-actions {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+
+      .button.disabled {
+        color: #777;
+        background: #ececea;
+        box-shadow: none;
+      }
+
+      .button.primary {
+        background: var(--green);
+      }
+
+      .drop.large {
+        display: grid;
+        place-items: center;
+        gap: 10px;
+        min-height: 220px;
+        padding: 24px;
+        border-style: solid;
+        background: white;
+      }
+
+      .drop-icon {
+        display: grid;
+        place-items: center;
+        width: 58px;
+        height: 58px;
+        border: 2px solid var(--line);
+        border-radius: 50%;
+        background: #f3f3ef;
+        font-size: 26px;
+      }
+
+      .drop-copy {
+        display: grid;
+        justify-items: center;
+        gap: 4px;
+        text-align: center;
+      }
+
+      .info-note {
+        display: flex;
+        gap: 10px;
+        padding: 14px 16px;
+        border: 2px solid #2b87ff;
+        border-radius: 8px;
+        background: #e8f3ff;
+        color: #105dba;
+      }
+
+      .info-icon {
+        display: grid;
+        place-items: center;
+        width: 20px;
+        height: 20px;
+        flex: 0 0 auto;
+        border: 2px solid currentColor;
+        border-radius: 50%;
+        font-weight: 700;
+      }
+
+      .row-item {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 12px;
+        align-items: center;
+        padding: 10px;
+        border: 2px solid var(--line);
+        border-radius: 8px;
+        background: white;
+      }
+
+      .setting-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 16px;
+        align-items: center;
+        padding: 11px 12px;
+        border: 2px solid var(--line);
+        border-radius: 8px;
+        background: white;
+      }
+
+      .file-detail-view {
+        padding-top: 14px;
+      }
+
+      .files-list-view {
+        padding-top: 14px;
+      }
+
+      .files-list-view > .panel,
+      .file-detail-view > .panel {
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+      }
+
+      .files-list-view > .panel > .panel-header,
+      .file-detail-view > .panel > .panel-header {
+        padding-left: 0;
+        padding-right: 0;
+      }
+
+      .history-panel .row-item {
+        width: 100%;
+        color: inherit;
+        text-align: left;
+        font: inherit;
+        cursor: pointer;
+      }
+
+      .history-tabs {
+        display: flex;
+        gap: 8px;
+        padding: 14px 14px 0;
+      }
+
+      .history-tab {
+        background: white;
+      }
+
+      .history-tab.active {
+        background: var(--yellow);
+      }
+
+      .history-section-title {
+        padding: 4px 2px;
+        color: var(--muted);
+        font-size: 13px;
+        letter-spacing: 1px;
+        text-transform: uppercase;
+      }
+
+      .toggle {
+        min-width: 70px;
+        padding: 6px 10px;
+        border: 2px solid var(--line);
+        border-radius: 999px;
+        background: var(--green);
+        text-align: center;
+        font-weight: 700;
+      }
+
+      .chunk {
+        position: relative;
+        margin-bottom: 13px;
+        padding: 11px 12px 10px 76px;
+        border: 2px solid var(--line);
+        border-radius: 8px;
+        background: #fff;
+      }
+
+      .chunk.pending {
+        color: #777;
+        background: #f4f4f0;
+        border-style: dashed;
+      }
+
+      .time {
+        position: absolute;
+        left: 10px;
+        top: 11px;
+        width: 52px;
+        color: var(--muted);
+        font-size: 12px;
+      }
+
+      .chunk p {
+        line-height: 1.45;
+      }
+
+      .modal {
+        display: none;
+        position: fixed;
+        inset: 0;
+        z-index: 20;
+        padding: 48px;
+        background: rgba(0, 0, 0, 0.32);
+      }
+
+      .modal:target {
+        display: grid;
+        place-items: center;
+      }
+
+      .modal.top-modal:target {
+        display: flex;
+        justify-content: center;
+        align-items: flex-start;
+      }
+
+      .modal-dialog {
+        width: min(780px, calc(100vw - 70px));
+        max-height: calc(100vh - 90px);
+        overflow: auto;
+        border: 3px solid var(--line);
+        border-radius: 10px;
+        background: var(--paper);
+        box-shadow: 8px 8px 0 rgba(0, 0, 0, 0.22);
+      }
+
+      .modal-dialog .transcript {
+        min-height: 0;
+      }
+
+      .context-dialog {
+        width: min(820px, calc(100vw - 70px));
+      }
+
+      .side-stack {
+        display: grid;
+        gap: 14px;
+        align-content: start;
+      }
+
+      .drop {
+        padding: 15px;
+        text-align: center;
+        background: #fafafa;
+        border: 2px dashed var(--line);
+        border-radius: 8px;
+      }
+
+      .small-list {
+        display: grid;
+        gap: 8px;
+        padding: 12px;
+      }
+
+      .small-item {
+        padding: 8px;
+        border: 2px solid var(--line);
+        border-radius: 7px;
+        background: white;
+      }
+
+      .card {
+        padding: 12px;
+        border: 3px solid var(--line);
+        border-radius: 8px;
+        background: white;
+        box-shadow: 3px 3px 0 rgba(0, 0, 0, 0.1);
+      }
+
+      .card.yellow {
+        background: var(--yellow);
+        transform: rotate(0.5deg);
+      }
+
+      .card.blue {
+        background: var(--blue);
+      }
+
+      .card.green {
+        background: var(--green);
+      }
+
+      .card h3 {
+        margin-bottom: 7px;
+        font-size: 16px;
+      }
+
+      ul {
+        margin: 0;
+        padding-left: 20px;
+      }
+
+      li {
+        margin: 5px 0;
+      }
+
+      .context-box {
+        display: grid;
+        gap: 8px;
+        padding: 14px;
+        border-top: 3px solid var(--line);
+        background: #f2f2ec;
+      }
+
+      .context-dialog .context-box {
+        border-top: 0;
+      }
+
+      .input-line {
+        min-height: 36px;
+        padding: 8px 10px;
+        border: 2px solid var(--line);
+        border-radius: 7px;
+        background: white;
+        color: #777;
+      }
+
+      body.annotating {
+        cursor: crosshair;
+      }
+
+      body.hide-markers .feedback-marker {
+        display: none;
+      }
+
+      .annotation-toolbar {
+        position: fixed;
+        right: 16px;
+        bottom: 16px;
+        z-index: 40;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 9px;
+        border: 3px solid var(--line);
+        border-radius: 12px;
+        background: var(--paper);
+        box-shadow: 6px 6px 0 rgba(0, 0, 0, 0.16);
+      }
+
+      .annotation-toolbar .button.active {
+        background: var(--yellow);
+      }
+
+      .annotation-count {
+        min-width: 26px;
+        padding: 5px 7px;
+        border: 2px solid var(--line);
+        border-radius: 999px;
+        text-align: center;
+        background: var(--blue);
+        font-weight: 700;
+      }
+
+      .annotation-outline {
+        position: fixed;
+        z-index: 35;
+        pointer-events: none;
+        border: 3px solid #1783ff;
+        background: rgba(23, 131, 255, 0.13);
+        border-radius: 4px;
+      }
+
+      .annotation-hover-label {
+        position: fixed;
+        z-index: 36;
+        display: none;
+        max-width: min(420px, calc(100vw - 32px));
+        padding: 4px 7px;
+        border: 2px solid white;
+        border-radius: 999px;
+        background: #1783ff;
+        color: white;
+        font:
+          700 11px system-ui,
+          sans-serif;
+        pointer-events: none;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      .feedback-marker {
+        position: fixed;
+        z-index: 36;
+        display: grid;
+        place-items: center;
+        width: 24px;
+        height: 24px;
+        border: 2px solid white;
+        border-radius: 50%;
+        background: #1783ff;
+        color: white;
+        font:
+          700 12px system-ui,
+          sans-serif;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
+        cursor: pointer;
+      }
+
+      .annotation-popover {
+        position: fixed;
+        z-index: 50;
+        display: none;
+        width: min(360px, calc(100vw - 32px));
+        padding: 12px;
+        border: 3px solid var(--line);
+        border-radius: 10px;
+        background: var(--paper);
+        box-shadow: 6px 6px 0 rgba(0, 0, 0, 0.16);
+      }
+
+      .annotation-popover.open {
+        display: grid;
+        gap: 9px;
+      }
+
+      .annotation-popover textarea {
+        width: 100%;
+        min-height: 86px;
+        padding: 8px;
+        resize: vertical;
+        border: 2px solid var(--line);
+        border-radius: 8px;
+        font: inherit;
+        background: white;
+      }
+
+      .annotation-target-meta {
+        color: var(--muted);
+        font-size: 12px;
+        word-break: break-word;
+      }
+
+      .annotation-copy-box {
+        position: fixed;
+        right: 16px;
+        bottom: 84px;
+        z-index: 45;
+        display: none;
+        width: min(560px, calc(100vw - 32px));
+        padding: 12px;
+        border: 3px solid var(--line);
+        border-radius: 10px;
+        background: var(--paper);
+        box-shadow: 6px 6px 0 rgba(0, 0, 0, 0.16);
+      }
+
+      .annotation-copy-box.open {
+        display: grid;
+        gap: 8px;
+      }
+
+      .annotation-copy-box textarea {
+        width: 100%;
+        min-height: 220px;
+        padding: 8px;
+        border: 2px solid var(--line);
+        border-radius: 8px;
+        font:
+          13px ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          Consolas,
+          monospace;
+        background: white;
+      }
+
+      @media (max-width: 980px) {
+        .shell {
+          grid-template-columns: 64px 1fr;
+        }
+
+        .content {
+          grid-template-columns: 1fr;
+        }
+
+        .summary-board,
+        .summary-side,
+        .two-column-grid,
+        .row-item,
+        .setting-row {
+          grid-template-columns: 1fr;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="shell" aria-label="Session window mockup">
+        <nav class="rail" aria-label="Primary navigation">
+          <div class="logo">uttr</div>
+          <button
+            class="rail-btn active"
+            type="button"
+            data-page="session"
+            data-title="Today - Product Call"
+          >
+            <div class="rail-icon"></div>
+            Home
+          </button>
+          <button
+            class="rail-btn"
+            type="button"
+            data-page="files"
+            data-title="Files"
+          >
+            <div class="rail-icon"></div>
+            Files
+          </button>
+          <button
+            class="rail-btn"
+            type="button"
+            data-page="history"
+            data-title="History"
+          >
+            <div class="rail-icon"></div>
+            History
+          </button>
+          <button
+            class="rail-btn"
+            type="button"
+            data-page="settings"
+            data-title="Settings"
+          >
+            <div class="rail-icon"></div>
+            Settings
+          </button>
+        </nav>
+
+        <section class="main">
+          <header class="topbar">
+            <div class="session-name">
+              <div class="session-title-row">
+                <h2 id="page-title">Today - Product Call</h2>
+                <span class="elapsed-time session-only">00:18:42</span>
+              </div>
+            </div>
+            <div class="status-row session-only">
+              <button
+                class="button icon-button"
+                aria-label="Pause session"
+                title="Pause session"
+              >
+                Ⅱ
+              </button>
+              <button
+                class="button stop icon-button"
+                aria-label="Stop session"
+                title="Stop session"
+              >
+                ■
+              </button>
+            </div>
+          </header>
+
+          <div class="content">
+            <section
+              class="panel summary-panel view active"
+              data-view="session"
+            >
+              <div class="panel-header">
+                <div>
+                  <h3>Live summary</h3>
+                </div>
+                <div class="panel-actions">
+                  <a class="button" href="#context-modal">Add context</a>
+                  <a class="button" href="#transcript-modal"
+                    >View raw transcript</a
+                  >
+                </div>
+              </div>
+              <div class="summary-board">
+                <section class="summary-main">
+                  <p>
+                    The team is separating quick dictation from a larger session
+                    workspace for meetings, system audio, and files. The default
+                    view should help the user understand the meeting without
+                    making them stare at raw transcript text.
+                  </p>
+                </section>
+              </div>
+            </section>
+
+            <section class="view" data-view="files">
+              <div class="files-list-view">
+                <section class="utility-panel">
+                  <div class="utility-heading">
+                    <span class="utility-kicker">Utility</span>
+                    <h1>File Transcription</h1>
+                    <p class="note">
+                      Drop in one audio file or choose one from disk. Uttr will
+                      transcribe it using your current model, language, and
+                      post-processing settings.
+                    </p>
+                  </div>
+
+                  <div class="utility-actions">
+                    <button class="button small disabled" type="button">
+                      ⌫ Clear
+                    </button>
+                    <button
+                      class="button small"
+                      type="button"
+                      data-file-open="team-sync.m4a"
+                    >
+                      ↥ Choose Audio File
+                    </button>
+                    <button class="button small primary disabled" type="button">
+                      ▷ Transcribe
+                    </button>
+                  </div>
+
+                  <div class="drop large">
+                    <div class="drop-icon">♫</div>
+                    <div class="drop-copy">
+                      <strong>Drag and drop one audio file here</strong>
+                      <p class="note">
+                        Supported formats: wav, mp3, m4a, aac, ogg
+                      </p>
+                    </div>
+                    <button
+                      class="button small"
+                      type="button"
+                      data-file-open="customer-call.wav"
+                    >
+                      ≋ Browse for file
+                    </button>
+                  </div>
+
+                  <div class="info-note">
+                    <span class="info-icon">i</span>
+                    <p>
+                      Imported files stay on this screen only. They are not
+                      added to your transcription history.
+                    </p>
+                  </div>
+                </section>
+              </div>
+
+              <div class="file-detail-view" hidden>
+                <section class="panel">
+                  <div class="panel-header">
+                    <div class="status-row">
+                      <button
+                        class="button small icon-button"
+                        type="button"
+                        data-files-back
+                        aria-label="Back"
+                        title="Back"
+                      >
+                        ←
+                      </button>
+                      <h3 id="selected-file-title">team-sync.m4a</h3>
+                    </div>
+                    <a class="button" href="#transcript-modal"
+                      >View raw transcript</a
+                    >
+                  </div>
+                  <div class="list-panel">
+                    <section class="card yellow">
+                      <h3>File summary</h3>
+                      <p>
+                        Discussion covered session windows, hidden raw
+                        transcript, and a summary-first meeting workspace.
+                      </p>
+                    </section>
+                  </div>
+                </section>
+              </div>
+            </section>
+
+            <section class="view" data-view="history">
+              <section class="panel history-panel">
+                <div class="history-tabs" aria-label="History type">
+                  <button class="button small history-tab active" type="button">
+                    Dictations
+                  </button>
+                  <button class="button small history-tab" type="button">
+                    Sessions
+                  </button>
+                </div>
+                <div class="list-panel">
+                  <div class="history-section-title">Dictations</div>
+                  <button class="row-item" type="button" data-history-open>
+                    <div>
+                      <strong>Last copied transcript</strong>
+                      <p class="note">18 sec - pasted into Notes</p>
+                    </div>
+                    <span class="pill">Open</span>
+                  </button>
+                  <button class="row-item" type="button" data-history-open>
+                    <div>
+                      <strong>Email follow-up draft</strong>
+                      <p class="note">44 sec - post-processing applied</p>
+                    </div>
+                    <span class="pill">Open</span>
+                  </button>
+
+                  <div class="history-section-title">Sessions</div>
+                  <button class="row-item" type="button" data-history-open>
+                    <div>
+                      <strong>Today - Product Call</strong>
+                      <p class="note">
+                        18 min - summary, decisions, questions, actions
+                      </p>
+                    </div>
+                    <span class="pill">Open</span>
+                  </button>
+                  <button class="row-item" type="button" data-history-open>
+                    <div>
+                      <strong>Yesterday - Design Review</strong>
+                      <p class="note">31 min - 5 decisions, 7 action items</p>
+                    </div>
+                    <span class="pill">Open</span>
+                  </button>
+                  <button class="row-item" type="button" data-history-open>
+                    <div>
+                      <strong>May 17 - Support Debugging</strong>
+                      <p class="note">12 min - raw transcript available</p>
+                    </div>
+                    <span class="pill">Open</span>
+                  </button>
+                </div>
+              </section>
+            </section>
+
+            <section class="view" data-view="settings">
+              <section class="panel settings-panel">
+                <div class="list-panel">
+                  <div class="setting-row">
+                    <div>
+                      <strong>Session window for full-system recording</strong>
+                      <p class="note">
+                        Full-system hotkey opens this window instead of the
+                        compact overlay.
+                      </p>
+                    </div>
+                    <span class="toggle">On</span>
+                  </div>
+                  <div class="setting-row">
+                    <div>
+                      <strong>Meeting save location</strong>
+                      <p class="note">
+                        Choose where local meeting recordings, transcripts, and
+                        summaries are stored.
+                      </p>
+                    </div>
+                    <span class="pill">Choose folder</span>
+                  </div>
+                </div>
+              </section>
+            </section>
+          </div>
+        </section>
+      </section>
+
+      <section
+        class="modal"
+        id="transcript-modal"
+        aria-label="Raw transcript modal"
+      >
+        <div class="modal-dialog">
+          <div class="panel-header">
+            <h3>Raw transcript</h3>
+            <a
+              class="button icon-button"
+              href="#"
+              aria-label="Close"
+              title="Close"
+              >×</a
+            >
+          </div>
+          <div class="transcript">
+            <article class="chunk">
+              <span class="time">18:10</span>
+              <p>
+                We should make the full system recording open a real window,
+                because people will want to switch back to it during a meeting.
+              </p>
+            </article>
+            <article class="chunk">
+              <span class="time">18:20</span>
+              <p>
+                The quick dictation overlay should stay separate. It should
+                still feel instant and not turn the app into a big desktop
+                window every time.
+              </p>
+            </article>
+            <article class="chunk">
+              <span class="time">18:30</span>
+              <p>
+                For longer calls, the app can transcribe every ten seconds and
+                update the summary as completed chunks arrive.
+              </p>
+            </article>
+            <article class="chunk pending">
+              <span class="time">18:40</span>
+              <p>Chunk 112 is transcribing...</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section
+        class="modal top-modal"
+        id="context-modal"
+        aria-label="Meeting context modal"
+      >
+        <div class="modal-dialog context-dialog">
+          <div class="panel-header">
+            <h3>Meeting context</h3>
+            <a
+              class="button icon-button"
+              href="#"
+              aria-label="Close"
+              title="Close"
+              >×</a
+            >
+          </div>
+          <div class="context-box">
+            <div class="input-line">Paste agenda, attendee notes, links...</div>
+            <span class="note"
+              >Make cloud sharing explicit before this text is used by an
+              LLM.</span
+            >
+          </div>
+        </div>
+      </section>
+
+      <div class="annotation-outline" id="annotation-outline" hidden></div>
+      <div class="annotation-hover-label" id="annotation-hover-label"></div>
+
+      <div
+        class="annotation-popover"
+        id="annotation-popover"
+        role="dialog"
+        aria-label="Add feedback"
+      >
+        <strong id="annotation-popover-title">Comment 1</strong>
+        <div class="annotation-target-meta" id="annotation-target-meta"></div>
+        <textarea
+          id="annotation-comment"
+          placeholder="What should change?"
+        ></textarea>
+        <div class="status-row">
+          <button class="button small" type="button" id="annotation-add">
+            Add
+          </button>
+          <button class="button small" type="button" id="annotation-cancel">
+            Cancel
+          </button>
+        </div>
+      </div>
+
+      <div
+        class="annotation-copy-box"
+        id="annotation-copy-box"
+        role="dialog"
+        aria-label="Copy feedback"
+      >
+        <strong>Copy feedback</strong>
+        <textarea id="annotation-output" readonly></textarea>
+        <div class="status-row">
+          <button class="button small" type="button" id="annotation-copy-now">
+            Copy to clipboard
+          </button>
+          <button
+            class="button small"
+            type="button"
+            id="annotation-close-output"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+
+      <div class="annotation-toolbar" aria-label="Feedback toolbar">
+        <button class="button small" type="button" id="annotation-toggle">
+          Annotate
+        </button>
+        <button class="button small" type="button" id="annotation-visibility">
+          Hide markers
+        </button>
+        <button class="button small" type="button" id="annotation-copy">
+          Copy all
+        </button>
+        <button class="button small" type="button" id="annotation-clear">
+          Clear
+        </button>
+        <span class="annotation-count" id="annotation-count">0</span>
+      </div>
+
+      <script>
+        const navButtons = Array.from(document.querySelectorAll("[data-page]"));
+        const views = Array.from(document.querySelectorAll("[data-view]"));
+        const pageTitle = document.querySelector("#page-title");
+        const sessionOnlyElements = Array.from(
+          document.querySelectorAll(".session-only"),
+        );
+        const filesListView = document.querySelector(".files-list-view");
+        const fileDetailView = document.querySelector(".file-detail-view");
+        const selectedFileTitle = document.querySelector(
+          "#selected-file-title",
+        );
+        const fileOpenButtons = Array.from(
+          document.querySelectorAll("[data-file-open]"),
+        );
+        const filesBackButton = document.querySelector("[data-files-back]");
+        const annotations = [];
+        let annotationMode = false;
+        let selectedTarget = null;
+        let selectedRect = null;
+        let editingAnnotationId = null;
+        const annotationToggle = document.querySelector("#annotation-toggle");
+        const annotationVisibility = document.querySelector(
+          "#annotation-visibility",
+        );
+        const annotationCopy = document.querySelector("#annotation-copy");
+        const annotationClear = document.querySelector("#annotation-clear");
+        const annotationCount = document.querySelector("#annotation-count");
+        const annotationOutline = document.querySelector("#annotation-outline");
+        const annotationPopover = document.querySelector("#annotation-popover");
+        const annotationPopoverTitle = document.querySelector(
+          "#annotation-popover-title",
+        );
+        const annotationTargetMeta = document.querySelector(
+          "#annotation-target-meta",
+        );
+        const annotationComment = document.querySelector("#annotation-comment");
+        const annotationAdd = document.querySelector("#annotation-add");
+        const annotationCancel = document.querySelector("#annotation-cancel");
+        const annotationOutput = document.querySelector("#annotation-output");
+        const annotationCopyBox = document.querySelector(
+          "#annotation-copy-box",
+        );
+        const annotationCopyNow = document.querySelector(
+          "#annotation-copy-now",
+        );
+        const annotationCloseOutput = document.querySelector(
+          "#annotation-close-output",
+        );
+        const annotationHoverLabel = document.querySelector(
+          "#annotation-hover-label",
+        );
+
+        function showPage(pageName) {
+          const activeButton =
+            navButtons.find((button) => button.dataset.page === pageName) ||
+            navButtons[0];
+          const activePage = activeButton.dataset.page;
+
+          navButtons.forEach((button) => {
+            button.classList.toggle("active", button === activeButton);
+          });
+
+          views.forEach((view) => {
+            view.classList.toggle("active", view.dataset.view === activePage);
+          });
+
+          pageTitle.textContent = activeButton.dataset.title;
+          sessionOnlyElements.forEach((element) => {
+            element.hidden = activePage !== "session";
+          });
+        }
+
+        navButtons.forEach((button) => {
+          button.addEventListener("click", () => showPage(button.dataset.page));
+        });
+
+        fileOpenButtons.forEach((button) => {
+          button.addEventListener("click", () => {
+            selectedFileTitle.textContent = button.dataset.fileOpen;
+            filesListView.hidden = true;
+            fileDetailView.hidden = false;
+          });
+        });
+
+        filesBackButton.addEventListener("click", () => {
+          filesListView.hidden = false;
+          fileDetailView.hidden = true;
+        });
+
+        function isAnnotationUi(element) {
+          return Boolean(
+            element.closest(".annotation-toolbar") ||
+              element.closest(".annotation-popover") ||
+              element.closest(".annotation-copy-box") ||
+              element.closest(".feedback-marker"),
+          );
+        }
+
+        function elementLabel(element) {
+          const aria = element.getAttribute("aria-label");
+          const title = element.getAttribute("title");
+          const text = element.innerText || element.textContent || "";
+          const label = (aria || title || text || element.tagName.toLowerCase())
+            .replace(/\s+/g, " ")
+            .trim();
+          return label.length > 88 ? `${label.slice(0, 85)}...` : label;
+        }
+
+        function cssEscape(value) {
+          if (window.CSS && CSS.escape) {
+            return CSS.escape(value);
+          }
+          return value.replace(/[^a-zA-Z0-9_-]/g, "\\$&");
+        }
+
+        function selectorFor(element) {
+          if (element.id) {
+            return `#${cssEscape(element.id)}`;
+          }
+
+          const parts = [];
+          let current = element;
+          while (
+            current &&
+            current.nodeType === 1 &&
+            current !== document.body
+          ) {
+            let part = current.tagName.toLowerCase();
+            const usefulClasses = Array.from(current.classList || []).filter(
+              (name) =>
+                !name.startsWith("active") &&
+                !name.startsWith("open") &&
+                !name.startsWith("annotation") &&
+                !name.startsWith("feedback"),
+            );
+            if (usefulClasses.length) {
+              part += `.${usefulClasses.slice(0, 2).map(cssEscape).join(".")}`;
+            }
+            const parent = current.parentElement;
+            if (parent) {
+              const sameTagSiblings = Array.from(parent.children).filter(
+                (child) => child.tagName === current.tagName,
+              );
+              if (sameTagSiblings.length > 1 && !current.id) {
+                part += `:nth-of-type(${sameTagSiblings.indexOf(current) + 1})`;
+              }
+            }
+            parts.unshift(part);
+            current = parent;
+            if (parts.length >= 5) break;
+          }
+          return parts.join(" > ");
+        }
+
+        function domPath(element) {
+          const parts = [];
+          let current = element;
+          while (
+            current &&
+            current.nodeType === 1 &&
+            current !== document.body
+          ) {
+            parts.unshift(current.tagName.toLowerCase());
+            current = current.parentElement;
+            if (parts.length >= 5) break;
+          }
+          return parts.join(" > ");
+        }
+
+        function updateOutline(rect) {
+          annotationOutline.hidden = false;
+          annotationOutline.style.left = `${Math.max(0, rect.left)}px`;
+          annotationOutline.style.top = `${Math.max(0, rect.top)}px`;
+          annotationOutline.style.width = `${Math.max(1, rect.width)}px`;
+          annotationOutline.style.height = `${Math.max(1, rect.height)}px`;
+        }
+
+        function targetForAnnotation(rawTarget) {
+          if (!rawTarget || rawTarget.nodeType !== 1) return rawTarget;
+          if (rawTarget.closest("button, a, input, textarea, [data-page]")) {
+            return rawTarget.closest("button, a, input, textarea, [data-page]");
+          }
+          if (
+            rawTarget.matches(
+              "strong, span, p, h1, h2, h3, li, .input-line, .toggle, .pill",
+            )
+          ) {
+            return rawTarget;
+          }
+          return (
+            rawTarget.closest(
+              ".row-item, .setting-row, .card, .focus-card, .summary-main, .panel-header, .panel, .rail, .topbar, .content",
+            ) || rawTarget
+          );
+        }
+
+        function showHoverTarget(target) {
+          if (
+            !annotationMode ||
+            !target ||
+            target === document.body ||
+            target === document.documentElement ||
+            isAnnotationUi(target)
+          ) {
+            annotationOutline.hidden = true;
+            annotationHoverLabel.style.display = "none";
+            return;
+          }
+
+          const rect = target.getBoundingClientRect();
+          updateOutline(rect);
+          annotationHoverLabel.textContent = elementLabel(target);
+          annotationHoverLabel.style.left = `${Math.max(8, rect.left)}px`;
+          annotationHoverLabel.style.top = `${Math.max(8, rect.top - 28)}px`;
+          annotationHoverLabel.style.display = "block";
+        }
+
+        function openPopoverFor(target, event, existingAnnotation) {
+          selectedTarget = target;
+          selectedRect = target.getBoundingClientRect();
+          editingAnnotationId = existingAnnotation
+            ? existingAnnotation.id
+            : null;
+          updateOutline(selectedRect);
+          annotationPopoverTitle.textContent = existingAnnotation
+            ? `Edit comment ${existingAnnotation.number}`
+            : `Comment ${annotations.length + 1}`;
+          annotationTargetMeta.textContent = `${elementLabel(target)} | ${selectorFor(target)}`;
+          annotationComment.value = existingAnnotation
+            ? existingAnnotation.comment
+            : "";
+          annotationPopover.classList.add("open");
+
+          const left = Math.min(
+            window.innerWidth - 376,
+            Math.max(16, event.clientX + 12),
+          );
+          const top = Math.min(
+            window.innerHeight - 220,
+            Math.max(16, event.clientY + 12),
+          );
+          annotationPopover.style.left = `${left}px`;
+          annotationPopover.style.top = `${top}px`;
+          annotationComment.focus();
+        }
+
+        function closePopover() {
+          annotationPopover.classList.remove("open");
+          annotationOutline.hidden = true;
+          annotationHoverLabel.style.display = "none";
+          selectedTarget = null;
+          selectedRect = null;
+          editingAnnotationId = null;
+          annotationComment.value = "";
+        }
+
+        function markerPosition(rect) {
+          return {
+            left: Math.max(
+              4,
+              rect.left + Math.min(rect.width - 8, rect.width / 2) - 12,
+            ),
+            top: Math.max(4, rect.top - 12),
+          };
+        }
+
+        function renderMarkers() {
+          document
+            .querySelectorAll(".feedback-marker")
+            .forEach((marker) => marker.remove());
+          annotations.forEach((annotation) => {
+            const marker = document.createElement("button");
+            const position = markerPosition(annotation.rect);
+            marker.type = "button";
+            marker.className = "feedback-marker";
+            marker.textContent = annotation.number;
+            marker.title = annotation.comment;
+            marker.style.left = `${position.left}px`;
+            marker.style.top = `${position.top}px`;
+            marker.addEventListener("click", (event) => {
+              event.stopPropagation();
+              const target = document.querySelector(annotation.selector);
+              openPopoverFor(target || document.body, event, annotation);
+            });
+            document.body.appendChild(marker);
+          });
+          annotationCount.textContent = annotations.length;
+        }
+
+        function addOrUpdateAnnotation() {
+          const comment = annotationComment.value.trim();
+          if (!comment || !selectedTarget) return;
+
+          if (editingAnnotationId) {
+            const annotation = annotations.find(
+              (item) => item.id === editingAnnotationId,
+            );
+            if (annotation) {
+              annotation.comment = comment;
+            }
+          } else {
+            annotations.push({
+              id: crypto.randomUUID ? crypto.randomUUID() : String(Date.now()),
+              number: annotations.length + 1,
+              label: elementLabel(selectedTarget),
+              selector: selectorFor(selectedTarget),
+              path: domPath(selectedTarget),
+              comment,
+              rect: {
+                left: selectedRect.left,
+                top: selectedRect.top,
+                width: selectedRect.width,
+                height: selectedRect.height,
+              },
+            });
+          }
+
+          closePopover();
+          renderMarkers();
+        }
+
+        function feedbackMarkdown() {
+          if (!annotations.length) return "No comments yet.";
+          const lines = ["# Diff comments:"];
+          annotations.forEach((annotation, index) => {
+            lines.push("");
+            lines.push(`## Comment ${index + 1}`);
+            lines.push(
+              `File: browser:${annotation.label || "Selected element"}`,
+            );
+            lines.push("Side: R");
+            lines.push("Lines: 1");
+            lines.push(`Target: "${annotation.label || "Selected element"}"`);
+            lines.push(`Target selector: ${annotation.selector}`);
+            lines.push(`Target path: ${annotation.path}`);
+            lines.push("Comment:");
+            lines.push(annotation.comment);
+          });
+          lines.push("");
+          lines.push("## My request for Codex:");
+          lines.push("Please apply these mockup feedback comments.");
+          return lines.join("\n");
+        }
+
+        function toggleAnnotationMode() {
+          annotationMode = !annotationMode;
+          annotationToggle.classList.toggle("active", annotationMode);
+          document.body.classList.toggle("annotating", annotationMode);
+          annotationToggle.textContent = annotationMode
+            ? "Annotating"
+            : "Annotate";
+          if (!annotationMode) {
+            annotationOutline.hidden = true;
+            annotationHoverLabel.style.display = "none";
+          }
+        }
+
+        annotationToggle.addEventListener("click", toggleAnnotationMode);
+
+        annotationVisibility.addEventListener("click", () => {
+          document.body.classList.toggle("hide-markers");
+          annotationVisibility.textContent = document.body.classList.contains(
+            "hide-markers",
+          )
+            ? "Show markers"
+            : "Hide markers";
+        });
+
+        annotationCopy.addEventListener("click", () => {
+          annotationOutput.value = feedbackMarkdown();
+          annotationCopyBox.classList.add("open");
+          annotationOutput.focus();
+          annotationOutput.select();
+        });
+
+        annotationCopyNow.addEventListener("click", async () => {
+          annotationOutput.value = feedbackMarkdown();
+          annotationOutput.select();
+          try {
+            await navigator.clipboard.writeText(annotationOutput.value);
+          } catch {
+            document.execCommand("copy");
+          }
+        });
+
+        annotationCloseOutput.addEventListener("click", () => {
+          annotationCopyBox.classList.remove("open");
+        });
+
+        annotationClear.addEventListener("click", () => {
+          annotations.length = 0;
+          closePopover();
+          renderMarkers();
+        });
+
+        annotationAdd.addEventListener("click", addOrUpdateAnnotation);
+        annotationCancel.addEventListener("click", closePopover);
+
+        document.addEventListener(
+          "mousemove",
+          (event) => {
+            if (
+              !annotationMode ||
+              annotationPopover.classList.contains("open") ||
+              isAnnotationUi(event.target)
+            )
+              return;
+            showHoverTarget(targetForAnnotation(event.target));
+          },
+          true,
+        );
+
+        document.addEventListener(
+          "click",
+          (event) => {
+            if (!annotationMode || isAnnotationUi(event.target)) return;
+            const target = targetForAnnotation(event.target);
+            if (
+              !target ||
+              target === document.body ||
+              target === document.documentElement
+            )
+              return;
+            event.preventDefault();
+            event.stopPropagation();
+            openPopoverFor(target, event);
+          },
+          true,
+        );
+
+        window.addEventListener("scroll", renderMarkers, true);
+        window.addEventListener("resize", renderMarkers);
+      </script>
+    </main>
+  </body>
+</html>

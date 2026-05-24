@@ -16,6 +16,7 @@ let installAccessChangedListener: Promise<UnlistenFn> | null = null;
 let settingsChangedListener: Promise<UnlistenFn> | null = null;
 let initializePromise: Promise<void> | null = null;
 let refreshInstallAccessPromise: Promise<void> | null = null;
+type PostProcessApiKeyStatuses = Record<string, boolean>;
 
 type SettingsChangedPayload<K extends keyof Settings = keyof Settings> = {
   setting: K;
@@ -43,6 +44,7 @@ interface SettingsStore {
   outputDevices: AudioDevice[];
   customSounds: { start: boolean; stop: boolean };
   postProcessModelOptions: Record<string, string[]>;
+  postProcessApiKeyStatuses: PostProcessApiKeyStatuses;
 
   // Actions
   initialize: () => Promise<void>;
@@ -91,6 +93,7 @@ interface SettingsStore {
   setAudioDevices: (devices: AudioDevice[]) => void;
   setOutputDevices: (devices: AudioDevice[]) => void;
   setCustomSounds: (sounds: { start: boolean; stop: boolean }) => void;
+  setPostProcessApiKeyStatuses: (statuses: PostProcessApiKeyStatuses) => void;
 }
 
 // Note: Default settings are now fetched from Rust via commands.getDefaultSettings()
@@ -184,6 +187,7 @@ export const useSettingsStore = create<SettingsStore>()(
     outputDevices: [],
     customSounds: { start: false, stop: false },
     postProcessModelOptions: {},
+    postProcessApiKeyStatuses: {},
 
     // Internal setters
     setSettings: (settings) => set({ settings }),
@@ -197,6 +201,8 @@ export const useSettingsStore = create<SettingsStore>()(
     setAudioDevices: (audioDevices) => set({ audioDevices }),
     setOutputDevices: (outputDevices) => set({ outputDevices }),
     setCustomSounds: (customSounds) => set({ customSounds }),
+    setPostProcessApiKeyStatuses: (postProcessApiKeyStatuses) =>
+      set({ postProcessApiKeyStatuses }),
 
     // Getters
     getSetting: (key) => get().settings?.[key],
@@ -217,6 +223,7 @@ export const useSettingsStore = create<SettingsStore>()(
         const result = await commands.getAppSettings();
         if (result.status === "ok") {
           const settings = result.data;
+          const statusResult = await commands.getPostProcessApiKeyStatuses();
           const normalizedSettings: Settings = {
             ...settings,
             always_on_microphone: settings.always_on_microphone ?? false,
@@ -227,7 +234,14 @@ export const useSettingsStore = create<SettingsStore>()(
             selected_output_device:
               settings.selected_output_device ?? "Default",
           };
-          set({ settings: normalizedSettings, isLoading: false });
+          set({
+            settings: normalizedSettings,
+            postProcessApiKeyStatuses:
+              statusResult.status === "ok"
+                ? (statusResult.data as PostProcessApiKeyStatuses)
+                : {},
+            isLoading: false,
+          });
         } else {
           console.error("Failed to load settings:", result.error);
           set({ isLoading: false });
