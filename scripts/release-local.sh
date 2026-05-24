@@ -83,6 +83,18 @@ NODE
 
 bun run test:e2e:release-transcribe
 
+git fetch origin main
+post_smoke_main="$(git rev-parse main)"
+post_smoke_remote_main="$(git rev-parse origin/main)"
+if [[ "${post_smoke_main}" != "${local_main}" || "${post_smoke_remote_main}" != "${remote_main}" ]]; then
+  echo "Error: main changed while the release smoke test was running. Rerun release:local against the exact commit to release." >&2
+  echo "before smoke main:        ${local_main}" >&2
+  echo "before smoke origin/main: ${remote_main}" >&2
+  echo "after smoke main:         ${post_smoke_main}" >&2
+  echo "after smoke origin/main:  ${post_smoke_remote_main}" >&2
+  exit 1
+fi
+
 if ! command -v gh >/dev/null 2>&1; then
   echo "Error: gh is not installed or not on PATH." >&2
   exit 1

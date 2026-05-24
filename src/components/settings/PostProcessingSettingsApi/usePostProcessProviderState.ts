@@ -90,7 +90,8 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
 
   // Use settings directly as single source of truth
   const baseUrl = selectedProvider?.base_url ?? "";
-  const hasStoredApiKey = postProcessApiKeyStatuses[selectedProviderId] ?? false;
+  const hasStoredApiKey =
+    postProcessApiKeyStatuses[selectedProviderId] ?? false;
   const apiKey = hasStoredApiKey ? "stored" : "";
   const model = settings?.post_process_models?.[selectedProviderId] ?? "";
 

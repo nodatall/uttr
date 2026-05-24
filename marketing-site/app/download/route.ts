@@ -65,7 +65,9 @@ export function selectMacDmgAsset(
 
   return (
     dmgAssets.find((asset) => preferredPattern.test(asset.name || "")) ||
-    dmgAssets.find((asset) => /_(aarch64|arm64)\.dmg$/i.test(asset.name || "")) ||
+    dmgAssets.find((asset) =>
+      /_(aarch64|arm64)\.dmg$/i.test(asset.name || ""),
+    ) ||
     dmgAssets.find((asset) => /_x64\.dmg$/i.test(asset.name || "")) ||
     dmgAssets[0] ||
     null

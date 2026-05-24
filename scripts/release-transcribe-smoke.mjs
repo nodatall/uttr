@@ -51,12 +51,15 @@ const transcriptionTimeoutMs = Number(
 const keepArtifacts = Boolean(args["keep-artifacts"]);
 const screenshotsEnabled = !Boolean(args["no-screenshots"]);
 const preflightOnly = Boolean(args["preflight-only"]);
+const smokeDocumentMarker = `uttr-release-smoke-${Date.now()}`;
 
 let tauriProcess = null;
 let tauriStdioFds = [];
 let scratchDir = "";
 let cleaningUpTauri = false;
 let preserveArtifacts = false;
+let smokeDocumentCreated = false;
+let lastScreenshotPath = null;
 
 main().catch(async (error) => {
   await cleanup(false);
@@ -126,12 +129,6 @@ async function main() {
 
   await waitForLog(
     logPath,
-    "SIGUSR2 transcription toggle enabled",
-    startupTimeoutMs,
-    "release smoke signal toggle",
-  );
-  await waitForLog(
-    logPath,
     "Shortcuts initialized successfully",
     startupTimeoutMs,
     "shortcut initialization",
@@ -142,6 +139,12 @@ async function main() {
     startupTimeoutMs,
     "input initialization",
   );
+  await waitForLog(
+    logPath,
+    "Registered handy-keys shortcut: transcribe",
+    startupTimeoutMs,
+    "transcribe shortcut registration",
+  );
 
   await openTextEditTarget();
 
@@ -149,14 +152,15 @@ async function main() {
   console.log(`Starting recording with generated smoke audio: "${phrase}"`);
 
   const recordingStartedAt = Date.now();
-  await triggerSmokeToggle();
+  await triggerSmokeShortcut();
   await waitForLog(
     logPath,
     "overlay shown state=recording",
     15_000,
     "recording overlay",
   );
-  await captureScreenshot("01-recording");
+  await focusTextEditTarget();
+  await captureScreenshot("01-recording", { expectedFrontmost: "TextEdit" });
 
   await sleep(500);
 
@@ -169,14 +173,15 @@ async function main() {
     await sleep(remainingMs);
   }
 
-  await triggerSmokeToggle();
+  await triggerSmokeShortcut();
   await waitForLog(
     logPath,
     "overlay shown state=transcribing",
     15_000,
     "transcribing overlay",
   );
-  await captureScreenshot("02-transcribing");
+  await focusTextEditTarget();
+  await captureScreenshot("02-transcribing", { expectedFrontmost: "TextEdit" });
   await waitForLog(
     logPath,
     "Transcription completed",
@@ -195,18 +200,25 @@ async function main() {
     transcriptionTimeoutMs,
   );
   await writeFile(path.join(scratchDir, "pasted-text.txt"), pastedText, "utf8");
-  await captureScreenshot("03-pasted-result");
+  await focusTextEditTarget();
+  await captureScreenshot("03-pasted-result", {
+    expectedFrontmost: "TextEdit",
+  });
 
   const historyEntry = await waitForHistoryEntry(appDataDir, expectedTokens);
-  await openHistoryInUttr();
   await waitForLog(
     logPath,
     `Release smoke history entry saved id=${historyEntry.id}`,
     20_000,
     "release smoke history entry",
   );
-  await captureScreenshot("04-history");
+  await openGeneralSettingsInUttr();
+  await captureScreenshot("04-settings", { expectedFrontmost: "uttr" });
+  await openHistoryInUttr();
+  await captureScreenshot("05-history", { expectedFrontmost: "uttr" });
   await closeTextEditDocumentsContaining(pastedText);
+  await closeEmptyTextEditDocuments();
+  await quitTextEditIfNoDocuments();
 
   console.log(`Pasted text: ${pastedText.trim()}`);
   if (screenshotsEnabled) {
@@ -341,6 +353,7 @@ async function copyCurrentAppProfile(appDataDir, provider) {
     "settings_store.json",
     "byok_secrets.json",
     "byok_secrets.key",
+    "byok.vault",
   ]) {
     const sourcePath = path.join(provider.sourceProfileDir, fileName);
     const sourceStat = await stat(sourcePath).catch(() => null);
@@ -444,6 +457,7 @@ async function seedSettings(appDataDir, provider) {
       start_hidden: false,
       autostart_enabled: false,
       update_checks_enabled: false,
+      app_language: "en",
     },
   };
 
@@ -560,7 +574,6 @@ async function startTauriDev({
     XDG_DATA_HOME: path.join(homeDir, ".local", "share"),
     UTTR_RELEASE_SMOKE: "1",
     UTTR_RELEASE_SMOKE_AUDIO_FILE: smokeAudioPath,
-    UTTR_ENABLE_SIGUSR2_TRANSCRIPTION: "1",
     UTTR_RELEASE_SMOKE_TRANSCRIBING_HOLD_MS:
       process.env.UTTR_RELEASE_SMOKE_TRANSCRIBING_HOLD_MS ?? "1500",
     VITE_PORT: process.env.UTTR_RELEASE_SMOKE_VITE_PORT ?? "1420",
@@ -608,13 +621,27 @@ async function openTextEditTarget() {
   await osascript([
     'tell application "TextEdit"',
     "activate",
-    'make new document with properties {text:""}',
+    `make new document with properties {text:${appleScriptString(smokeDocumentMarker)}}`,
+    'set text of front document to ""',
     "end tell",
     "delay 0.5",
   ]);
+  smokeDocumentCreated = true;
+  await waitForFrontmostApplication("TextEdit", 5_000);
 }
 
-async function openHistoryInUttr() {
+async function focusTextEditTarget() {
+  await osascript([
+    'tell application "TextEdit" to activate',
+    'tell application "System Events"',
+    'set frontmost of process "TextEdit" to true',
+    "end tell",
+    "delay 0.2",
+  ]);
+  await waitForFrontmostApplication("TextEdit", 5_000);
+}
+
+async function openSettingsInUttr() {
   const pid = await findUttrProcessId();
   await osascript([
     'tell application "System Events"',
@@ -626,17 +653,141 @@ async function openHistoryInUttr() {
     "if exists window 1 of targetProcess then exit repeat",
     "delay 0.25",
     "end repeat",
-    "try",
-    'click (first button of entire contents of window 1 of targetProcess whose name is "History")',
-    "end try",
     "end tell",
     "delay 0.75",
   ]);
+  await waitForFrontmostApplication("uttr", 5_000);
 }
 
-async function triggerSmokeToggle() {
-  const pid = await findUttrProcessId();
-  await execFileText("kill", ["-USR2", String(pid)]);
+async function openGeneralSettingsInUttr() {
+  await openSettingsInUttr();
+  const clicked = await clickUttrSidebarButton("General", 1);
+  if (!clicked.includes("clicked")) {
+    throw new Error(
+      "Could not find the General settings navigation button in Uttr.",
+    );
+  }
+}
+
+async function openHistoryInUttr() {
+  await openSettingsInUttr();
+  const clicked = await clickUttrSidebarButton("History", 4);
+  if (!clicked.includes("clicked")) {
+    throw new Error("Could not find the History navigation button in Uttr.");
+  }
+}
+
+async function clickUttrSidebarButton(buttonName, visibleIndex) {
+  const accessibleClick = await clickUttrButtonByName(buttonName).catch(
+    () => "missing",
+  );
+  if (accessibleClick.includes("clicked")) {
+    return accessibleClick;
+  }
+  return clickUttrSidebarButtonByIndex(visibleIndex);
+}
+
+async function clickUttrButtonByName(buttonName) {
+  return osascript([
+    "on clickButtonNamed(container, targetName)",
+    'tell application "System Events"',
+    "try",
+    "repeat with child in UI elements of container",
+    "try",
+    "set childRole to role of child as text",
+    "set childName to name of child as text",
+    'if (childRole is "AXButton" or childRole is "button") and childName is targetName then',
+    "click child",
+    'return "clicked"',
+    "end if",
+    "end try",
+    "try",
+    "set nestedResult to my clickButtonNamed(child, targetName)",
+    'if nestedResult is "clicked" then return "clicked"',
+    "end try",
+    "end repeat",
+    "end try",
+    "end tell",
+    'return "missing"',
+    "end clickButtonNamed",
+    'tell application "System Events"',
+    `set targetProcesses to every process whose unix id is ${await findUttrProcessId()}`,
+    'if (count of targetProcesses) is 0 then error "Uttr process not found"',
+    "set targetProcess to item 1 of targetProcesses",
+    "set clickResult to my clickButtonNamed(window 1 of targetProcess, " +
+      appleScriptString(buttonName) +
+      ")",
+    "end tell",
+    "delay 0.75",
+    "return clickResult",
+  ]);
+}
+
+async function clickUttrSidebarButtonByIndex(visibleIndex) {
+  return osascript([
+    'tell application "System Events"',
+    `set targetProcesses to every process whose unix id is ${await findUttrProcessId()}`,
+    'if (count of targetProcesses) is 0 then error "Uttr process not found"',
+    "set targetProcess to item 1 of targetProcesses",
+    "set windowPosition to position of window 1 of targetProcess",
+    "set windowX to item 1 of windowPosition",
+    "set windowY to item 2 of windowPosition",
+    "set clickX to windowX + 116",
+    `set clickY to windowY + 103 + (${visibleIndex - 1} * 43)`,
+    "click at {clickX, clickY}",
+    "end tell",
+    "delay 0.75",
+    'return "clicked-coordinate"',
+  ]);
+}
+
+async function triggerSmokeShortcut() {
+  const helperPath = path.join(scratchDir, "send-smoke-shortcut.swift");
+  await writeFile(
+    helperPath,
+    `
+import CoreGraphics
+import Foundation
+
+let source = CGEventSource(stateID: .hidSystemState)
+let commandKey: CGKeyCode = 55
+let shiftKey: CGKeyCode = 56
+let num9Key: CGKeyCode = 25
+let chordFlags: CGEventFlags = [.maskCommand, .maskShift]
+
+func post(_ event: CGEvent) {
+    event.post(tap: .cghidEventTap)
+    usleep(50_000)
+}
+
+func flagsChanged(_ keyCode: CGKeyCode, _ flags: CGEventFlags) {
+    guard let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: true) else {
+        fatalError("Could not create flagsChanged event")
+    }
+    event.type = .flagsChanged
+    event.flags = flags
+    post(event)
+}
+
+func key(_ keyCode: CGKeyCode, down: Bool, _ flags: CGEventFlags) {
+    guard let event = CGEvent(keyboardEventSource: source, virtualKey: keyCode, keyDown: down) else {
+        fatalError("Could not create key event")
+    }
+    event.flags = flags
+    post(event)
+}
+
+flagsChanged(commandKey, [.maskCommand])
+flagsChanged(shiftKey, chordFlags)
+key(num9Key, down: true, chordFlags)
+key(num9Key, down: false, chordFlags)
+flagsChanged(shiftKey, [.maskCommand])
+flagsChanged(commandKey, [])
+`,
+    "utf8",
+  );
+  await execFileText("swift", [helperPath]);
+  await sleep(250);
 }
 
 async function findUttrProcessId() {
@@ -683,9 +834,13 @@ async function prepareSmokeAudio(outputPath, text) {
   ]);
 }
 
-async function captureScreenshot(label) {
+async function captureScreenshot(label, options = {}) {
   if (!screenshotsEnabled) {
     return;
+  }
+
+  if (options.expectedFrontmost) {
+    await waitForFrontmostApplication(options.expectedFrontmost, 5_000);
   }
 
   const screenshotsDir = path.join(scratchDir, "screenshots");
@@ -696,8 +851,34 @@ async function captureScreenshot(label) {
   if (!screenshotStat?.isFile() || screenshotStat.size === 0) {
     throw new Error(`Screenshot capture failed for ${label}.`);
   }
+  if (lastScreenshotPath) {
+    const identical = await filesAreIdentical(
+      lastScreenshotPath,
+      screenshotPath,
+    );
+    if (identical) {
+      throw new Error(
+        `Screenshot ${label} is identical to the previous state; visual evidence did not change.`,
+      );
+    }
+  }
+  lastScreenshotPath = screenshotPath;
   preserveArtifacts = true;
   console.log(`Captured screenshot: ${screenshotPath}`);
+}
+
+async function filesAreIdentical(leftPath, rightPath) {
+  const result = await execFileText("cmp", ["-s", leftPath, rightPath]).then(
+    () => true,
+    (error) => {
+      const message = error.message || "";
+      if (message.includes("differ")) {
+        return false;
+      }
+      return false;
+    },
+  );
+  return result;
 }
 
 async function waitForHistoryEntry(appDataDir, tokens, timeoutMs = 20_000) {
@@ -751,6 +932,74 @@ async function getTextEditText() {
   }
 }
 
+async function waitForHistoryEntryVisible(entryId, tokens, timeoutMs = 10_000) {
+  const started = Date.now();
+  const visibleText = tokens.find((token) => token.length >= 3) ?? phrase;
+  while (Date.now() - started < timeoutMs) {
+    const visible = await osascript([
+      "on uiContainsText(container, targetText)",
+      'tell application "System Events"',
+      "try",
+      "repeat with child in UI elements of container",
+      "try",
+      "set childName to name of child as text",
+      "if childName contains targetText then return true",
+      "end try",
+      "try",
+      "set childValue to value of child as text",
+      "if childValue contains targetText then return true",
+      "end try",
+      "try",
+      "set childDescription to description of child as text",
+      "if childDescription contains targetText then return true",
+      "end try",
+      "try",
+      "if my uiContainsText(child, targetText) then return true",
+      "end try",
+      "end repeat",
+      "end try",
+      "end tell",
+      "return false",
+      "end uiContainsText",
+      'tell application "System Events"',
+      `set targetProcesses to every process whose unix id is ${await findUttrProcessId()}`,
+      'if (count of targetProcesses) is 0 then return "missing"',
+      "set targetProcess to item 1 of targetProcesses",
+      `if my uiContainsText(window 1 of targetProcess, ${appleScriptString(String(entryId))}) then return "visible"`,
+      `if my uiContainsText(window 1 of targetProcess, ${appleScriptString(visibleText)}) then return "visible"`,
+      'return "pending"',
+      "end tell",
+    ]).catch(() => "pending");
+    if (visible.includes("visible")) {
+      return;
+    }
+    await sleep(500);
+  }
+
+  throw new Error(
+    "Timed out waiting for the Uttr History UI to become visible.",
+  );
+}
+
+async function waitForFrontmostApplication(expectedName, timeoutMs) {
+  const started = Date.now();
+  const expected = expectedName.toLowerCase();
+  while (Date.now() - started < timeoutMs) {
+    const frontmost = (
+      await osascript([
+        'tell application "System Events" to get name of first application process whose frontmost is true',
+      ]).catch(() => "")
+    )
+      .trim()
+      .toLowerCase();
+    if (frontmost === expected) {
+      return;
+    }
+    await sleep(250);
+  }
+  throw new Error(`Timed out waiting for ${expectedName} to be frontmost.`);
+}
+
 async function closeTextEditDocumentsContaining(text) {
   const needle = String(text).trim();
   if (!needle) {
@@ -771,7 +1020,9 @@ async function closeTextEditDocumentsContaining(text) {
     "return closedCount",
     "end tell",
   ]);
-  console.log(`Closed ${result.trim()} matching TextEdit smoke document(s).`);
+  const closedCount = Number(result.trim());
+  console.log(`Closed ${closedCount} matching TextEdit smoke document(s).`);
+  return Number.isFinite(closedCount) ? closedCount : 0;
 }
 
 function appleScriptString(value) {
@@ -831,6 +1082,14 @@ async function execFileText(command, commandArgs, options = {}) {
 }
 
 async function cleanup(success) {
+  if (!success && smokeDocumentCreated) {
+    await closeEmptyFrontTextEditDocument().catch(() => {});
+    await closeTextEditDocumentsContaining(phrase).catch(() => {});
+    await closeTextEditDocumentsContaining(smokeDocumentMarker).catch(() => {});
+  }
+  await closeEmptyTextEditDocuments().catch(() => {});
+  await quitTextEditIfNoDocuments().catch(() => {});
+
   if (tauriProcess) {
     cleaningUpTauri = true;
     try {
@@ -876,6 +1135,53 @@ async function scrubSensitiveProfileArtifacts() {
   ]) {
     await rm(path.join(appDataDir, fileName), { force: true }).catch(() => {});
   }
+}
+
+async function closeEmptyFrontTextEditDocument() {
+  await osascript([
+    'tell application "TextEdit"',
+    "if exists front document then",
+    'if text of front document is "" then close front document saving no',
+    "end if",
+    "end tell",
+  ]);
+}
+
+async function closeEmptyTextEditDocuments() {
+  if (!smokeDocumentCreated) {
+    return;
+  }
+
+  const result = await osascript([
+    'tell application "TextEdit"',
+    "set closedCount to 0",
+    "repeat with docRef in documents",
+    "try",
+    'if text of docRef is "" then',
+    "close docRef saving no",
+    "set closedCount to closedCount + 1",
+    "end if",
+    "end try",
+    "end repeat",
+    "return closedCount",
+    "end tell",
+  ]);
+  const closedCount = Number(result.trim());
+  console.log(
+    `Closed ${Number.isFinite(closedCount) ? closedCount : 0} empty TextEdit document(s).`,
+  );
+}
+
+async function quitTextEditIfNoDocuments() {
+  if (!smokeDocumentCreated) {
+    return;
+  }
+
+  await osascript([
+    'tell application "TextEdit"',
+    "if (count of documents) is 0 then quit",
+    "end tell",
+  ]);
 }
 
 function sleep(ms) {

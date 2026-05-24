@@ -29,7 +29,8 @@
         margin: 0;
         color: var(--ink);
         background: #d9d9d4;
-        font-family: "Comic Sans MS", "Comic Neue", "Bradley Hand", cursive, sans-serif;
+        font-family:
+          "Comic Sans MS", "Comic Neue", "Bradley Hand", cursive, sans-serif;
         font-size: 15px;
         letter-spacing: 0;
       }
@@ -741,7 +742,9 @@
         border-radius: 999px;
         background: #1783ff;
         color: white;
-        font: 700 11px system-ui, sans-serif;
+        font:
+          700 11px system-ui,
+          sans-serif;
         pointer-events: none;
         box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
         white-space: nowrap;
@@ -760,7 +763,9 @@
         border-radius: 50%;
         background: #1783ff;
         color: white;
-        font: 700 12px system-ui, sans-serif;
+        font:
+          700 12px system-ui,
+          sans-serif;
         box-shadow: 0 1px 4px rgba(0, 0, 0, 0.35);
         cursor: pointer;
       }
@@ -824,7 +829,12 @@
         padding: 8px;
         border: 2px solid var(--line);
         border-radius: 8px;
-        font: 13px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        font:
+          13px ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          Consolas,
+          monospace;
         background: white;
       }
 
@@ -844,7 +854,6 @@
         .setting-row {
           grid-template-columns: 1fr;
         }
-
       }
     </style>
   </head>
@@ -853,19 +862,39 @@
       <section class="shell" aria-label="Session window mockup">
         <nav class="rail" aria-label="Primary navigation">
           <div class="logo">uttr</div>
-          <button class="rail-btn active" type="button" data-page="session" data-title="Today - Product Call">
+          <button
+            class="rail-btn active"
+            type="button"
+            data-page="session"
+            data-title="Today - Product Call"
+          >
             <div class="rail-icon"></div>
             Home
           </button>
-          <button class="rail-btn" type="button" data-page="files" data-title="Files">
+          <button
+            class="rail-btn"
+            type="button"
+            data-page="files"
+            data-title="Files"
+          >
             <div class="rail-icon"></div>
             Files
           </button>
-          <button class="rail-btn" type="button" data-page="history" data-title="History">
+          <button
+            class="rail-btn"
+            type="button"
+            data-page="history"
+            data-title="History"
+          >
             <div class="rail-icon"></div>
             History
           </button>
-          <button class="rail-btn" type="button" data-page="settings" data-title="Settings">
+          <button
+            class="rail-btn"
+            type="button"
+            data-page="settings"
+            data-title="Settings"
+          >
             <div class="rail-icon"></div>
             Settings
           </button>
@@ -880,27 +909,48 @@
               </div>
             </div>
             <div class="status-row session-only">
-              <button class="button icon-button" aria-label="Pause session" title="Pause session">Ⅱ</button>
-              <button class="button stop icon-button" aria-label="Stop session" title="Stop session">■</button>
+              <button
+                class="button icon-button"
+                aria-label="Pause session"
+                title="Pause session"
+              >
+                Ⅱ
+              </button>
+              <button
+                class="button stop icon-button"
+                aria-label="Stop session"
+                title="Stop session"
+              >
+                ■
+              </button>
             </div>
           </header>
 
           <div class="content">
-            <section class="panel summary-panel view active" data-view="session">
+            <section
+              class="panel summary-panel view active"
+              data-view="session"
+            >
               <div class="panel-header">
                 <div>
                   <h3>Live summary</h3>
                 </div>
                 <div class="panel-actions">
                   <a class="button" href="#context-modal">Add context</a>
-                  <a class="button" href="#transcript-modal">View raw transcript</a>
+                  <a class="button" href="#transcript-modal"
+                    >View raw transcript</a
+                  >
                 </div>
               </div>
               <div class="summary-board">
                 <section class="summary-main">
-                  <p>The team is separating quick dictation from a larger session workspace for meetings, system audio, and files. The default view should help the user understand the meeting without making them stare at raw transcript text.</p>
+                  <p>
+                    The team is separating quick dictation from a larger session
+                    workspace for meetings, system audio, and files. The default
+                    view should help the user understand the meeting without
+                    making them stare at raw transcript text.
+                  </p>
                 </section>
-
               </div>
             </section>
 
@@ -910,27 +960,52 @@
                   <div class="utility-heading">
                     <span class="utility-kicker">Utility</span>
                     <h1>File Transcription</h1>
-                    <p class="note">Drop in one audio file or choose one from disk. Uttr will transcribe it using your current model, language, and post-processing settings.</p>
+                    <p class="note">
+                      Drop in one audio file or choose one from disk. Uttr will
+                      transcribe it using your current model, language, and
+                      post-processing settings.
+                    </p>
                   </div>
 
                   <div class="utility-actions">
-                    <button class="button small disabled" type="button">⌫ Clear</button>
-                    <button class="button small" type="button" data-file-open="team-sync.m4a">↥ Choose Audio File</button>
-                    <button class="button small primary disabled" type="button">▷ Transcribe</button>
+                    <button class="button small disabled" type="button">
+                      ⌫ Clear
+                    </button>
+                    <button
+                      class="button small"
+                      type="button"
+                      data-file-open="team-sync.m4a"
+                    >
+                      ↥ Choose Audio File
+                    </button>
+                    <button class="button small primary disabled" type="button">
+                      ▷ Transcribe
+                    </button>
                   </div>
 
                   <div class="drop large">
                     <div class="drop-icon">♫</div>
                     <div class="drop-copy">
                       <strong>Drag and drop one audio file here</strong>
-                      <p class="note">Supported formats: wav, mp3, m4a, aac, ogg</p>
+                      <p class="note">
+                        Supported formats: wav, mp3, m4a, aac, ogg
+                      </p>
                     </div>
-                    <button class="button small" type="button" data-file-open="customer-call.wav">≋ Browse for file</button>
+                    <button
+                      class="button small"
+                      type="button"
+                      data-file-open="customer-call.wav"
+                    >
+                      ≋ Browse for file
+                    </button>
                   </div>
 
                   <div class="info-note">
                     <span class="info-icon">i</span>
-                    <p>Imported files stay on this screen only. They are not added to your transcription history.</p>
+                    <p>
+                      Imported files stay on this screen only. They are not
+                      added to your transcription history.
+                    </p>
                   </div>
                 </section>
               </div>
@@ -939,15 +1014,28 @@
                 <section class="panel">
                   <div class="panel-header">
                     <div class="status-row">
-                      <button class="button small icon-button" type="button" data-files-back aria-label="Back" title="Back">←</button>
+                      <button
+                        class="button small icon-button"
+                        type="button"
+                        data-files-back
+                        aria-label="Back"
+                        title="Back"
+                      >
+                        ←
+                      </button>
                       <h3 id="selected-file-title">team-sync.m4a</h3>
                     </div>
-                    <a class="button" href="#transcript-modal">View raw transcript</a>
+                    <a class="button" href="#transcript-modal"
+                      >View raw transcript</a
+                    >
                   </div>
                   <div class="list-panel">
                     <section class="card yellow">
                       <h3>File summary</h3>
-                      <p>Discussion covered session windows, hidden raw transcript, and a summary-first meeting workspace.</p>
+                      <p>
+                        Discussion covered session windows, hidden raw
+                        transcript, and a summary-first meeting workspace.
+                      </p>
                     </section>
                   </div>
                 </section>
@@ -957,8 +1045,12 @@
             <section class="view" data-view="history">
               <section class="panel history-panel">
                 <div class="history-tabs" aria-label="History type">
-                  <button class="button small history-tab active" type="button">Dictations</button>
-                  <button class="button small history-tab" type="button">Sessions</button>
+                  <button class="button small history-tab active" type="button">
+                    Dictations
+                  </button>
+                  <button class="button small history-tab" type="button">
+                    Sessions
+                  </button>
                 </div>
                 <div class="list-panel">
                   <div class="history-section-title">Dictations</div>
@@ -981,7 +1073,9 @@
                   <button class="row-item" type="button" data-history-open>
                     <div>
                       <strong>Today - Product Call</strong>
-                      <p class="note">18 min - summary, decisions, questions, actions</p>
+                      <p class="note">
+                        18 min - summary, decisions, questions, actions
+                      </p>
                     </div>
                     <span class="pill">Open</span>
                   </button>
@@ -1009,14 +1103,20 @@
                   <div class="setting-row">
                     <div>
                       <strong>Session window for full-system recording</strong>
-                      <p class="note">Full-system hotkey opens this window instead of the compact overlay.</p>
+                      <p class="note">
+                        Full-system hotkey opens this window instead of the
+                        compact overlay.
+                      </p>
                     </div>
                     <span class="toggle">On</span>
                   </div>
                   <div class="setting-row">
                     <div>
                       <strong>Meeting save location</strong>
-                      <p class="note">Choose where local meeting recordings, transcripts, and summaries are stored.</p>
+                      <p class="note">
+                        Choose where local meeting recordings, transcripts, and
+                        summaries are stored.
+                      </p>
                     </div>
                     <span class="pill">Choose folder</span>
                   </div>
@@ -1024,29 +1124,47 @@
               </section>
             </section>
           </div>
-
         </section>
-
       </section>
 
-      <section class="modal" id="transcript-modal" aria-label="Raw transcript modal">
+      <section
+        class="modal"
+        id="transcript-modal"
+        aria-label="Raw transcript modal"
+      >
         <div class="modal-dialog">
           <div class="panel-header">
             <h3>Raw transcript</h3>
-            <a class="button icon-button" href="#" aria-label="Close" title="Close">×</a>
+            <a
+              class="button icon-button"
+              href="#"
+              aria-label="Close"
+              title="Close"
+              >×</a
+            >
           </div>
           <div class="transcript">
             <article class="chunk">
               <span class="time">18:10</span>
-              <p>We should make the full system recording open a real window, because people will want to switch back to it during a meeting.</p>
+              <p>
+                We should make the full system recording open a real window,
+                because people will want to switch back to it during a meeting.
+              </p>
             </article>
             <article class="chunk">
               <span class="time">18:20</span>
-              <p>The quick dictation overlay should stay separate. It should still feel instant and not turn the app into a big desktop window every time.</p>
+              <p>
+                The quick dictation overlay should stay separate. It should
+                still feel instant and not turn the app into a big desktop
+                window every time.
+              </p>
             </article>
             <article class="chunk">
               <span class="time">18:30</span>
-              <p>For longer calls, the app can transcribe every ten seconds and update the summary as completed chunks arrive.</p>
+              <p>
+                For longer calls, the app can transcribe every ten seconds and
+                update the summary as completed chunks arrive.
+              </p>
             </article>
             <article class="chunk pending">
               <span class="time">18:40</span>
@@ -1056,15 +1174,28 @@
         </div>
       </section>
 
-      <section class="modal top-modal" id="context-modal" aria-label="Meeting context modal">
+      <section
+        class="modal top-modal"
+        id="context-modal"
+        aria-label="Meeting context modal"
+      >
         <div class="modal-dialog context-dialog">
           <div class="panel-header">
             <h3>Meeting context</h3>
-            <a class="button icon-button" href="#" aria-label="Close" title="Close">×</a>
+            <a
+              class="button icon-button"
+              href="#"
+              aria-label="Close"
+              title="Close"
+              >×</a
+            >
           </div>
           <div class="context-box">
             <div class="input-line">Paste agenda, attendee notes, links...</div>
-            <span class="note">Make cloud sharing explicit before this text is used by an LLM.</span>
+            <span class="note"
+              >Make cloud sharing explicit before this text is used by an
+              LLM.</span
+            >
           </div>
         </div>
       </section>
@@ -1072,30 +1203,63 @@
       <div class="annotation-outline" id="annotation-outline" hidden></div>
       <div class="annotation-hover-label" id="annotation-hover-label"></div>
 
-      <div class="annotation-popover" id="annotation-popover" role="dialog" aria-label="Add feedback">
+      <div
+        class="annotation-popover"
+        id="annotation-popover"
+        role="dialog"
+        aria-label="Add feedback"
+      >
         <strong id="annotation-popover-title">Comment 1</strong>
         <div class="annotation-target-meta" id="annotation-target-meta"></div>
-        <textarea id="annotation-comment" placeholder="What should change?"></textarea>
+        <textarea
+          id="annotation-comment"
+          placeholder="What should change?"
+        ></textarea>
         <div class="status-row">
-          <button class="button small" type="button" id="annotation-add">Add</button>
-          <button class="button small" type="button" id="annotation-cancel">Cancel</button>
+          <button class="button small" type="button" id="annotation-add">
+            Add
+          </button>
+          <button class="button small" type="button" id="annotation-cancel">
+            Cancel
+          </button>
         </div>
       </div>
 
-      <div class="annotation-copy-box" id="annotation-copy-box" role="dialog" aria-label="Copy feedback">
+      <div
+        class="annotation-copy-box"
+        id="annotation-copy-box"
+        role="dialog"
+        aria-label="Copy feedback"
+      >
         <strong>Copy feedback</strong>
         <textarea id="annotation-output" readonly></textarea>
         <div class="status-row">
-          <button class="button small" type="button" id="annotation-copy-now">Copy to clipboard</button>
-          <button class="button small" type="button" id="annotation-close-output">Close</button>
+          <button class="button small" type="button" id="annotation-copy-now">
+            Copy to clipboard
+          </button>
+          <button
+            class="button small"
+            type="button"
+            id="annotation-close-output"
+          >
+            Close
+          </button>
         </div>
       </div>
 
       <div class="annotation-toolbar" aria-label="Feedback toolbar">
-        <button class="button small" type="button" id="annotation-toggle">Annotate</button>
-        <button class="button small" type="button" id="annotation-visibility">Hide markers</button>
-        <button class="button small" type="button" id="annotation-copy">Copy all</button>
-        <button class="button small" type="button" id="annotation-clear">Clear</button>
+        <button class="button small" type="button" id="annotation-toggle">
+          Annotate
+        </button>
+        <button class="button small" type="button" id="annotation-visibility">
+          Hide markers
+        </button>
+        <button class="button small" type="button" id="annotation-copy">
+          Copy all
+        </button>
+        <button class="button small" type="button" id="annotation-clear">
+          Clear
+        </button>
         <span class="annotation-count" id="annotation-count">0</span>
       </div>
 
@@ -1103,11 +1267,17 @@
         const navButtons = Array.from(document.querySelectorAll("[data-page]"));
         const views = Array.from(document.querySelectorAll("[data-view]"));
         const pageTitle = document.querySelector("#page-title");
-        const sessionOnlyElements = Array.from(document.querySelectorAll(".session-only"));
+        const sessionOnlyElements = Array.from(
+          document.querySelectorAll(".session-only"),
+        );
         const filesListView = document.querySelector(".files-list-view");
         const fileDetailView = document.querySelector(".file-detail-view");
-        const selectedFileTitle = document.querySelector("#selected-file-title");
-        const fileOpenButtons = Array.from(document.querySelectorAll("[data-file-open]"));
+        const selectedFileTitle = document.querySelector(
+          "#selected-file-title",
+        );
+        const fileOpenButtons = Array.from(
+          document.querySelectorAll("[data-file-open]"),
+        );
         const filesBackButton = document.querySelector("[data-files-back]");
         const annotations = [];
         let annotationMode = false;
@@ -1115,25 +1285,41 @@
         let selectedRect = null;
         let editingAnnotationId = null;
         const annotationToggle = document.querySelector("#annotation-toggle");
-        const annotationVisibility = document.querySelector("#annotation-visibility");
+        const annotationVisibility = document.querySelector(
+          "#annotation-visibility",
+        );
         const annotationCopy = document.querySelector("#annotation-copy");
         const annotationClear = document.querySelector("#annotation-clear");
         const annotationCount = document.querySelector("#annotation-count");
         const annotationOutline = document.querySelector("#annotation-outline");
         const annotationPopover = document.querySelector("#annotation-popover");
-        const annotationPopoverTitle = document.querySelector("#annotation-popover-title");
-        const annotationTargetMeta = document.querySelector("#annotation-target-meta");
+        const annotationPopoverTitle = document.querySelector(
+          "#annotation-popover-title",
+        );
+        const annotationTargetMeta = document.querySelector(
+          "#annotation-target-meta",
+        );
         const annotationComment = document.querySelector("#annotation-comment");
         const annotationAdd = document.querySelector("#annotation-add");
         const annotationCancel = document.querySelector("#annotation-cancel");
         const annotationOutput = document.querySelector("#annotation-output");
-        const annotationCopyBox = document.querySelector("#annotation-copy-box");
-        const annotationCopyNow = document.querySelector("#annotation-copy-now");
-        const annotationCloseOutput = document.querySelector("#annotation-close-output");
-        const annotationHoverLabel = document.querySelector("#annotation-hover-label");
+        const annotationCopyBox = document.querySelector(
+          "#annotation-copy-box",
+        );
+        const annotationCopyNow = document.querySelector(
+          "#annotation-copy-now",
+        );
+        const annotationCloseOutput = document.querySelector(
+          "#annotation-close-output",
+        );
+        const annotationHoverLabel = document.querySelector(
+          "#annotation-hover-label",
+        );
 
         function showPage(pageName) {
-          const activeButton = navButtons.find((button) => button.dataset.page === pageName) || navButtons[0];
+          const activeButton =
+            navButtons.find((button) => button.dataset.page === pageName) ||
+            navButtons[0];
           const activePage = activeButton.dataset.page;
 
           navButtons.forEach((button) => {
@@ -1170,9 +1356,9 @@
         function isAnnotationUi(element) {
           return Boolean(
             element.closest(".annotation-toolbar") ||
-              element.closest(".annotation-popover") ||
-              element.closest(".annotation-copy-box") ||
-              element.closest(".feedback-marker")
+            element.closest(".annotation-popover") ||
+            element.closest(".annotation-copy-box") ||
+            element.closest(".feedback-marker"),
           );
         }
 
@@ -1180,7 +1366,9 @@
           const aria = element.getAttribute("aria-label");
           const title = element.getAttribute("title");
           const text = element.innerText || element.textContent || "";
-          const label = (aria || title || text || element.tagName.toLowerCase()).replace(/\s+/g, " ").trim();
+          const label = (aria || title || text || element.tagName.toLowerCase())
+            .replace(/\s+/g, " ")
+            .trim();
           return label.length > 88 ? `${label.slice(0, 85)}...` : label;
         }
 
@@ -1198,21 +1386,27 @@
 
           const parts = [];
           let current = element;
-          while (current && current.nodeType === 1 && current !== document.body) {
+          while (
+            current &&
+            current.nodeType === 1 &&
+            current !== document.body
+          ) {
             let part = current.tagName.toLowerCase();
             const usefulClasses = Array.from(current.classList || []).filter(
               (name) =>
                 !name.startsWith("active") &&
                 !name.startsWith("open") &&
                 !name.startsWith("annotation") &&
-                !name.startsWith("feedback")
+                !name.startsWith("feedback"),
             );
             if (usefulClasses.length) {
               part += `.${usefulClasses.slice(0, 2).map(cssEscape).join(".")}`;
             }
             const parent = current.parentElement;
             if (parent) {
-              const sameTagSiblings = Array.from(parent.children).filter((child) => child.tagName === current.tagName);
+              const sameTagSiblings = Array.from(parent.children).filter(
+                (child) => child.tagName === current.tagName,
+              );
               if (sameTagSiblings.length > 1 && !current.id) {
                 part += `:nth-of-type(${sameTagSiblings.indexOf(current) + 1})`;
               }
@@ -1227,7 +1421,11 @@
         function domPath(element) {
           const parts = [];
           let current = element;
-          while (current && current.nodeType === 1 && current !== document.body) {
+          while (
+            current &&
+            current.nodeType === 1 &&
+            current !== document.body
+          ) {
             parts.unshift(current.tagName.toLowerCase());
             current = current.parentElement;
             if (parts.length >= 5) break;
@@ -1248,14 +1446,28 @@
           if (rawTarget.closest("button, a, input, textarea, [data-page]")) {
             return rawTarget.closest("button, a, input, textarea, [data-page]");
           }
-          if (rawTarget.matches("strong, span, p, h1, h2, h3, li, .input-line, .toggle, .pill")) {
+          if (
+            rawTarget.matches(
+              "strong, span, p, h1, h2, h3, li, .input-line, .toggle, .pill",
+            )
+          ) {
             return rawTarget;
           }
-          return rawTarget.closest(".row-item, .setting-row, .card, .focus-card, .summary-main, .panel-header, .panel, .rail, .topbar, .content") || rawTarget;
+          return (
+            rawTarget.closest(
+              ".row-item, .setting-row, .card, .focus-card, .summary-main, .panel-header, .panel, .rail, .topbar, .content",
+            ) || rawTarget
+          );
         }
 
         function showHoverTarget(target) {
-          if (!annotationMode || !target || target === document.body || target === document.documentElement || isAnnotationUi(target)) {
+          if (
+            !annotationMode ||
+            !target ||
+            target === document.body ||
+            target === document.documentElement ||
+            isAnnotationUi(target)
+          ) {
             annotationOutline.hidden = true;
             annotationHoverLabel.style.display = "none";
             return;
@@ -1272,17 +1484,27 @@
         function openPopoverFor(target, event, existingAnnotation) {
           selectedTarget = target;
           selectedRect = target.getBoundingClientRect();
-          editingAnnotationId = existingAnnotation ? existingAnnotation.id : null;
+          editingAnnotationId = existingAnnotation
+            ? existingAnnotation.id
+            : null;
           updateOutline(selectedRect);
           annotationPopoverTitle.textContent = existingAnnotation
             ? `Edit comment ${existingAnnotation.number}`
             : `Comment ${annotations.length + 1}`;
           annotationTargetMeta.textContent = `${elementLabel(target)} | ${selectorFor(target)}`;
-          annotationComment.value = existingAnnotation ? existingAnnotation.comment : "";
+          annotationComment.value = existingAnnotation
+            ? existingAnnotation.comment
+            : "";
           annotationPopover.classList.add("open");
 
-          const left = Math.min(window.innerWidth - 376, Math.max(16, event.clientX + 12));
-          const top = Math.min(window.innerHeight - 220, Math.max(16, event.clientY + 12));
+          const left = Math.min(
+            window.innerWidth - 376,
+            Math.max(16, event.clientX + 12),
+          );
+          const top = Math.min(
+            window.innerHeight - 220,
+            Math.max(16, event.clientY + 12),
+          );
           annotationPopover.style.left = `${left}px`;
           annotationPopover.style.top = `${top}px`;
           annotationComment.focus();
@@ -1300,13 +1522,18 @@
 
         function markerPosition(rect) {
           return {
-            left: Math.max(4, rect.left + Math.min(rect.width - 8, rect.width / 2) - 12),
+            left: Math.max(
+              4,
+              rect.left + Math.min(rect.width - 8, rect.width / 2) - 12,
+            ),
             top: Math.max(4, rect.top - 12),
           };
         }
 
         function renderMarkers() {
-          document.querySelectorAll(".feedback-marker").forEach((marker) => marker.remove());
+          document
+            .querySelectorAll(".feedback-marker")
+            .forEach((marker) => marker.remove());
           annotations.forEach((annotation) => {
             const marker = document.createElement("button");
             const position = markerPosition(annotation.rect);
@@ -1331,7 +1558,9 @@
           if (!comment || !selectedTarget) return;
 
           if (editingAnnotationId) {
-            const annotation = annotations.find((item) => item.id === editingAnnotationId);
+            const annotation = annotations.find(
+              (item) => item.id === editingAnnotationId,
+            );
             if (annotation) {
               annotation.comment = comment;
             }
@@ -1362,7 +1591,9 @@
           annotations.forEach((annotation, index) => {
             lines.push("");
             lines.push(`## Comment ${index + 1}`);
-            lines.push(`File: browser:${annotation.label || "Selected element"}`);
+            lines.push(
+              `File: browser:${annotation.label || "Selected element"}`,
+            );
             lines.push("Side: R");
             lines.push("Lines: 1");
             lines.push(`Target: "${annotation.label || "Selected element"}"`);
@@ -1381,7 +1612,9 @@
           annotationMode = !annotationMode;
           annotationToggle.classList.toggle("active", annotationMode);
           document.body.classList.toggle("annotating", annotationMode);
-          annotationToggle.textContent = annotationMode ? "Annotating" : "Annotate";
+          annotationToggle.textContent = annotationMode
+            ? "Annotating"
+            : "Annotate";
           if (!annotationMode) {
             annotationOutline.hidden = true;
             annotationHoverLabel.style.display = "none";
@@ -1392,7 +1625,11 @@
 
         annotationVisibility.addEventListener("click", () => {
           document.body.classList.toggle("hide-markers");
-          annotationVisibility.textContent = document.body.classList.contains("hide-markers") ? "Show markers" : "Hide markers";
+          annotationVisibility.textContent = document.body.classList.contains(
+            "hide-markers",
+          )
+            ? "Show markers"
+            : "Hide markers";
         });
 
         annotationCopy.addEventListener("click", () => {
@@ -1428,10 +1665,15 @@
         document.addEventListener(
           "mousemove",
           (event) => {
-            if (!annotationMode || annotationPopover.classList.contains("open") || isAnnotationUi(event.target)) return;
+            if (
+              !annotationMode ||
+              annotationPopover.classList.contains("open") ||
+              isAnnotationUi(event.target)
+            )
+              return;
             showHoverTarget(targetForAnnotation(event.target));
           },
-          true
+          true,
         );
 
         document.addEventListener(
@@ -1439,12 +1681,17 @@
           (event) => {
             if (!annotationMode || isAnnotationUi(event.target)) return;
             const target = targetForAnnotation(event.target);
-            if (!target || target === document.body || target === document.documentElement) return;
+            if (
+              !target ||
+              target === document.body ||
+              target === document.documentElement
+            )
+              return;
             event.preventDefault();
             event.stopPropagation();
             openPopoverFor(target, event);
           },
-          true
+          true,
         );
 
         window.addEventListener("scroll", renderMarkers, true);

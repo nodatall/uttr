@@ -1,31 +1,31 @@
 - main [ref=e2]:
-  - region "Session window mockup" [ref=e3]:
-    - navigation "Primary navigation" [ref=e4]:
-      - generic [ref=e5]: uttr
-      - button "Home" [ref=e6] [cursor=pointer]: Home
-      - button "Files" [ref=e8] [cursor=pointer]: Files
-      - button "History" [ref=e10] [cursor=pointer]: History
-      - button "Settings" [ref=e12] [cursor=pointer]: Settings
-    - generic [ref=e14]:
-      - generic [ref=e15]:
-        - generic [ref=e17]:
-          - heading "Today - Product Call" [level=2] [ref=e18]
-          - generic [ref=e19]: 00:18:42
-        - generic [ref=e20]:
-          - button "Pause session" [ref=e21]: Ⅱ
-          - button "Stop session" [ref=e22]: ■
-      - generic [ref=e24]:
-        - generic [ref=e25]:
-          - heading "Live summary" [level=3] [ref=e27]
-          - generic [ref=e28]:
-            - link "Add context" [ref=e29] [cursor=pointer]:
-              - /url: "#context-modal"
-            - link "View raw transcript" [ref=e30] [cursor=pointer]:
-              - /url: "#transcript-modal"
-        - paragraph [ref=e33]: The team is separating quick dictation from a larger session workspace for meetings, system audio, and files. The default view should help the user understand the meeting without making them stare at raw transcript text.
-  - generic "Feedback toolbar" [ref=e34]:
-    - button "Annotate" [ref=e35]
-    - button "Hide markers" [ref=e36]
-    - button "Copy all" [ref=e37]
-    - button "Clear" [ref=e38]
-    - generic [ref=e39]: "0"
+    - region "Session window mockup" [ref=e3]:
+        - navigation "Primary navigation" [ref=e4]:
+            - generic [ref=e5]: uttr
+            - button "Home" [ref=e6] [cursor=pointer]: Home
+            - button "Files" [ref=e8] [cursor=pointer]: Files
+            - button "History" [ref=e10] [cursor=pointer]: History
+            - button "Settings" [ref=e12] [cursor=pointer]: Settings
+        - generic [ref=e14]:
+            - generic [ref=e15]:
+                - generic [ref=e17]:
+                    - heading "Today - Product Call" [level=2] [ref=e18]
+                    - generic [ref=e19]: 00:18:42
+                - generic [ref=e20]:
+                    - button "Pause session" [ref=e21]: Ⅱ
+                    - button "Stop session" [ref=e22]: ■
+            - generic [ref=e24]:
+                - generic [ref=e25]:
+                    - heading "Live summary" [level=3] [ref=e27]
+                    - generic [ref=e28]:
+                        - link "Add context" [ref=e29] [cursor=pointer]:
+                            - /url: "#context-modal"
+                        - link "View raw transcript" [ref=e30] [cursor=pointer]:
+                            - /url: "#transcript-modal"
+                - paragraph [ref=e33]: The team is separating quick dictation from a larger session workspace for meetings, system audio, and files. The default view should help the user understand the meeting without making them stare at raw transcript text.
+    - generic "Feedback toolbar" [ref=e34]:
+        - button "Annotate" [ref=e35]
+        - button "Hide markers" [ref=e36]
+        - button "Copy all" [ref=e37]
+        - button "Clear" [ref=e38]
+        - generic [ref=e39]: "0"
