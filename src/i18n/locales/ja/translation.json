@@ -199,6 +199,10 @@
             "name": "文字起こしショートカット",
             "description": "音声を録音して文字起こしするためのキーボードショートカット。"
           },
+          "edit_mode": {
+            "name": "Edit Mode Shortcut",
+            "description": "Transforms selected text using a spoken instruction."
+          },
           "cancel": {
             "name": "キャンセルショートカット",
             "description": "現在の録音をキャンセルするためのキーボードショートカット。"
@@ -499,8 +503,8 @@
         "description": "ノートパソコンの蓋を閉じたときに使用するマイク"
       },
       "postProcessingToggle": {
-        "label": "後処理",
-        "description": "文字起こし後のAIによるテキスト改善を有効化"
+        "label": "AI Cleanup",
+        "description": "Use AI for context-aware text refinement after transcription"
       },
       "muteWhileRecording": {
         "label": "録音中にミュート",

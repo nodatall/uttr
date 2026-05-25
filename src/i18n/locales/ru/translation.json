@@ -199,6 +199,10 @@
             "name": "Горячая клавиша транскрипции",
             "description": "Сочетание клавиш для записи и транскрибирования вашего голоса."
           },
+          "edit_mode": {
+            "name": "Edit Mode Shortcut",
+            "description": "Transforms selected text using a spoken instruction."
+          },
           "cancel": {
             "name": "Горячая клавиша отмены",
             "description": "Сочетание клавиш для отмены текущей записи."
@@ -499,8 +503,8 @@
         "description": "Микрофон для использования при закрытой крышке ноутбука"
       },
       "postProcessingToggle": {
-        "label": "Постобработка",
-        "description": "Включить уточнение текста с помощью искусственного интеллекта после транскрипции"
+        "label": "AI Cleanup",
+        "description": "Use AI for context-aware text refinement after transcription"
       },
       "muteWhileRecording": {
         "label": "Отключить звук во время записи",

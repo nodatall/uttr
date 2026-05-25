@@ -2,12 +2,7 @@ import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RefreshCcw } from "lucide-react";
 
-import {
-  SettingContainer,
-  SettingsGroup,
-  Slider,
-  ToggleSwitch,
-} from "@/components/ui";
+import { SettingContainer, SettingsGroup, Slider } from "@/components/ui";
 import { Button } from "../../ui/Button";
 import { ResetButton } from "../../ui/ResetButton";
 
@@ -147,7 +142,6 @@ const PostProcessingSettingsAdvancedComponent: React.FC = () => {
     (getSetting("post_process_system_prompt") as string) ?? "";
   const customVocabularyTerms =
     (getSetting("custom_vocabulary_terms") as string[] | undefined) ?? [];
-  const editModeEnabled = Boolean(getSetting("edit_mode_enabled"));
 
   const [draftSystemPrompt, setDraftSystemPrompt] = useState(systemPrompt);
   const [draftVocabulary, setDraftVocabulary] = useState(
@@ -230,15 +224,6 @@ const PostProcessingSettingsAdvancedComponent: React.FC = () => {
           </div>
         </div>
       </SettingContainer>
-      <ToggleSwitch
-        checked={editModeEnabled}
-        onChange={(checked) => updateSetting("edit_mode_enabled", checked)}
-        isUpdating={isUpdating("edit_mode_enabled")}
-        label="Edit Mode"
-        description="Use the Edit Mode shortcut on selected text, then speak a transform instruction."
-        descriptionMode="tooltip"
-        grouped={true}
-      />
       <SettingContainer
         title="Prompt"
         description="Controls how the LLM rewrites your transcript."

@@ -86,7 +86,7 @@ pub fn is_transcribe_binding(id: &str) -> bool {
 }
 
 pub fn transcribe_binding_push_to_talk(id: &str, push_to_talk: bool) -> bool {
-    push_to_talk && id == "transcribe"
+    push_to_talk && matches!(id, "transcribe" | "edit_mode")
 }
 
 pub fn transcription_session_is_active(
@@ -361,7 +361,8 @@ mod tests {
     #[test]
     fn edit_mode_binding_routes_through_transcribe_coordinator() {
         assert!(is_transcribe_binding("edit_mode"));
-        assert!(!transcribe_binding_push_to_talk("edit_mode", true));
+        assert!(transcribe_binding_push_to_talk("edit_mode", true));
+        assert!(!transcribe_binding_push_to_talk("edit_mode", false));
     }
 
     #[test]

@@ -9,9 +9,6 @@ pub use audio::{
     normalize_transcription_pcm, save_wav_file, trim_proxy_upload_audio, AudioRecorder,
     CpalDeviceInfo, DrainResult, ImportedAudioFile,
 };
-pub use text::{
-    apply_custom_words, filter_transcription_output, normalize_spoken_lists,
-    normalize_spoken_punctuation,
-};
+pub use text::{apply_custom_words, filter_transcription_output};
 pub use utils::get_cpal_host;
 pub use vad::{SileroVad, VoiceActivityDetector};

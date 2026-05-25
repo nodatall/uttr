@@ -25,8 +25,10 @@ const isCloudModel = (modelId: string): boolean =>
 
 export const ModelsSettings: React.FC = () => {
   const { t, i18n } = useTranslation();
-  const { installAccess } = useSettings();
-  const showModelControls = shouldShowModelControls(installAccess);
+  const { installAccess, settings } = useSettings();
+  const showModelControls =
+    shouldShowModelControls(installAccess) ||
+    Boolean(settings?.byok_enabled || settings?.debug_mode);
   const [switchingModelId, setSwitchingModelId] = useState<string | null>(null);
   const [languageFilter, setLanguageFilter] = useState("all");
   const [languageDropdownOpen, setLanguageDropdownOpen] = useState(false);

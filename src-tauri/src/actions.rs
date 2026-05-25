@@ -6,7 +6,6 @@ use crate::app_context::{collect_text_context, AppContextSnapshot};
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use crate::apple_intelligence;
 use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, SoundType};
-use crate::audio_toolkit::{normalize_spoken_lists, normalize_spoken_punctuation};
 use crate::byok_secrets;
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::full_system_audio::{
@@ -136,6 +135,9 @@ static FULL_SYSTEM_LIVE_SESSION: Lazy<Mutex<Option<FullSystemLiveSession>>> =
     Lazy::new(|| Mutex::new(None));
 static ACTIVE_APP_CONTEXT: Lazy<Mutex<HashMap<String, AppContextSnapshot>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
+static ACTIVE_APP_CONTEXT_REQUESTS: Lazy<Mutex<HashMap<String, u64>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+static APP_CONTEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Drop guard that notifies the [`TranscriptionCoordinator`] when the
 /// transcription pipeline finishes — whether it completes normally or panics.
@@ -563,7 +565,30 @@ fn clean_post_process_response(content: &str) -> String {
     strip_wrapping_code_fence(&cleaned)
 }
 
-fn take_active_context(binding_id: &str) -> AppContextSnapshot {
+fn take_active_context(binding_id: &str, wait_for_capture: bool) -> AppContextSnapshot {
+    const CONTEXT_CAPTURE_WAIT_ATTEMPTS: usize = 15;
+    const CONTEXT_CAPTURE_WAIT_STEP: Duration = Duration::from_millis(100);
+
+    if wait_for_capture {
+        for _ in 0..CONTEXT_CAPTURE_WAIT_ATTEMPTS {
+            if ACTIVE_APP_CONTEXT.lock().unwrap().contains_key(binding_id) {
+                break;
+            }
+            if !ACTIVE_APP_CONTEXT_REQUESTS
+                .lock()
+                .unwrap()
+                .contains_key(binding_id)
+            {
+                break;
+            }
+            std::thread::sleep(CONTEXT_CAPTURE_WAIT_STEP);
+        }
+    }
+
+    ACTIVE_APP_CONTEXT_REQUESTS
+        .lock()
+        .unwrap()
+        .remove(binding_id);
     ACTIVE_APP_CONTEXT
         .lock()
         .unwrap()
@@ -571,12 +596,36 @@ fn take_active_context(binding_id: &str) -> AppContextSnapshot {
         .unwrap_or_default()
 }
 
-fn store_active_context(binding_id: &str) {
-    let snapshot = collect_text_context();
-    ACTIVE_APP_CONTEXT
+fn store_active_context_async(binding_id: &str) {
+    let binding_id = binding_id.to_string();
+    let request_id = APP_CONTEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+
+    ACTIVE_APP_CONTEXT.lock().unwrap().remove(&binding_id);
+    ACTIVE_APP_CONTEXT_REQUESTS
         .lock()
         .unwrap()
-        .insert(binding_id.to_string(), snapshot);
+        .insert(binding_id.clone(), request_id);
+
+    std::thread::spawn(move || {
+        let started = Instant::now();
+        let snapshot = collect_text_context();
+        let should_store = ACTIVE_APP_CONTEXT_REQUESTS
+            .lock()
+            .unwrap()
+            .get(&binding_id)
+            .is_some_and(|active_request_id| *active_request_id == request_id);
+        if should_store {
+            ACTIVE_APP_CONTEXT
+                .lock()
+                .unwrap()
+                .insert(binding_id.clone(), snapshot);
+            debug!(
+                "Captured app context for '{}' in {}ms",
+                binding_id,
+                started.elapsed().as_millis()
+            );
+        }
+    });
 }
 
 fn custom_vocabulary_prompt_block(terms: &[String]) -> Option<String> {
@@ -746,15 +795,6 @@ pub async fn finalize_transcription_output(
         post_process_prompt = resolved_post_process_system_prompt(settings, context);
     } else if final_text != transcription {
         post_processed_text = Some(final_text.clone());
-    }
-
-    if post_process {
-        let normalized_punctuation = normalize_spoken_punctuation(&final_text);
-        let normalized_lists = normalize_spoken_lists(&normalized_punctuation);
-        if normalized_lists != final_text {
-            final_text = normalized_lists;
-            post_processed_text = Some(final_text.clone());
-        }
     }
 
     FinalizedTranscriptionOutput {
@@ -1660,7 +1700,10 @@ fn handle_transcription_stop(
         recording_duration.unwrap_or_default().as_millis()
     );
 
-    let context_snapshot = take_active_context(binding_id);
+    let context_snapshot = take_active_context(
+        binding_id,
+        completion_mode == TranscriptionCompletionMode::EditMode,
+    );
     let ah = app.clone();
     let binding_id = binding_id.to_string();
     let task_completed = Arc::new(AtomicBool::new(false));
@@ -2201,7 +2244,12 @@ impl ShortcutAction for TranscribeAction {
             utils::hide_recording_overlay(app);
             return;
         }
-        store_active_context(&binding_id);
+        if self.completion_mode == TranscriptionCompletionMode::EditMode
+            || self.post_process
+            || settings.post_process_enabled
+        {
+            store_active_context_async(&binding_id);
+        }
         let use_incremental = should_use_incremental_transcription(&settings, &tm);
 
         let binding_id = binding_id.to_string();

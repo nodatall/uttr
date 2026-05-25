@@ -21,23 +21,26 @@ export const SettingsWorkspace: React.FC = () => {
   const { settings, installAccess } = useSettings();
   const [activeTab, setActiveTab] = useState<SettingsTab>("general");
   const showModelControls = shouldShowModelControls(installAccess);
+  const showByokSettings = Boolean(
+    settings?.byok_enabled || settings?.debug_mode,
+  );
   const showDebug = settings?.debug_mode ?? false;
 
   const tabs = useMemo<SettingsTabConfig[]>(() => {
     const visibleTabs: SettingsTabConfig[] = [
       { id: "general", label: t("sidebar.general") },
-      {
+    ];
+
+    if (showByokSettings || showModelControls) {
+      visibleTabs.push({
+        id: "models",
+        label: t("sidebar.models"),
+      });
+      visibleTabs.push({
         id: "providers",
         label: t("workspace.settings.providers", {
           defaultValue: "Providers",
         }),
-      },
-    ];
-
-    if (showModelControls) {
-      visibleTabs.splice(1, 0, {
-        id: "models",
-        label: t("sidebar.models"),
       });
     }
 
@@ -46,7 +49,7 @@ export const SettingsWorkspace: React.FC = () => {
     }
 
     return visibleTabs;
-  }, [showDebug, showModelControls, t]);
+  }, [showByokSettings, showDebug, showModelControls, t]);
 
   const effectiveTab = tabs.some((tab) => tab.id === activeTab)
     ? activeTab
@@ -54,24 +57,26 @@ export const SettingsWorkspace: React.FC = () => {
 
   return (
     <div className="mx-auto w-full max-w-4xl space-y-5">
-      <div className="flex justify-end">
-        <div className="flex rounded-full border border-white/8 bg-white/[0.025] p-1">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              onClick={() => setActiveTab(tab.id)}
-              className={`rounded-full px-3 py-1.5 text-sm font-medium transition ${
-                effectiveTab === tab.id
-                  ? "bg-logo-primary/14 text-logo-primary shadow-[inset_0_0_0_1px_rgba(103,215,163,0.18)]"
-                  : "text-text/58 hover:bg-white/[0.04] hover:text-text"
-              }`}
-            >
-              {tab.label}
-            </button>
-          ))}
+      {tabs.length > 1 && (
+        <div className="flex justify-end">
+          <div className="flex rounded-full border border-white/8 bg-white/[0.025] p-1">
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                onClick={() => setActiveTab(tab.id)}
+                className={`rounded-full px-3 py-1.5 text-sm font-medium transition ${
+                  effectiveTab === tab.id
+                    ? "bg-logo-primary/14 text-logo-primary shadow-[inset_0_0_0_1px_rgba(103,215,163,0.18)]"
+                    : "text-text/58 hover:bg-white/[0.04] hover:text-text"
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
         </div>
-      </div>
+      )}
 
       {effectiveTab === "general" && <GeneralSettings />}
       {effectiveTab === "models" && <ModelsSettings />}

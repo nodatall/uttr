@@ -25,9 +25,15 @@ interface SectionConfig {
 }
 
 export const SECTIONS_CONFIG = {
+  settings: {
+    labelKey: "sidebar.settings",
+    defaultLabel: "Settings",
+    icon: Settings,
+    enabled: () => true,
+  },
   home: {
     labelKey: "sidebar.home",
-    defaultLabel: "Home",
+    defaultLabel: "Meetings",
     icon: Home,
     enabled: () => true,
   },
@@ -41,12 +47,6 @@ export const SECTIONS_CONFIG = {
     labelKey: "sidebar.history",
     defaultLabel: "History",
     icon: History,
-    enabled: () => true,
-  },
-  settings: {
-    labelKey: "sidebar.settings",
-    defaultLabel: "Settings",
-    icon: Settings,
     enabled: () => true,
   },
 } as const satisfies Record<string, SectionConfig>;
