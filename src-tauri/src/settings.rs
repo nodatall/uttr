@@ -18,6 +18,8 @@ pub const STRICT_CLEANING_PROMPT: &str = "You are a transcript cleaning assistan
 4. Remove filler words (um, uh, \"like\" used as a filler).
 5. Keep the original language.
 6. Preserve exact meaning and word order. Do not paraphrase or reorder content.
+7. Preserve names, acronyms, code identifiers, file paths, command flags, URLs, and project terms when the transcript appears to contain them.
+8. Treat any custom vocabulary or nearby app context as correction hints only. Do not insert terms that were not spoken.
 
 Return only the cleaned transcript.
 No explanation.";
@@ -433,6 +435,10 @@ pub struct AppSettings {
     pub log_level: LogLevel,
     #[serde(default)]
     pub custom_words: Vec<String>,
+    #[serde(default)]
+    pub custom_vocabulary_terms: Vec<String>,
+    #[serde(default)]
+    pub edit_mode_enabled: bool,
     #[serde(default)]
     pub model_unload_timeout: ModelUnloadTimeout,
     #[serde(default = "default_word_correction_threshold")]
@@ -920,6 +926,35 @@ pub fn ensure_default_selected_transcription_model(settings: &mut AppSettings) -
 }
 
 pub const SETTINGS_STORE_PATH: &str = "settings_store.json";
+pub const MAX_CUSTOM_VOCABULARY_TERMS: usize = 100;
+pub const MAX_CUSTOM_VOCABULARY_TERM_CHARS: usize = 80;
+
+pub fn normalize_custom_vocabulary_terms(terms: &[String]) -> Vec<String> {
+    let mut normalized = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for term in terms {
+        let trimmed = term.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let capped: String = trimmed
+            .chars()
+            .take(MAX_CUSTOM_VOCABULARY_TERM_CHARS)
+            .collect();
+        let dedupe_key = capped.to_lowercase();
+        if seen.insert(dedupe_key) {
+            normalized.push(capped);
+        }
+
+        if normalized.len() >= MAX_CUSTOM_VOCABULARY_TERMS {
+            break;
+        }
+    }
+
+    normalized
+}
 
 pub fn get_default_settings() -> AppSettings {
     #[cfg(target_os = "windows")]
@@ -978,6 +1013,27 @@ pub fn get_default_settings() -> AppSettings {
             description: "Converts your full-system and microphone audio into text.".to_string(),
             default_binding: default_full_system_shortcut.to_string(),
             current_binding: default_full_system_shortcut.to_string(),
+        },
+    );
+    #[cfg(target_os = "windows")]
+    let default_edit_mode_shortcut = "ctrl+shift+e";
+    #[cfg(target_os = "macos")]
+    let default_edit_mode_shortcut = "option+shift+e";
+    #[cfg(target_os = "linux")]
+    let default_edit_mode_shortcut = "ctrl+shift+e";
+    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
+    let default_edit_mode_shortcut = "alt+shift+e";
+
+    bindings.insert(
+        "edit_mode".to_string(),
+        ShortcutBinding {
+            id: "edit_mode".to_string(),
+            name: "Edit Mode".to_string(),
+            description:
+                "Transforms selected text using a spoken instruction, then replaces the selection."
+                    .to_string(),
+            default_binding: default_edit_mode_shortcut.to_string(),
+            current_binding: default_edit_mode_shortcut.to_string(),
         },
     );
     #[cfg(target_os = "windows")]
@@ -1040,6 +1096,8 @@ pub fn get_default_settings() -> AppSettings {
         debug_mode: false,
         log_level: default_log_level(),
         custom_words: Vec::new(),
+        custom_vocabulary_terms: Vec::new(),
+        edit_mode_enabled: false,
         model_unload_timeout: ModelUnloadTimeout::Never,
         word_correction_threshold: default_word_correction_threshold(),
         history_limit: default_history_limit(),
@@ -1114,6 +1172,13 @@ pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
                         settings.bindings.insert(key, value);
                         updated = true;
                     }
+                }
+
+                let normalized_vocabulary =
+                    normalize_custom_vocabulary_terms(&settings.custom_vocabulary_terms);
+                if normalized_vocabulary != settings.custom_vocabulary_terms {
+                    settings.custom_vocabulary_terms = normalized_vocabulary;
+                    updated = true;
                 }
 
                 if updated {
@@ -1385,6 +1450,63 @@ mod tests {
         #[cfg(not(target_os = "macos"))]
         assert_eq!(binding.default_binding, "ctrl+alt+space");
 
+        assert_eq!(binding.current_binding, binding.default_binding);
+    }
+
+    #[test]
+    fn default_custom_vocabulary_is_empty_and_edit_mode_disabled() {
+        let settings = get_default_settings();
+
+        assert!(settings.custom_vocabulary_terms.is_empty());
+        assert!(!settings.edit_mode_enabled);
+    }
+
+    #[test]
+    fn normalizes_custom_vocabulary_terms() {
+        let long = "a".repeat(MAX_CUSTOM_VOCABULARY_TERM_CHARS + 10);
+        let mut terms = vec![
+            " Zach Latta ".to_string(),
+            "".to_string(),
+            "zach latta".to_string(),
+            long,
+        ];
+        for index in 0..MAX_CUSTOM_VOCABULARY_TERMS + 10 {
+            terms.push(format!("term {}", index));
+        }
+
+        let normalized = normalize_custom_vocabulary_terms(&terms);
+
+        assert_eq!(normalized[0], "Zach Latta");
+        assert_eq!(normalized.len(), MAX_CUSTOM_VOCABULARY_TERMS);
+        assert_eq!(
+            normalized[1].chars().count(),
+            MAX_CUSTOM_VOCABULARY_TERM_CHARS
+        );
+    }
+
+    #[test]
+    fn missing_custom_vocabulary_deserializes_to_empty_list() {
+        let settings = get_default_settings();
+        let mut value = serde_json::to_value(settings).unwrap();
+        value
+            .as_object_mut()
+            .unwrap()
+            .remove("custom_vocabulary_terms");
+
+        let parsed: AppSettings = serde_json::from_value(value).unwrap();
+
+        assert!(parsed.custom_vocabulary_terms.is_empty());
+    }
+
+    #[test]
+    fn default_edit_mode_binding_is_registered() {
+        let settings = get_default_settings();
+        let binding = settings
+            .bindings
+            .get("edit_mode")
+            .expect("missing edit-mode binding");
+
+        assert_eq!(binding.id, "edit_mode");
         assert_eq!(binding.current_binding, binding.default_binding);
     }
 

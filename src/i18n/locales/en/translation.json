@@ -179,6 +179,10 @@
             "name": "Full-System Recording Shortcut",
             "description": "A dedicated toggle shortcut that starts and stops system audio plus microphone capture."
           },
+          "edit_mode": {
+            "name": "Edit Mode Shortcut",
+            "description": "Transforms selected text using a spoken instruction."
+          },
           "cancel": {
             "name": "Cancel Shortcut",
             "description": "The keyboard shortcut to cancel the current recording."

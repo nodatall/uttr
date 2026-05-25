@@ -82,7 +82,7 @@ pub struct TranscriptionCoordinator {
 }
 
 pub fn is_transcribe_binding(id: &str) -> bool {
-    id == "transcribe" || id == "transcribe_full_system_audio"
+    id == "transcribe" || id == "transcribe_full_system_audio" || id == "edit_mode"
 }
 
 pub fn transcribe_binding_push_to_talk(id: &str, push_to_talk: bool) -> bool {
@@ -356,6 +356,12 @@ mod tests {
     #[test]
     fn full_system_binding_routes_through_transcribe_coordinator() {
         assert!(is_transcribe_binding("transcribe_full_system_audio"));
+    }
+
+    #[test]
+    fn edit_mode_binding_routes_through_transcribe_coordinator() {
+        assert!(is_transcribe_binding("edit_mode"));
+        assert!(!transcribe_binding_push_to_talk("edit_mode", true));
     }
 
     #[test]

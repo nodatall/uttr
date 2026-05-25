@@ -2,7 +2,12 @@ import React, { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RefreshCcw } from "lucide-react";
 
-import { SettingContainer, SettingsGroup, Slider } from "@/components/ui";
+import {
+  SettingContainer,
+  SettingsGroup,
+  Slider,
+  ToggleSwitch,
+} from "@/components/ui";
 import { Button } from "../../ui/Button";
 import { ResetButton } from "../../ui/ResetButton";
 
@@ -76,6 +81,31 @@ const PRESET_OPTIONS: {
   { value: "custom", label: "Custom", hint: "" },
 ];
 
+const MAX_CUSTOM_VOCABULARY_TERMS = 100;
+const MAX_CUSTOM_VOCABULARY_TERM_CHARS = 80;
+
+const normalizeCustomVocabularyText = (value: string): string => {
+  const seen = new Set<string>();
+  const terms: string[] = [];
+
+  for (const line of value.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    const capped = Array.from(trimmed)
+      .slice(0, MAX_CUSTOM_VOCABULARY_TERM_CHARS)
+      .join("");
+    const key = capped.toLocaleLowerCase();
+    if (seen.has(key)) continue;
+
+    seen.add(key);
+    terms.push(capped);
+    if (terms.length >= MAX_CUSTOM_VOCABULARY_TERMS) break;
+  }
+
+  return terms.join("\n");
+};
+
 // Matches STRICT_CLEANING_PROMPT in settings.rs — used as the default starting point for Custom
 const STRICT_PROMPT_DEFAULT = `You are a transcript cleaning assistant. Clean the transcript in the user message following these rules:
 1. Fix spelling, capitalisation, and punctuation errors.
@@ -84,6 +114,8 @@ const STRICT_PROMPT_DEFAULT = `You are a transcript cleaning assistant. Clean th
 4. Remove filler words (um, uh, "like" used as a filler).
 5. Keep the original language.
 6. Preserve exact meaning and word order. Do not paraphrase or reorder content.
+7. Preserve names, acronyms, code identifiers, file paths, command flags, URLs, and project terms when the transcript appears to contain them.
+8. Treat any custom vocabulary or nearby app context as correction hints only. Do not insert terms that were not spoken.
 
 Return only the cleaned transcript.
 No explanation.`;
@@ -113,9 +145,18 @@ const PostProcessingSettingsAdvancedComponent: React.FC = () => {
     ) as CleaningPromptPreset) ?? "strict";
   const systemPrompt =
     (getSetting("post_process_system_prompt") as string) ?? "";
+  const customVocabularyTerms =
+    (getSetting("custom_vocabulary_terms") as string[] | undefined) ?? [];
+  const editModeEnabled = Boolean(getSetting("edit_mode_enabled"));
 
   const [draftSystemPrompt, setDraftSystemPrompt] = useState(systemPrompt);
+  const [draftVocabulary, setDraftVocabulary] = useState(
+    customVocabularyTerms.join("\n"),
+  );
   const isSystemPromptDirty = draftSystemPrompt !== systemPrompt;
+  const normalizedVocabulary = normalizeCustomVocabularyText(draftVocabulary);
+  const savedVocabulary = customVocabularyTerms.join("\n");
+  const isVocabularyDirty = normalizedVocabulary !== savedVocabulary;
   const displayedPrompt =
     preset === "strict"
       ? STRICT_PROMPT_DEFAULT
@@ -128,6 +169,10 @@ const PostProcessingSettingsAdvancedComponent: React.FC = () => {
     setDraftSystemPrompt(systemPrompt);
   }, [systemPrompt]);
 
+  useEffect(() => {
+    setDraftVocabulary(customVocabularyTerms.join("\n"));
+  }, [savedVocabulary]);
+
   const handlePresetSelect = (value: CleaningPromptPreset) => {
     if (value === "custom" && !systemPrompt.trim()) {
       setDraftSystemPrompt(STRICT_PROMPT_DEFAULT);
@@ -137,6 +182,63 @@ const PostProcessingSettingsAdvancedComponent: React.FC = () => {
 
   return (
     <>
+      <SettingContainer
+        title="Custom Vocabulary"
+        description="One term per line. Cleanup uses these exact spellings only when relevant."
+        descriptionMode="tooltip"
+        layout="stacked"
+        grouped={true}
+      >
+        <div className="space-y-2">
+          <textarea
+            value={draftVocabulary}
+            onChange={(e) => setDraftVocabulary(e.target.value)}
+            rows={6}
+            placeholder={"Zach Latta\nPrime Directive\nFreeFlow"}
+            className="w-full rounded-md border border-mid-gray/30 bg-white/5 px-3 py-2 text-sm text-text resize-y min-h-[132px] focus:outline-none focus:ring-1 focus:ring-logo-primary/50 focus:border-logo-primary/50"
+          />
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-xs text-mid-gray/70">
+              {customVocabularyTerms.length}/{MAX_CUSTOM_VOCABULARY_TERMS} terms
+            </p>
+            {isVocabularyDirty && (
+              <div className="flex gap-2">
+                <Button
+                  onClick={() =>
+                    updateSetting(
+                      "custom_vocabulary_terms",
+                      normalizedVocabulary
+                        ? normalizedVocabulary.split("\n")
+                        : [],
+                    )
+                  }
+                  variant="primary"
+                  size="md"
+                  disabled={isUpdating("custom_vocabulary_terms")}
+                >
+                  Save
+                </Button>
+                <Button
+                  onClick={() => setDraftVocabulary(savedVocabulary)}
+                  variant="secondary"
+                  size="md"
+                >
+                  Cancel
+                </Button>
+              </div>
+            )}
+          </div>
+        </div>
+      </SettingContainer>
+      <ToggleSwitch
+        checked={editModeEnabled}
+        onChange={(checked) => updateSetting("edit_mode_enabled", checked)}
+        isUpdating={isUpdating("edit_mode_enabled")}
+        label="Edit Mode"
+        description="Use the Edit Mode shortcut on selected text, then speak a transform instruction."
+        descriptionMode="tooltip"
+        grouped={true}
+      />
       <SettingContainer
         title="Prompt"
         description="Controls how the LLM rewrites your transcript."

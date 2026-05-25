@@ -203,7 +203,14 @@ fn stop_codex_app_server(child: &mut Child) {
     let _ = child.wait();
 }
 
-fn run_codex_app_summary(prompt: String, system_prompt: String) -> Result<String, String> {
+fn run_codex_app_text_task(
+    prompt: String,
+    system_prompt: String,
+    developer_instructions: &'static str,
+    service_name: &'static str,
+    empty_error: &'static str,
+    failure_label: &'static str,
+) -> Result<String, String> {
     let started = Instant::now();
     let mut child = spawn_codex_app_server()?;
 
@@ -309,8 +316,8 @@ fn run_codex_app_summary(prompt: String, system_prompt: String) -> Result<String
                             "sandbox": "read-only",
                             "ephemeral": true,
                             "baseInstructions": system_prompt,
-                            "developerInstructions": "Do not use tools. Return only the requested live session summary.",
-                            "serviceName": "uttr-summary",
+                            "developerInstructions": developer_instructions,
+                            "serviceName": service_name,
                             "model": model,
                             "config": {
                                 "mcp_servers": {},
@@ -399,26 +406,50 @@ fn run_codex_app_summary(prompt: String, system_prompt: String) -> Result<String
             let status = turn.get("status").and_then(Value::as_str).unwrap_or("");
             stop_codex_app_server(&mut child);
             if status == "completed" {
-                let summary = agent_text.trim();
-                if summary.is_empty() {
-                    return Err("Codex returned an empty summary.".to_string());
+                let output = agent_text.trim();
+                if output.is_empty() {
+                    return Err(empty_error.to_string());
                 }
                 debug!(
-                    "Codex app-server summary completed in {}ms for thread {:?}",
+                    "Codex app-server {} completed in {}ms for thread {:?}",
+                    service_name,
                     started.elapsed().as_millis(),
                     thread_id
                 );
-                return Ok(summary.to_string());
+                return Ok(output.to_string());
             }
 
             return Err(format!(
-                "Codex summary failed: {}",
+                "{} failed: {}",
+                failure_label,
                 turn.get("error")
                     .map(Value::to_string)
                     .unwrap_or_else(|| "unknown error".to_string())
             ));
         }
     }
+}
+
+fn run_codex_app_summary(prompt: String, system_prompt: String) -> Result<String, String> {
+    run_codex_app_text_task(
+        prompt,
+        system_prompt,
+        "Do not use tools. Return only the requested live session summary.",
+        "uttr-summary",
+        "Codex returned an empty summary.",
+        "Codex summary",
+    )
+}
+
+fn run_codex_app_transform(prompt: String, system_prompt: String) -> Result<String, String> {
+    run_codex_app_text_task(
+        prompt,
+        system_prompt,
+        "Do not use tools. Return only the replacement text. Do not explain.",
+        "uttr-edit-mode",
+        "Codex returned an empty edit.",
+        "Codex edit transform",
+    )
 }
 
 pub async fn summarize_with_codex_app(
@@ -428,6 +459,15 @@ pub async fn summarize_with_codex_app(
     tokio::task::spawn_blocking(move || run_codex_app_summary(prompt, system_prompt))
         .await
         .map_err(|error| format!("Codex summary task failed: {}", error))?
+}
+
+pub async fn transform_with_codex_app(
+    prompt: String,
+    system_prompt: String,
+) -> Result<String, String> {
+    tokio::task::spawn_blocking(move || run_codex_app_transform(prompt, system_prompt))
+        .await
+        .map_err(|error| format!("Codex edit transform task failed: {}", error))?
 }
 
 pub async fn summarize_with_provider(

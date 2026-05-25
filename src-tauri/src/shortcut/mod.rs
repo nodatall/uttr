@@ -24,9 +24,9 @@ use crate::managers::audio::AudioRecordingManager;
 use crate::managers::full_system_audio::FullSystemAudioSessionManager;
 use crate::managers::model::{GROQ_MODEL_WHISPER_LARGE_V3, OPENAI_MODEL_GPT_4O_TRANSCRIBE};
 use crate::settings::{
-    self, get_settings, AutoSubmitKey, ByokValidationState, ClipboardHandling,
-    KeyboardImplementation, OverlayPosition, PasteMethod, ShortcutBinding, SoundTheme, TypingTool,
-    APPLE_INTELLIGENCE_DEFAULT_MODEL_ID, APPLE_INTELLIGENCE_PROVIDER_ID,
+    self, get_settings, normalize_custom_vocabulary_terms, AutoSubmitKey, ByokValidationState,
+    ClipboardHandling, KeyboardImplementation, OverlayPosition, PasteMethod, ShortcutBinding,
+    SoundTheme, TypingTool, APPLE_INTELLIGENCE_DEFAULT_MODEL_ID, APPLE_INTELLIGENCE_PROVIDER_ID,
 };
 use crate::transcription_coordinator::transcription_session_is_active;
 use crate::tray;
@@ -739,6 +739,28 @@ pub fn change_update_checks_setting(app: AppHandle, enabled: bool) -> Result<(),
 pub fn update_custom_words(app: AppHandle, words: Vec<String>) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
     settings.custom_words = words;
+    settings::write_settings(&app, settings);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn update_custom_vocabulary_terms(
+    app: AppHandle,
+    terms: Vec<String>,
+) -> Result<Vec<String>, String> {
+    let normalized = normalize_custom_vocabulary_terms(&terms);
+    let mut settings = settings::get_settings(&app);
+    settings.custom_vocabulary_terms = normalized.clone();
+    settings::write_settings(&app, settings);
+    Ok(normalized)
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn change_edit_mode_enabled_setting(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let mut settings = settings::get_settings(&app);
+    settings.edit_mode_enabled = enabled;
     settings::write_settings(&app, settings);
     Ok(())
 }

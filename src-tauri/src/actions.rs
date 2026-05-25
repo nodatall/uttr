@@ -2,6 +2,7 @@ use crate::access::{
     bootstrap_install_state, get_install_access_snapshot, install_access_allows_premium_features,
     install_access_allows_transcription, premium_feature_access_message, refresh_entitlement_state,
 };
+use crate::app_context::{collect_text_context, AppContextSnapshot};
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use crate::apple_intelligence;
 use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, SoundType};
@@ -15,8 +16,9 @@ use crate::managers::history::HistoryManager;
 use crate::managers::model::is_cloud_model_id;
 use crate::managers::transcription::TranscriptionManager;
 use crate::settings::{
-    get_settings, write_settings, AppSettings, CleaningPromptPreset, PostProcessProvider,
-    APPLE_INTELLIGENCE_PROVIDER_ID, NUANCED_CLEANING_PROMPT, STRICT_CLEANING_PROMPT,
+    get_settings, normalize_custom_vocabulary_terms, write_settings, AppSettings,
+    CleaningPromptPreset, PostProcessProvider, APPLE_INTELLIGENCE_PROVIDER_ID,
+    NUANCED_CLEANING_PROMPT, STRICT_CLEANING_PROMPT,
 };
 use crate::shortcut;
 use crate::summary_client;
@@ -62,6 +64,7 @@ enum DeferredOverlayState {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TranscriptionCompletionMode {
     Standard,
+    EditMode,
     FullSystemOverlay,
 }
 
@@ -131,6 +134,8 @@ struct FullSystemLiveFinal {
 
 static FULL_SYSTEM_LIVE_SESSION: Lazy<Mutex<Option<FullSystemLiveSession>>> =
     Lazy::new(|| Mutex::new(None));
+static ACTIVE_APP_CONTEXT: Lazy<Mutex<HashMap<String, AppContextSnapshot>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 /// Drop guard that notifies the [`TranscriptionCoordinator`] when the
 /// transcription pipeline finishes — whether it completes normally or panics.
@@ -186,6 +191,7 @@ pub trait ShortcutAction: Send + Sync {
 // Transcribe Action
 struct TranscribeAction {
     post_process: bool,
+    completion_mode: TranscriptionCompletionMode,
 }
 
 struct FullSystemTranscribeAction {
@@ -326,6 +332,7 @@ async fn post_process_transcription(
     app_handle: &AppHandle,
     settings: &AppSettings,
     transcription: &str,
+    context: Option<&AppContextSnapshot>,
 ) -> Option<String> {
     let provider = match settings.active_post_process_provider().cloned() {
         Some(provider) => provider,
@@ -402,18 +409,8 @@ async fn post_process_transcription(
         }
     }
 
-    // Resolve system prompt from the selected preset
-    let resolved_system_prompt = match settings.post_process_cleaning_prompt_preset {
-        CleaningPromptPreset::Strict => Some(STRICT_CLEANING_PROMPT),
-        CleaningPromptPreset::Nuanced => Some(NUANCED_CLEANING_PROMPT),
-        CleaningPromptPreset::Custom => {
-            if settings.post_process_system_prompt.trim().is_empty() {
-                None
-            } else {
-                Some(settings.post_process_system_prompt.as_str())
-            }
-        }
-    };
+    let resolved_system_prompt = resolved_post_process_system_prompt(settings, context);
+    let resolved_system_prompt = resolved_system_prompt.as_deref();
 
     // Send the chat completion request
     match crate::llm_client::send_chat_completion(
@@ -566,6 +563,99 @@ fn clean_post_process_response(content: &str) -> String {
     strip_wrapping_code_fence(&cleaned)
 }
 
+fn take_active_context(binding_id: &str) -> AppContextSnapshot {
+    ACTIVE_APP_CONTEXT
+        .lock()
+        .unwrap()
+        .remove(binding_id)
+        .unwrap_or_default()
+}
+
+fn store_active_context(binding_id: &str) {
+    let snapshot = collect_text_context();
+    ACTIVE_APP_CONTEXT
+        .lock()
+        .unwrap()
+        .insert(binding_id.to_string(), snapshot);
+}
+
+fn custom_vocabulary_prompt_block(terms: &[String]) -> Option<String> {
+    let terms = normalize_custom_vocabulary_terms(terms);
+    if terms.is_empty() {
+        return None;
+    }
+
+    let mut block = String::from(
+        "Custom vocabulary:\nTreat these as high-priority spelling references. Use these exact spellings when relevant, but do not insert terms that were not spoken.",
+    );
+    for term in terms {
+        block.push_str("\n- ");
+        block.push_str(&term);
+    }
+    Some(block)
+}
+
+fn app_context_prompt_block(context: &AppContextSnapshot) -> Option<String> {
+    if !context.has_context() {
+        return None;
+    }
+
+    let mut lines = vec![
+        "Nearby app context:".to_string(),
+        "Use this only as a spelling and formatting hint. Do not insert facts, commands, names, or selected text unless they are present in the transcript."
+            .to_string(),
+    ];
+    if let Some(app_name) = context.app_name.as_deref() {
+        lines.push(format!("- App: {}", app_name));
+    }
+    if let Some(bundle_id) = context.bundle_id.as_deref() {
+        lines.push(format!("- Bundle ID: {}", bundle_id));
+    }
+    if let Some(window_title) = context.window_title.as_deref() {
+        lines.push(format!("- Window title: {}", window_title));
+    }
+    if let Some(selected_text) = context.selected_text.as_deref() {
+        let selected_text: String = selected_text.chars().take(1_000).collect();
+        lines.push(format!("- Selected text excerpt: {}", selected_text));
+    }
+
+    Some(lines.join("\n"))
+}
+
+fn resolved_post_process_system_prompt(
+    settings: &AppSettings,
+    context: Option<&AppContextSnapshot>,
+) -> Option<String> {
+    let base = match settings.post_process_cleaning_prompt_preset {
+        CleaningPromptPreset::Strict => Some(STRICT_CLEANING_PROMPT.to_string()),
+        CleaningPromptPreset::Nuanced => Some(NUANCED_CLEANING_PROMPT.to_string()),
+        CleaningPromptPreset::Custom => {
+            if settings.post_process_system_prompt.trim().is_empty() {
+                None
+            } else {
+                Some(settings.post_process_system_prompt.clone())
+            }
+        }
+    };
+
+    let mut sections = Vec::new();
+    if let Some(base) = base {
+        sections.push(base);
+    }
+    if let Some(block) = custom_vocabulary_prompt_block(&settings.custom_vocabulary_terms) {
+        sections.push(block);
+    }
+    if let Some(block) = context.and_then(app_context_prompt_block) {
+        sections.push(block);
+    }
+
+    if sections.is_empty() {
+        None
+    } else {
+        Some(sections.join("\n\n"))
+    }
+}
+
 async fn maybe_convert_chinese_variant(
     settings: &AppSettings,
     transcription: &str,
@@ -615,6 +705,7 @@ pub async fn finalize_transcription_output(
     settings: &AppSettings,
     transcription: &str,
     post_process: bool,
+    context: Option<&AppContextSnapshot>,
 ) -> FinalizedTranscriptionOutput {
     let mut final_text = transcription.to_string();
     let mut post_processed_text: Option<String> = None;
@@ -632,7 +723,7 @@ pub async fn finalize_transcription_output(
     let processed = if post_process {
         match timeout(
             post_process_timeout,
-            post_process_transcription(app_handle, settings, &final_text),
+            post_process_transcription(app_handle, settings, &final_text, context),
         )
         .await
         {
@@ -652,11 +743,7 @@ pub async fn finalize_transcription_output(
     if let Some(processed_text) = processed.and_then(usable_post_processed_text) {
         post_processed_text = Some(processed_text.clone());
         final_text = processed_text;
-        post_process_prompt = Some(match settings.post_process_cleaning_prompt_preset {
-            CleaningPromptPreset::Strict => STRICT_CLEANING_PROMPT.to_string(),
-            CleaningPromptPreset::Nuanced => NUANCED_CLEANING_PROMPT.to_string(),
-            CleaningPromptPreset::Custom => settings.post_process_system_prompt.clone(),
-        });
+        post_process_prompt = resolved_post_process_system_prompt(settings, context);
     } else if final_text != transcription {
         post_processed_text = Some(final_text.clone());
     }
@@ -1151,6 +1238,113 @@ async fn summarize_live_session(
     })
 }
 
+const EDIT_MODE_SYSTEM_PROMPT: &str = "You transform selected text using a spoken instruction. Return only the replacement text. Preserve the user's meaning unless the instruction explicitly asks for a change. Do not explain, quote, wrap in markdown, or include labels.";
+
+fn build_edit_mode_prompt(
+    selected_text: &str,
+    spoken_instruction: &str,
+    context: &AppContextSnapshot,
+    custom_vocabulary_terms: &[String],
+) -> String {
+    let mut prompt = format!(
+        "# Task\nTransform the selected text according to the spoken instruction. Return only the replacement text inside <uttr_edit_output>...</uttr_edit_output>.\n\n# Spoken instruction\n{}\n\n# Selected text\n{}",
+        spoken_instruction.trim(),
+        selected_text
+    );
+
+    if let Some(block) = app_context_prompt_block(context) {
+        prompt.push_str("\n\n# Context\n");
+        prompt.push_str(&block);
+    }
+    if let Some(block) = custom_vocabulary_prompt_block(custom_vocabulary_terms) {
+        prompt.push_str("\n\n# Custom vocabulary\n");
+        prompt.push_str(&block);
+    }
+
+    prompt.push_str("\n\n# Output format\n<uttr_edit_output>\n...\n</uttr_edit_output>");
+    prompt
+}
+
+fn clean_edit_mode_response(content: &str) -> String {
+    if let Some(output) = extract_tagged_output(content, "uttr_edit_output") {
+        return strip_wrapping_code_fence(&trim_chat_stop_tokens(&output));
+    }
+
+    clean_post_process_response(content)
+}
+
+async fn transform_edit_mode_text(
+    app_handle: &AppHandle,
+    settings: &AppSettings,
+    selected_text: &str,
+    spoken_instruction: &str,
+    context: &AppContextSnapshot,
+) -> Result<(String, String), String> {
+    let prompt = build_edit_mode_prompt(
+        selected_text,
+        spoken_instruction,
+        context,
+        &settings.custom_vocabulary_terms,
+    );
+
+    match summary_client::transform_with_codex_app(
+        prompt.clone(),
+        EDIT_MODE_SYSTEM_PROMPT.to_string(),
+    )
+    .await
+    {
+        Ok(output) => {
+            let output = clean_edit_mode_response(&output);
+            if output.trim().is_empty() {
+                return Err("Codex returned an empty edit.".to_string());
+            }
+            return Ok((output, "Edit Mode via Codex app-server".to_string()));
+        }
+        Err(error) => summary_client::summarize_codex_unavailable(&error),
+    }
+
+    let provider = settings
+        .active_post_process_provider()
+        .cloned()
+        .ok_or_else(|| "Edit Mode fallback needs a post-processing provider.".to_string())?;
+
+    let api_key =
+        match crate::byok_secrets::load_provider_api_key(app_handle, settings, &provider.id) {
+            Ok(Some(key)) => key,
+            Ok(None) => String::new(),
+            Err(error) => {
+                warn!(
+                    "Failed to load API key for edit provider '{}': {}",
+                    provider.id, error
+                );
+                String::new()
+            }
+        };
+
+    let model = resolve_post_process_model(&provider, settings, &api_key)
+        .await
+        .ok_or_else(|| {
+            "Edit Mode fallback could not resolve a post-processing model.".to_string()
+        })?;
+
+    crate::llm_client::send_chat_completion(
+        &provider,
+        api_key,
+        &model,
+        prompt,
+        Some(EDIT_MODE_SYSTEM_PROMPT),
+    )
+    .await?
+    .map(|content| {
+        (
+            clean_edit_mode_response(&content),
+            format!("Edit Mode via {}", provider.label),
+        )
+    })
+    .filter(|(output, _)| !output.trim().is_empty())
+    .ok_or_else(|| "Edit Mode fallback returned an empty edit.".to_string())
+}
+
 fn friendly_live_summary_error(error: &str) -> String {
     let lower = error.to_ascii_lowercase();
 
@@ -1466,6 +1660,7 @@ fn handle_transcription_stop(
         recording_duration.unwrap_or_default().as_millis()
     );
 
+    let context_snapshot = take_active_context(binding_id);
     let ah = app.clone();
     let binding_id = binding_id.to_string();
     let task_completed = Arc::new(AtomicBool::new(false));
@@ -1668,6 +1863,106 @@ fn handle_transcription_stop(
                 );
                 if !transcription.is_empty() {
                     let settings = get_settings(&ah);
+                    if completion_mode == TranscriptionCompletionMode::EditMode {
+                        let Some(selected_text) = context_snapshot
+                            .selected_text
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|text| !text.is_empty())
+                        else {
+                            let message =
+                                "Edit Mode needs selected text before you start recording.";
+                            warn!("{}", message);
+                            let _ = ah.emit("transcription-error", message.to_string());
+                            utils::hide_recording_overlay(&ah);
+                            change_tray_icon(&ah, TrayIconState::Idle);
+                            return;
+                        };
+
+                        spawn_deferred_overlay_state(&ah, DeferredOverlayState::Processing);
+                        match transform_edit_mode_text(
+                            &ah,
+                            &settings,
+                            selected_text,
+                            &transcription,
+                            &context_snapshot,
+                        )
+                        .await
+                        {
+                            Ok((replacement_text, prompt_label)) => {
+                                let hm_clone = Arc::clone(&hm);
+                                let ah_for_history = ah.clone();
+                                let transcription_for_history = transcription.clone();
+                                let replacement_for_history = replacement_text.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    if let Err(e) = hm_clone
+                                        .save_transcription(
+                                            samples_clone,
+                                            transcription_for_history,
+                                            Some(replacement_for_history),
+                                            Some(prompt_label),
+                                            "dictation",
+                                        )
+                                        .await
+                                    {
+                                        error!("Failed to save edit-mode transcription: {}", e);
+                                        let _ = ah_for_history.emit(
+                                            "transcription-error",
+                                            format!(
+                                                "Edit Mode succeeded, but saving history failed: {}",
+                                                e
+                                            ),
+                                        );
+                                    }
+                                });
+
+                                let ah_clone = ah.clone();
+                                let paste_time = Instant::now();
+                                ah.run_on_main_thread(move || {
+                                    let text_for_paste = replacement_text.clone();
+                                    match utils::paste(text_for_paste.clone(), ah_clone.clone()) {
+                                        Ok(()) => debug!(
+                                            "Edit Mode replacement pasted successfully in {:?}",
+                                            paste_time.elapsed()
+                                        ),
+                                        Err(e) => {
+                                            error!("Failed to paste Edit Mode replacement: {}", e);
+                                            let _ = ah_clone.emit(
+                                                "transcription-error",
+                                                format!(
+                                                    "Edit Mode succeeded, but paste failed: {}",
+                                                    e
+                                                ),
+                                            );
+                                            if let Err(copy_err) =
+                                                ah_clone.clipboard().write_text(&text_for_paste)
+                                            {
+                                                error!(
+                                                    "Failed to copy Edit Mode replacement after paste error: {}",
+                                                    copy_err
+                                                );
+                                            }
+                                        }
+                                    }
+                                    utils::hide_recording_overlay(&ah_clone);
+                                    change_tray_icon(&ah_clone, TrayIconState::Idle);
+                                })
+                                .unwrap_or_else(|e| {
+                                    error!("Failed to run Edit Mode paste on main thread: {:?}", e);
+                                    utils::hide_recording_overlay(&ah);
+                                    change_tray_icon(&ah, TrayIconState::Idle);
+                                });
+                            }
+                            Err(error) => {
+                                error!("Edit Mode transform failed: {}", error);
+                                let _ = ah.emit("transcription-error", error);
+                                utils::hide_recording_overlay(&ah);
+                                change_tray_icon(&ah, TrayIconState::Idle);
+                            }
+                        }
+                        return;
+                    }
+
                     if post_process {
                         if completion_mode == TranscriptionCompletionMode::FullSystemOverlay {
                             emit_session_window_state(
@@ -1683,9 +1978,14 @@ fn handle_transcription_stop(
                             spawn_deferred_overlay_state(&ah, DeferredOverlayState::Processing);
                         }
                     }
-                    let finalized =
-                        finalize_transcription_output(&ah, &settings, &transcription, post_process)
-                            .await;
+                    let finalized = finalize_transcription_output(
+                        &ah,
+                        &settings,
+                        &transcription,
+                        post_process,
+                        Some(&context_snapshot),
+                    )
+                    .await;
                     let final_text = finalized.final_text;
                     let post_processed_text = finalized.post_processed_text;
                     let post_process_prompt = finalized.post_process_prompt;
@@ -1891,6 +2191,17 @@ impl ShortcutAction for TranscribeAction {
         let tm = app.state::<Arc<TranscriptionManager>>();
         tm.clear_cancel_request();
         let settings = get_settings(app);
+        if self.completion_mode == TranscriptionCompletionMode::EditMode
+            && !settings.edit_mode_enabled
+        {
+            let message = "Edit Mode is disabled in settings.";
+            warn!("{}", message);
+            let _ = app.emit("transcription-error", message.to_string());
+            change_tray_icon(app, TrayIconState::Idle);
+            utils::hide_recording_overlay(app);
+            return;
+        }
+        store_active_context(&binding_id);
         let use_incremental = should_use_incremental_transcription(&settings, &tm);
 
         let binding_id = binding_id.to_string();
@@ -2057,7 +2368,7 @@ impl ShortcutAction for TranscribeAction {
             recording_duration,
             post_process,
             use_incremental,
-            TranscriptionCompletionMode::Standard,
+            self.completion_mode,
             tm,
             hm,
         );
@@ -2437,6 +2748,7 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
         "transcribe".to_string(),
         Arc::new(TranscribeAction {
             post_process: false,
+            completion_mode: TranscriptionCompletionMode::Standard,
         }) as Arc<dyn ShortcutAction>,
     );
     map.insert(
@@ -2447,6 +2759,13 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
         "transcribe_full_system_audio".to_string(),
         Arc::new(FullSystemTranscribeAction {
             post_process: false,
+        }) as Arc<dyn ShortcutAction>,
+    );
+    map.insert(
+        "edit_mode".to_string(),
+        Arc::new(TranscribeAction {
+            post_process: false,
+            completion_mode: TranscriptionCompletionMode::EditMode,
         }) as Arc<dyn ShortcutAction>,
     );
     map.insert(
@@ -2467,13 +2786,16 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
-        clean_post_process_response, friendly_live_summary_error, is_effectively_silent_audio,
-        is_supported_post_process_model, select_preferred_groq_model, should_pause_live_summaries,
+        build_edit_mode_prompt, clean_edit_mode_response, clean_post_process_response,
+        custom_vocabulary_prompt_block, friendly_live_summary_error, is_effectively_silent_audio,
+        is_supported_post_process_model, resolved_post_process_system_prompt,
+        select_preferred_groq_model, should_pause_live_summaries,
         should_refresh_microphone_stream_after_suspected_no_input, toggle_post_process_enabled,
         transcription_timeout_for_samples, transcription_watchdog_delay,
         usable_post_processed_text, TranscriptionCompletionMode, ACTION_MAP,
         FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT,
     };
+    use crate::app_context::AppContextSnapshot;
     use crate::settings::get_default_settings;
 
     #[test]
@@ -2489,6 +2811,73 @@ mod tests {
     #[test]
     fn post_process_shortcut_binding_is_registered_in_action_map() {
         assert!(ACTION_MAP.contains_key("transcribe_with_post_process"));
+    }
+
+    #[test]
+    fn edit_mode_binding_is_registered_in_action_map() {
+        assert!(ACTION_MAP.contains_key("edit_mode"));
+    }
+
+    #[test]
+    fn vocabulary_block_normalizes_and_warns_against_insertion() {
+        let terms = vec![
+            " Zach Latta ".to_string(),
+            "zach latta".to_string(),
+            "Prime Directive".to_string(),
+        ];
+
+        let block = custom_vocabulary_prompt_block(&terms).unwrap();
+
+        assert!(block.contains("- Zach Latta"));
+        assert!(block.contains("- Prime Directive"));
+        assert_eq!(block.matches("Zach Latta").count(), 1);
+        assert!(block.contains("do not insert terms that were not spoken"));
+    }
+
+    #[test]
+    fn post_process_prompt_includes_vocabulary_and_context() {
+        let mut settings = get_default_settings();
+        settings.custom_vocabulary_terms = vec!["FreeFlow".to_string()];
+        let context = AppContextSnapshot {
+            app_name: Some("Terminal".to_string()),
+            window_title: Some("uttr".to_string()),
+            ..Default::default()
+        };
+
+        let prompt = resolved_post_process_system_prompt(&settings, Some(&context)).unwrap();
+
+        assert!(prompt.contains("FreeFlow"));
+        assert!(prompt.contains("Nearby app context"));
+        assert!(prompt.contains("Terminal"));
+    }
+
+    #[test]
+    fn edit_mode_prompt_keeps_selection_and_instruction_separate() {
+        let context = AppContextSnapshot {
+            app_name: Some("Notes".to_string()),
+            selected_text: Some("selected text".to_string()),
+            ..Default::default()
+        };
+        let prompt = build_edit_mode_prompt(
+            "This is too long.",
+            "make this shorter",
+            &context,
+            &["Prime Directive".to_string()],
+        );
+
+        assert!(prompt.contains("# Spoken instruction\nmake this shorter"));
+        assert!(prompt.contains("# Selected text\nThis is too long."));
+        assert!(prompt.contains("Prime Directive"));
+        assert!(prompt.contains("<uttr_edit_output>"));
+    }
+
+    #[test]
+    fn clean_edit_mode_response_prefers_edit_tag() {
+        let cleaned = clean_edit_mode_response(
+            "notes <uttr_edit_output>\nShorter text.\n</uttr_edit_output>",
+        );
+
+        assert_eq!(cleaned, "Shorter text.");
     }
 
     #[test]

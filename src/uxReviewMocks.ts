@@ -39,6 +39,12 @@ const bindings = {
     default_binding: "ctrl+shift+space",
     current_binding: "ctrl+shift+space",
   },
+  edit_mode: {
+    name: "Edit Mode Shortcut",
+    description: "Transforms selected text using a spoken instruction.",
+    default_binding: "ctrl+shift+e",
+    current_binding: "ctrl+shift+e",
+  },
   cancel: {
     name: "Cancel Shortcut",
     description: "The keyboard shortcut to cancel the current recording.",
