@@ -17,6 +17,7 @@ mod overlay;
 mod settings;
 mod shortcut;
 mod signal_handle;
+mod summary_client;
 mod transcription_coordinator;
 mod tray;
 mod tray_i18n;
@@ -439,6 +440,8 @@ pub fn run() {
         commands::audio::get_full_system_audio_support_status,
         commands::audio::get_full_system_audio_readiness_status,
         commands::audio::set_record_full_system_audio_enabled,
+        commands::audio::start_full_system_audio_session,
+        commands::audio::stop_full_system_audio_session,
         commands::audio::set_clamshell_microphone,
         commands::audio::get_clamshell_microphone,
         commands::audio::is_recording,

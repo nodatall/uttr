@@ -52,6 +52,7 @@ UttrFullSystemAudioPermissionState uttr_full_system_audio_request_permission(voi
 UttrFullSystemAudioStartResult uttr_full_system_audio_start_capture(
     const UttrFullSystemAudioCaptureConfig *config
 );
+UttrFullSystemAudioStopResult uttr_full_system_audio_drain_capture(void);
 UttrFullSystemAudioStopResult uttr_full_system_audio_stop_capture(void);
 void uttr_full_system_audio_cancel_capture(void);
 void uttr_full_system_audio_cleanup_last_session(void);

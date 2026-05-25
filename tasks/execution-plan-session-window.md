@@ -43,21 +43,47 @@ When asked to turn this into a deliver plan, load the `$deliver` skill, rewrite 
 - [ ] Keep the compact overlay as supporting status UI, not the primary full-system recording surface.
 - [ ] Make Dock behavior mode-aware. Background dictation can keep Uttr as a tray-style accessory app, but opening Uttr for files, history, settings, or a live session should make it a normal Dock-visible app.
 
-## Phase 6 - Chunking And Summary
+## Phase 6 - Home Session Controls
 
-- [ ] For full-system recording, transcribe while recording instead of waiting until the end. Start with completed audio chunks, not true partial-token streaming.
-- [ ] Use about 10-second chunks as the first target. Five seconds may feel more live, but it increases provider overhead and makes boundary errors more likely.
-- [ ] Track every chunk with an explicit ID, audio time range, provider/model, status, retry count, and transcript text.
-- [ ] Preserve chunk boundaries internally and assemble displayed transcript from ordered chunk records.
-- [ ] Show summary first for sessions. Raw transcript should be available through an explicit button or detail view.
+- [x] Add a `Stop` button to the Home live-session state.
+- [x] Keep `Start` available only when no full-system session is active.
+- [x] Route `Stop` through the same full-system recording coordinator as the existing full-system shortcut stop path.
+- [x] Keep the compact overlay as a supporting status surface while Home remains the primary live-session surface.
+- [x] Remove the legacy full-system processing overlay from the Stop path.
+- [x] Show clear live states on Home: recording, stopping, transcribing chunk, summarizing, and saved.
 
-## Phase 7 - Cloud Analysis And Storage
+## Phase 7 - Ten-Second Audio Chunks
 
-- [ ] Cloud analysis means sending transcript text or meeting context to a remote LLM provider for summarizing, action items, question suggestions, or meeting coaching.
-- [ ] Make cloud sharing explicit because transcript text and meeting context can be sensitive even if raw audio stays local.
-- [ ] Meeting context can come later, with a clear rule for what context is sent to cloud models.
-- [ ] Session storage should be explicit. The user should be able to see recent sessions, delete them, and understand whether audio, transcript text, and summaries are kept locally.
-- [ ] Settings should include a meeting save location control so users can choose where recordings, transcripts, and summaries are stored.
-- [ ] Open question: should meeting context be local-only until the user explicitly enables cloud analysis?
+- [x] For full-system recording, transcribe while recording instead of waiting until the end.
+- [x] Use completed 10-second chunks as the first live unit. Do not implement partial-token streaming yet.
+- [ ] Capture each chunk with a stable chunk ID, session ID, source time range, provider/model, status, retry count, transcript text, and error text.
+- [ ] Keep chunk transcription independent from final session save so one failed chunk can retry without losing the session.
+- [x] Preserve chunk order and assemble the displayed transcript from ordered chunk records.
+- [x] On stop, flush the final partial chunk, wait for any in-flight chunk work, then save the complete session.
+
+## Phase 8 - Live Summary Updates
+
+- [x] Use OpenAI for session summaries for now.
+- [x] Prefer the user's OpenAI BYOK key when one is configured and valid.
+- [x] If there is no usable OpenAI BYOK key, show an explicit summary-unavailable state instead of silently sending transcript text through another provider.
+- [x] Update the Home summary after each completed transcript chunk, with the first summary usually appearing after the first 10-second chunk finishes transcribing and summarizing.
+- [x] Send only transcript text and minimal session metadata to OpenAI for the summary pass.
+- [x] Keep the summary incremental: each update should revise the existing summary, action items, and notable points from the transcript so far.
+- [x] Keep saved-session summary text separate from raw transcript text, with raw transcript available through an explicit modal.
+- [ ] Record which provider/model produced each summary update.
+
+## Phase 9 - Session Storage
+
+- [ ] Save the final session with raw transcript, latest summary, chunks, provider/model metadata, start time, end time, and duration.
+- [ ] Keep `History > Sessions` focused on the summary first, with raw transcript available through an explicit detail view.
+- [ ] Make failed or partial sessions recoverable enough to inspect what was captured and what failed.
+- [ ] Keep imported file transcription out of normal dictation/session history unless the product explicitly changes that rule later.
+
+## Phase 10 - Validation
+
+- [ ] Add focused backend tests for chunk creation, chunk ordering, stop flush, retry handling, and final session save.
+- [ ] Add focused frontend tests that Start begins a live session, Stop ends it, and Home updates as chunks and summaries arrive.
+- [ ] Add a provider test seam for OpenAI summary requests so BYOK selection and no-key behavior are deterministic.
+- [ ] Run the real changed paths: frontend build/lint/Playwright, Rust tests, translation checks, and a rendered Home screenshot for idle, live, and stopped states.
 
 Please review this before I refine it.

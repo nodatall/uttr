@@ -103,6 +103,14 @@ export function readCloudProxyConfig() {
   };
 }
 
+export function readOpenAiSummaryConfig() {
+  return {
+    openAiApiKey: readEnv("OPENAI_API_KEY"),
+    openAiSummaryModelDefault:
+      readOptionalEnv("OPENAI_SUMMARY_MODEL_DEFAULT") || "gpt-4o-mini",
+  };
+}
+
 export function readAccessTokenConfig() {
   return {
     installTokenSecret: readSecretEnv("UTTR_INSTALL_TOKEN_SECRET"),

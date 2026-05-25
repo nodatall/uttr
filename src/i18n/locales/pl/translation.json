@@ -32,7 +32,10 @@
     "upgradeStatusLinkedAccount": "Linked account",
     "upgradeCaption": "{{status}} - $5/month",
     "upgradeOpenFailed": "Could not start checkout. Try again from Uttr in a moment.",
-    "fileTranscription": "File Transcription"
+    "fileTranscription": "File Transcription",
+    "home": "Home",
+    "files": "Files",
+    "settings": "Settings"
   },
   "onboarding": {
     "subtitle": "Aby rozpocząć, wybierz model transkrypcji",
@@ -443,7 +446,12 @@
       "delete": "Usuń wpis",
       "deleteError": "Nie udało się usunąć wpisu. Spróbuj ponownie.",
       "eyebrow": "Archiwum",
-      "showingLatest": "Wyświetlanych jest ostatnich {{count}} wpisów (starsze wpisy nadal są przechowywane)."
+      "showingLatest": "Wyświetlanych jest ostatnich {{count}} wpisów (starsze wpisy nadal są przechowywane).",
+      "dictations": "Dictations",
+      "sessions": "Sessions",
+      "openSession": "Open session",
+      "emptySessions": "No full-system sessions yet.",
+      "emptyDictations": "No quick dictations yet."
     },
     "debug": {
       "title": "Debugowanie",
@@ -686,11 +694,33 @@
     "transcribing": "Transkrypcja...",
     "processing": "Przetwarzanie...",
     "noInputTitle": "No input detected",
-    "noInputDescription": "Check your microphone settings.",
-    "fullSystemProgress": {
-      "copy": "Copy",
-      "view": "View",
-      "exit": "Exit"
+    "noInputDescription": "Check your microphone settings."
+  },
+  "workspace": {
+    "home": {
+      "eyebrow": "Workspace",
+      "title": "Open Uttr",
+      "description": "Start a full-system recording with live session summarization.",
+      "start": "Start",
+      "starting": "Starting",
+      "startFailed": "Could not start the session",
+      "liveSession": "Live session",
+      "sessionComplete": "Session complete",
+      "sources": "System audio + microphone",
+      "recording": "Recording",
+      "summary": "Summary",
+      "liveSummary": "Live summary",
+      "completeBody": "The session transcript is saved in History.",
+      "liveBody": "Uttr is recording system audio and microphone audio. The summary appears here as the session is processed.",
+      "readyTitle": "Ready to start",
+      "readyDescription": "Use Start for full-system audio recording and session summarization.",
+      "stop": "Stop",
+      "stopping": "Stopping",
+      "stopFailed": "Could not stop the session"
+    },
+    "settings": {
+      "eyebrow": "Configuration",
+      "providers": "Providers"
     }
   }
 }

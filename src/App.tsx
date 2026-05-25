@@ -11,12 +11,20 @@ import "./App.css";
 import AccessibilityPermissions from "./components/AccessibilityPermissions";
 import Footer from "./components/footer";
 import { AccessibilityOnboarding } from "./components/onboarding";
-import { Sidebar, SidebarSection, SECTIONS_CONFIG } from "./components/Sidebar";
-import { HistorySettings } from "./components/settings";
+import { Sidebar, SidebarSection } from "./components/Sidebar";
+import {
+  FileTranscriptionSettings,
+  HistorySettings,
+} from "./components/settings";
+import {
+  HomeWorkspace,
+  type SessionWindowState,
+} from "./components/workspace/HomeWorkspace";
+import { SettingsWorkspace } from "./components/workspace/SettingsWorkspace";
 import { RoseThreeLoader } from "./components/shared";
 import { useSettings } from "./hooks/useSettings";
 import { useSettingsStore } from "./stores/settingsStore";
-import { commands } from "@/bindings";
+import { commands, type HistoryEntry } from "@/bindings";
 import { logFrontendStartup } from "@/lib/startupLog";
 import { getLanguageDirection, initializeRTL } from "@/lib/utils/rtl";
 
@@ -27,6 +35,24 @@ type HistoryFocusRequest = {
   entryId: number | null;
   token: number;
 };
+
+const DEFAULT_SESSION_WINDOW_STATE: SessionWindowState = {
+  stage: "idle",
+  title: "Open Uttr",
+  subtitle: "",
+  progressLabel: "",
+  progressValue: 0,
+  summaryText: null,
+  rawTranscriptText: null,
+  historyEntryId: null,
+};
+
+const getInitialSessionWindowState = (): SessionWindowState => ({
+  ...DEFAULT_SESSION_WINDOW_STATE,
+  ...(typeof window !== "undefined"
+    ? window.__UTTR_E2E__?.sessionWindowState
+    : null),
+});
 
 async function withTimeout<T>(
   promise: Promise<T>,
@@ -43,14 +69,26 @@ async function withTimeout<T>(
 const renderSettingsContent = (
   section: SidebarSection,
   historyFocusRequest: HistoryFocusRequest | null,
+  sessionWindowState: SessionWindowState,
+  onOpenSessionEntry: (entry: HistoryEntry) => void,
 ) => {
-  if (section === "history") {
-    return <HistorySettings focusRequest={historyFocusRequest} />;
+  switch (section) {
+    case "home":
+      return <HomeWorkspace sessionState={sessionWindowState} />;
+    case "files":
+      return <FileTranscriptionSettings />;
+    case "history":
+      return (
+        <HistorySettings
+          focusRequest={historyFocusRequest}
+          onOpenSessionEntry={onOpenSessionEntry}
+        />
+      );
+    case "settings":
+      return <SettingsWorkspace />;
+    default:
+      return <HomeWorkspace sessionState={sessionWindowState} />;
   }
-
-  const ActiveComponent =
-    SECTIONS_CONFIG[section]?.component || SECTIONS_CONFIG.general.component;
-  return <ActiveComponent />;
 };
 
 function App() {
@@ -58,10 +96,11 @@ function App() {
   const [onboardingStep, setOnboardingStep] = useState<OnboardingStep | null>(
     null,
   );
-  const [currentSection, setCurrentSection] =
-    useState<SidebarSection>("general");
+  const [currentSection, setCurrentSection] = useState<SidebarSection>("home");
   const [historyFocusRequest, setHistoryFocusRequest] =
     useState<HistoryFocusRequest | null>(null);
+  const [sessionWindowState, setSessionWindowState] =
+    useState<SessionWindowState>(getInitialSessionWindowState);
   const { settings, updateSetting } = useSettings();
   const direction = getLanguageDirection(i18n.language);
   const refreshAudioDevices = useSettingsStore(
@@ -75,6 +114,20 @@ function App() {
   );
   const hasStartedOnboardingCheck = useRef(false);
   const hasCompletedPostOnboardingInit = useRef(false);
+
+  const openSessionEntry = useCallback((entry: HistoryEntry) => {
+    setSessionWindowState({
+      stage: "complete",
+      title: "Session saved",
+      subtitle: "The transcript is ready in History under Sessions.",
+      progressLabel: "Complete",
+      progressValue: 1,
+      summaryText: entry.post_processed_text,
+      rawTranscriptText: entry.transcription_text,
+      historyEntryId: entry.id,
+    });
+    setCurrentSection("home");
+  }, []);
 
   useEffect(() => {
     if (hasStartedOnboardingCheck.current) {
@@ -173,6 +226,20 @@ function App() {
         entryId: event.payload?.entryId ?? null,
         token: Date.now(),
       });
+    }).then((unlisten) => {
+      unlistenFn = unlisten;
+    });
+
+    return () => {
+      if (unlistenFn) unlistenFn();
+    };
+  }, []);
+
+  useEffect(() => {
+    let unlistenFn: (() => void) | undefined;
+    listen<SessionWindowState>("session-window-state", (event) => {
+      setSessionWindowState(event.payload);
+      setCurrentSection("home");
     }).then((unlisten) => {
       unlistenFn = unlisten;
     });
@@ -286,7 +353,12 @@ function App() {
             <div className="flex h-full flex-col overflow-x-hidden overflow-y-auto uttr-scrollbar">
               <div className="flex flex-col items-center gap-5 px-4 py-5 sm:px-5 sm:py-6 md:gap-6 md:px-6 md:py-7">
                 <AccessibilityPermissions />
-                {renderSettingsContent(currentSection, historyFocusRequest)}
+                {renderSettingsContent(
+                  currentSection,
+                  historyFocusRequest,
+                  sessionWindowState,
+                  openSessionEntry,
+                )}
               </div>
             </div>
           </div>

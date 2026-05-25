@@ -60,6 +60,29 @@ type FullSystemAudioTestState = {
     dev_access_override: string | null;
   };
   customSounds: { start: boolean; stop: boolean };
+  startedFullSystemAudioSessions: number;
+  stoppedFullSystemAudioSessions: number;
+  historyEntries: Array<{
+    id: number;
+    file_name: string;
+    timestamp: number;
+    saved: boolean;
+    title: string;
+    transcription_text: string;
+    post_processed_text: string | null;
+    post_process_prompt: string | null;
+    recording_source: string;
+  }>;
+  sessionWindowState?: {
+    stage: string;
+    title: string;
+    subtitle: string;
+    progressLabel: string;
+    progressValue: number;
+    summaryText: string | null;
+    rawTranscriptText: string | null;
+    historyEntryId: number | null;
+  };
   fullSystemAudio: {
     supportStatus: {
       supported: boolean;
@@ -149,6 +172,9 @@ const createTestState = (
     dev_access_override: null,
   },
   customSounds: { start: true, stop: true },
+  startedFullSystemAudioSessions: 0,
+  stoppedFullSystemAudioSessions: 0,
+  historyEntries: [],
   fullSystemAudio: supported
     ? {
         supportStatus: {
@@ -291,6 +317,8 @@ async function installBrowserMocks(
             return e2eState.defaultSettings;
           case "get_install_access_snapshot":
             return e2eState.installAccess;
+          case "get_history_entries":
+            return e2eState.historyEntries;
           case "check_custom_sounds":
             return e2eState.customSounds;
           case "get_available_microphones":
@@ -313,6 +341,12 @@ async function installBrowserMocks(
               support: e2eState.fullSystemAudio.supportStatus,
               readiness: e2eState.fullSystemAudio.readinessStatus,
             };
+          case "start_full_system_audio_session":
+            e2eState.startedFullSystemAudioSessions += 1;
+            return null;
+          case "stop_full_system_audio_session":
+            e2eState.stoppedFullSystemAudioSessions += 1;
+            return null;
           case "change_binding":
             return { success: true, error: null };
           case "reset_binding":
@@ -394,12 +428,173 @@ async function installBrowserMocks(
 }
 
 test.describe("full-system audio settings", () => {
+  test("starts a full-system session from Home without file, history, or side cards", async ({
+    page,
+  }) => {
+    await installBrowserMocks(page, createTestState(false, true));
+
+    await page.goto("/");
+
+    const workspace = page.getByTestId("home-workspace");
+
+    await expect(
+      workspace.getByRole("button", { name: /^Start$/i }),
+    ).toBeVisible();
+    await expect(
+      workspace.getByRole("button", { name: /^Files$/i }),
+    ).toHaveCount(0);
+    await expect(
+      workspace.getByRole("button", { name: /^History$/i }),
+    ).toHaveCount(0);
+    await expect(workspace.getByText("Capture")).toHaveCount(0);
+    await expect(workspace.getByText("Recent surfaces")).toHaveCount(0);
+
+    await workspace.getByRole("button", { name: /^Start$/i }).click();
+
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __UTTR_E2E__: FullSystemAudioTestState;
+              }
+            ).__UTTR_E2E__.startedFullSystemAudioSessions,
+        ),
+      )
+      .toBe(1);
+  });
+
+  test("stops a live full-system session from Home", async ({ page }) => {
+    const state = createTestState(false, true);
+    state.sessionWindowState = {
+      stage: "active",
+      title: "Live session",
+      subtitle: "Capturing system audio and microphone audio.",
+      progressLabel: "Recording",
+      progressValue: 0,
+      summaryText: null,
+      rawTranscriptText: null,
+      historyEntryId: null,
+    };
+    await installBrowserMocks(page, state);
+
+    await page.goto("/");
+
+    const workspace = page.getByTestId("home-workspace");
+    await expect(
+      workspace.getByRole("button", { name: /^Stop$/i }),
+    ).toBeVisible();
+    await expect(
+      workspace.getByRole("button", { name: /^Start$/i }),
+    ).toHaveCount(0);
+
+    await workspace.getByRole("button", { name: /^Stop$/i }).click();
+
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __UTTR_E2E__: FullSystemAudioTestState;
+              }
+            ).__UTTR_E2E__.stoppedFullSystemAudioSessions,
+        ),
+      )
+      .toBe(1);
+  });
+
+  test("shows saved session summary separately from the raw transcript", async ({
+    page,
+  }) => {
+    const state = createTestState(false, true);
+    state.sessionWindowState = {
+      stage: "complete",
+      title: "Session saved",
+      subtitle: "The transcript is ready in History under Sessions.",
+      progressLabel: "Complete",
+      progressValue: 1,
+      summaryText: "Bitcoin sentiment improved as recurring buying continued.",
+      rawTranscriptText:
+        "every single month. It makes it easier for people to at least hold Bitcoin or buy back into Bitcoin.",
+      historyEntryId: 42,
+    };
+    await installBrowserMocks(page, state);
+
+    await page.goto("/");
+
+    const workspace = page.getByTestId("home-workspace");
+    await expect(
+      workspace.getByText(
+        "Bitcoin sentiment improved as recurring buying continued.",
+      ),
+    ).toBeVisible();
+    await expect(workspace.getByText("every single month.")).toHaveCount(0);
+
+    await workspace.getByRole("button", { name: /Raw transcript/i }).click();
+
+    const dialog = page.getByRole("dialog", { name: /Raw transcript/i });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText("every single month.")).toBeVisible();
+  });
+
+  test("opens a session from History on Home with its summary", async ({
+    page,
+  }) => {
+    const state = createTestState(false, true);
+    state.historyEntries = [
+      {
+        id: 7,
+        file_name: "session.wav",
+        timestamp: 1_717_200_000,
+        saved: false,
+        title: "Session",
+        transcription_text:
+          "raw session words about bitcoin confidence returning over time.",
+        post_processed_text:
+          "Session summary: confidence improved as participants discussed recurring accumulation.",
+        post_process_prompt: "Live session summary via OpenAI after 1 chunk(s)",
+        recording_source: "full_system_audio",
+      },
+    ];
+    await installBrowserMocks(page, state);
+
+    await page.goto("/");
+    await page.getByRole("button", { name: /History/i }).click();
+    await page.getByRole("button", { name: /Sessions/i }).click();
+    await page
+      .getByRole("button", { name: /Session summary: confidence improved/i })
+      .click();
+
+    const workspace = page.getByTestId("home-workspace");
+    await expect(
+      workspace.getByRole("heading", { name: "Session saved" }),
+    ).toBeVisible();
+    await expect(
+      workspace.getByText(
+        "Session summary: confidence improved as participants discussed recurring accumulation.",
+      ),
+    ).toBeVisible();
+    await expect(workspace.getByText("raw session words")).toHaveCount(0);
+
+    await workspace.getByRole("button", { name: /Raw transcript/i }).click();
+    await expect(
+      page
+        .getByRole("dialog", { name: /Raw transcript/i })
+        .getByText(
+          "raw session words about bitcoin confidence returning over time.",
+        ),
+    ).toBeVisible();
+  });
+
   test("shows the supported toggle and reveals the dedicated shortcut without changing transcribe", async ({
     page,
   }) => {
     await installBrowserMocks(page, createTestState(false, true));
 
     await page.goto("/");
+    await page.getByRole("button", { name: /Settings/i }).click();
 
     const toggle = page.getByTestId("record-full-system-audio-toggle");
     await expect(toggle).toBeVisible();
@@ -407,7 +602,9 @@ test.describe("full-system audio settings", () => {
     await expect(page.getByText("Transcribe Shortcut")).toBeVisible();
     await expect(page.getByText("Ctrl + fn")).toHaveCount(0);
 
-    await toggle.check({ force: true });
+    await page
+      .locator('label:has([data-testid="record-full-system-audio-toggle"])')
+      .click();
 
     await expect(toggle).toBeChecked();
     await expect(page.getByText("Ctrl + fn")).toBeVisible();
@@ -420,6 +617,7 @@ test.describe("full-system audio settings", () => {
     await installBrowserMocks(page, createTestState(false, false));
 
     await page.goto("/");
+    await page.getByRole("button", { name: /Settings/i }).click();
 
     const toggle = page.getByTestId("record-full-system-audio-toggle");
     await expect(toggle).toBeVisible();

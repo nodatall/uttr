@@ -32,7 +32,10 @@
     "upgradeStatusLinkedAccount": "Linked account",
     "upgradeCaption": "{{status}} - $5/month",
     "upgradeOpenFailed": "Could not start checkout. Try again from Uttr in a moment.",
-    "fileTranscription": "File Transcription"
+    "fileTranscription": "File Transcription",
+    "home": "Home",
+    "files": "Files",
+    "settings": "Settings"
   },
   "onboarding": {
     "subtitle": "시작하려면 음성 인식 모델을 선택하세요",
@@ -443,7 +446,12 @@
       "delete": "항목 삭제",
       "deleteError": "항목 삭제에 실패했습니다. 다시 시도해주세요.",
       "eyebrow": "아카이브",
-      "showingLatest": "최신 {{count}}개 항목을 표시합니다(이전 항목도 계속 저장됩니다)."
+      "showingLatest": "최신 {{count}}개 항목을 표시합니다(이전 항목도 계속 저장됩니다).",
+      "dictations": "Dictations",
+      "sessions": "Sessions",
+      "openSession": "Open session",
+      "emptySessions": "No full-system sessions yet.",
+      "emptyDictations": "No quick dictations yet."
     },
     "debug": {
       "title": "디버그",
@@ -686,11 +694,33 @@
     "transcribing": "텍스트로 변환 중...",
     "processing": "처리 중...",
     "noInputTitle": "No input detected",
-    "noInputDescription": "Check your microphone settings.",
-    "fullSystemProgress": {
-      "copy": "Copy",
-      "view": "View",
-      "exit": "Exit"
+    "noInputDescription": "Check your microphone settings."
+  },
+  "workspace": {
+    "home": {
+      "eyebrow": "Workspace",
+      "title": "Open Uttr",
+      "description": "Start a full-system recording with live session summarization.",
+      "start": "Start",
+      "starting": "Starting",
+      "startFailed": "Could not start the session",
+      "liveSession": "Live session",
+      "sessionComplete": "Session complete",
+      "sources": "System audio + microphone",
+      "recording": "Recording",
+      "summary": "Summary",
+      "liveSummary": "Live summary",
+      "completeBody": "The session transcript is saved in History.",
+      "liveBody": "Uttr is recording system audio and microphone audio. The summary appears here as the session is processed.",
+      "readyTitle": "Ready to start",
+      "readyDescription": "Use Start for full-system audio recording and session summarization.",
+      "stop": "Stop",
+      "stopping": "Stopping",
+      "stopFailed": "Could not stop the session"
+    },
+    "settings": {
+      "eyebrow": "Configuration",
+      "providers": "Providers"
     }
   }
 }

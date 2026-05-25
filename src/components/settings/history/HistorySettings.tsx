@@ -12,6 +12,7 @@ import { useOsType } from "@/hooks/useOsType";
 import { logFrontendStartup } from "@/lib/startupLog";
 
 const MAX_VISIBLE_HISTORY = 20;
+type HistoryTab = "dictations" | "sessions";
 
 interface HistoryFocusRequest {
   entryId: number | null;
@@ -41,10 +42,12 @@ const OpenRecordingsButton: React.FC<OpenRecordingsButtonProps> = ({
 
 interface HistorySettingsProps {
   focusRequest?: HistoryFocusRequest | null;
+  onOpenSessionEntry?: (entry: HistoryEntry) => void;
 }
 
 export const HistorySettings: React.FC<HistorySettingsProps> = ({
   focusRequest = null,
+  onOpenSessionEntry,
 }) => {
   const { t } = useTranslation();
   const osType = useOsType();
@@ -53,11 +56,20 @@ export const HistorySettings: React.FC<HistorySettingsProps> = ({
   const [highlightedEntryId, setHighlightedEntryId] = useState<number | null>(
     null,
   );
-  const visibleEntries = historyEntries.slice(0, MAX_VISIBLE_HISTORY);
+  const [activeTab, setActiveTab] = useState<HistoryTab>("dictations");
+  const dictationEntries = historyEntries.filter(
+    (entry) => entry.recording_source !== "full_system_audio",
+  );
+  const sessionEntries = historyEntries.filter(
+    (entry) => entry.recording_source === "full_system_audio",
+  );
+  const activeEntries =
+    activeTab === "sessions" ? sessionEntries : dictationEntries;
+  const visibleEntries = activeEntries.slice(0, MAX_VISIBLE_HISTORY);
   const focusedEntryId = focusRequest?.entryId ?? null;
   const focusedEntryVisible =
     focusedEntryId !== null &&
-    visibleEntries.some((entry) => entry.id === focusedEntryId);
+    historyEntries.some((entry) => entry.id === focusedEntryId);
 
   const loadHistoryEntries = useCallback(async () => {
     try {
@@ -96,6 +108,23 @@ export const HistorySettings: React.FC<HistorySettingsProps> = ({
       });
     };
   }, [loadHistoryEntries]);
+
+  useEffect(() => {
+    if (focusedEntryId === null || loading) {
+      return;
+    }
+
+    const focusedEntry = historyEntries.find(
+      (entry) => entry.id === focusedEntryId,
+    );
+    if (focusedEntry) {
+      setActiveTab(
+        focusedEntry.recording_source === "full_system_audio"
+          ? "sessions"
+          : "dictations",
+      );
+    }
+  }, [focusedEntryId, historyEntries, loading]);
 
   useEffect(() => {
     if (focusedEntryId === null || loading) {
@@ -247,9 +276,6 @@ export const HistorySettings: React.FC<HistorySettingsProps> = ({
     <div className="mx-auto w-full max-w-3xl space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="space-y-2">
-          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-text/34">
-            {t("settings.history.eyebrow")}
-          </p>
           <h1 className="text-[28px] font-semibold tracking-tight text-text">
             {t("settings.history.title")}
           </h1>
@@ -264,21 +290,64 @@ export const HistorySettings: React.FC<HistorySettingsProps> = ({
           label={t("settings.history.openFolder")}
         />
       </div>
+      <div className="flex rounded-full border border-white/8 bg-white/[0.025] p-1 w-fit">
+        <button
+          type="button"
+          onClick={() => setActiveTab("dictations")}
+          className={`rounded-full px-3 py-1.5 text-sm font-medium transition ${
+            activeTab === "dictations"
+              ? "bg-logo-primary/14 text-logo-primary shadow-[inset_0_0_0_1px_rgba(103,215,163,0.18)]"
+              : "text-text/58 hover:bg-white/[0.04] hover:text-text"
+          }`}
+        >
+          {t("settings.history.dictations", { defaultValue: "Dictations" })}
+          <span className="ml-2 text-xs text-text/42">
+            {dictationEntries.length}
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveTab("sessions")}
+          className={`rounded-full px-3 py-1.5 text-sm font-medium transition ${
+            activeTab === "sessions"
+              ? "bg-logo-primary/14 text-logo-primary shadow-[inset_0_0_0_1px_rgba(103,215,163,0.18)]"
+              : "text-text/58 hover:bg-white/[0.04] hover:text-text"
+          }`}
+        >
+          {t("settings.history.sessions", { defaultValue: "Sessions" })}
+          <span className="ml-2 text-xs text-text/42">
+            {sessionEntries.length}
+          </span>
+        </button>
+      </div>
       <div className="space-y-2">
         <div className="overflow-visible rounded-[18px] border border-white/7 bg-white/[0.02]">
-          <div className="divide-y divide-white/6">
-            {visibleEntries.map((entry) => (
-              <HistoryEntryComponent
-                key={entry.id}
-                entry={entry}
-                highlighted={entry.id === highlightedEntryId}
-                onToggleSaved={() => toggleSaved(entry.id)}
-                onCopyText={(text) => copyToClipboard(text)}
-                getAudioUrl={getAudioUrl}
-                deleteAudio={deleteAudioEntry}
-              />
-            ))}
-          </div>
+          {visibleEntries.length === 0 ? (
+            <div className="px-4 py-6 text-center text-text/50">
+              {activeTab === "sessions"
+                ? t("settings.history.emptySessions", {
+                    defaultValue: "No full-system sessions yet.",
+                  })
+                : t("settings.history.emptyDictations", {
+                    defaultValue: "No quick dictations yet.",
+                  })}
+            </div>
+          ) : (
+            <div className="divide-y divide-white/6">
+              {visibleEntries.map((entry) => (
+                <HistoryEntryComponent
+                  key={entry.id}
+                  entry={entry}
+                  highlighted={entry.id === highlightedEntryId}
+                  onToggleSaved={() => toggleSaved(entry.id)}
+                  onCopyText={(text) => copyToClipboard(text)}
+                  onOpenSessionEntry={onOpenSessionEntry}
+                  getAudioUrl={getAudioUrl}
+                  deleteAudio={deleteAudioEntry}
+                />
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -290,6 +359,7 @@ interface HistoryEntryProps {
   highlighted: boolean;
   onToggleSaved: () => void;
   onCopyText: (text: string) => void;
+  onOpenSessionEntry?: (entry: HistoryEntry) => void;
   getAudioUrl: (fileName: string) => Promise<string | null>;
   deleteAudio: (id: number) => Promise<void>;
 }
@@ -299,12 +369,14 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
   highlighted,
   onToggleSaved,
   onCopyText,
+  onOpenSessionEntry,
   getAudioUrl,
   deleteAudio,
 }) => {
   const { t, i18n } = useTranslation();
   const [showCopied, setShowCopied] = useState(false);
   const displayText = entry.post_processed_text || entry.transcription_text;
+  const isSession = entry.recording_source === "full_system_audio";
 
   const handleLoadAudio = useCallback(
     () => getAudioUrl(entry.file_name),
@@ -315,6 +387,15 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
     onCopyText(displayText);
     setShowCopied(true);
     setTimeout(() => setShowCopied(false), 2000);
+  };
+
+  const handlePrimaryClick = () => {
+    if (isSession && onOpenSessionEntry) {
+      onOpenSessionEntry(entry);
+      return;
+    }
+
+    handleCopyText();
   };
 
   const handleDeleteEntry = async () => {
@@ -341,9 +422,17 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
         <div className="space-y-2">
           <p className="text-sm font-medium text-text/86">{formattedDate}</p>
           <button
-            onClick={handleCopyText}
-            className="w-full cursor-copy text-left text-[15px] leading-7 text-text/74 transition-colors hover:text-text"
-            title={t("settings.history.copyToClipboard")}
+            onClick={handlePrimaryClick}
+            className={`w-full text-left text-[15px] leading-7 text-text/74 transition-colors hover:text-text ${
+              isSession ? "cursor-pointer" : "cursor-copy"
+            }`}
+            title={
+              isSession
+                ? t("settings.history.openSession", {
+                    defaultValue: "Open session",
+                  })
+                : t("settings.history.copyToClipboard")
+            }
             style={{
               display: "-webkit-box",
               WebkitLineClamp: 3,

@@ -1,11 +1,12 @@
 use crate::access::{
-    get_install_access_snapshot, install_access_allows_premium_features,
-    install_access_allows_transcription, premium_feature_access_message,
+    bootstrap_install_state, get_install_access_snapshot, install_access_allows_premium_features,
+    install_access_allows_transcription, premium_feature_access_message, refresh_entitlement_state,
 };
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use crate::apple_intelligence;
 use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, SoundType};
 use crate::audio_toolkit::{normalize_spoken_lists, normalize_spoken_punctuation};
+use crate::byok_secrets;
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::full_system_audio::{
     FullSystemAudioSessionManager, FullSystemSessionStopResult,
@@ -18,6 +19,7 @@ use crate::settings::{
     APPLE_INTELLIGENCE_PROVIDER_ID, NUANCED_CLEANING_PROMPT, STRICT_CLEANING_PROMPT,
 };
 use crate::shortcut;
+use crate::summary_client;
 use crate::tray::{change_tray_icon, TrayIconState};
 use crate::utils::{
     self, show_processing_overlay, show_recording_overlay, show_transcribing_overlay,
@@ -27,21 +29,29 @@ use crate::TranscriptionCoordinator;
 use ferrous_opencc::{config::BuiltinConfig, OpenCC};
 use log::{debug, error, warn};
 use once_cell::sync::Lazy;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
 };
 use std::time::{Duration, Instant};
+use tauri::async_runtime::JoinHandle;
 use tauri::AppHandle;
 use tauri::Emitter;
 use tauri::Manager;
 use tauri_plugin_clipboard_manager::ClipboardExt;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 
 const NO_INPUT_OVERLAY_MIN_DURATION: Duration = Duration::from_secs(4);
 const PROCESSING_OVERLAY_DELAY: Duration = Duration::from_millis(500);
 const RELEASE_SMOKE_TRANSCRIBING_HOLD_MS_DEFAULT: u64 = 1_500;
+const FULL_SYSTEM_LIVE_CHUNK_SECONDS: usize = 10;
+const FULL_SYSTEM_LIVE_CHUNK_SAMPLES: usize = 16_000 * FULL_SYSTEM_LIVE_CHUNK_SECONDS;
+const FULL_SYSTEM_LIVE_CHUNK_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const FULL_SYSTEM_SUMMARY_MODEL_FALLBACK: &str = "gpt-4o-mini";
+const FULL_SYSTEM_SUMMARY_SYSTEM_PROMPT: &str =
+    "You summarize live desktop audio sessions. Be concise, concrete, and faithful to the transcript.";
 
 #[derive(Clone, Copy)]
 enum DeferredOverlayState {
@@ -62,6 +72,65 @@ enum FullSystemProgressStage {
     Processing,
     Complete,
 }
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionWindowStatePayload {
+    stage: String,
+    title: String,
+    subtitle: String,
+    progress_label: String,
+    progress_value: f32,
+    summary_text: Option<String>,
+    raw_transcript_text: Option<String>,
+    history_entry_id: Option<i64>,
+}
+
+#[derive(Debug)]
+struct FullSystemLiveRuntime {
+    stop_requested: AtomicBool,
+    chunk_count: AtomicU64,
+    transcript_text: Mutex<String>,
+    summary_text: Mutex<Option<String>>,
+    summary_provider: Mutex<Option<String>>,
+    summary_error: Mutex<Option<String>>,
+    summary_disabled: AtomicBool,
+    recorded_samples: Mutex<Vec<f32>>,
+    pending_samples: Mutex<Vec<f32>>,
+}
+
+impl FullSystemLiveRuntime {
+    fn new() -> Self {
+        Self {
+            stop_requested: AtomicBool::new(false),
+            chunk_count: AtomicU64::new(0),
+            transcript_text: Mutex::new(String::new()),
+            summary_text: Mutex::new(None),
+            summary_provider: Mutex::new(None),
+            summary_error: Mutex::new(None),
+            summary_disabled: AtomicBool::new(false),
+            recorded_samples: Mutex::new(Vec::new()),
+            pending_samples: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+struct FullSystemLiveSession {
+    binding_id: String,
+    runtime: Arc<FullSystemLiveRuntime>,
+    worker_handle: JoinHandle<()>,
+}
+
+struct FullSystemLiveFinal {
+    transcript_text: String,
+    summary_text: Option<String>,
+    summary_provider: Option<String>,
+    recorded_samples: Vec<f32>,
+    chunk_count: u64,
+}
+
+static FULL_SYSTEM_LIVE_SESSION: Lazy<Mutex<Option<FullSystemLiveSession>>> =
+    Lazy::new(|| Mutex::new(None));
 
 /// Drop guard that notifies the [`TranscriptionCoordinator`] when the
 /// transcription pipeline finishes — whether it completes normally or panics.
@@ -830,53 +899,553 @@ fn start_transcription_session(app: &AppHandle, binding_id: &str, started: bool)
     );
 }
 
-fn full_system_progress_payload(
+fn focus_workspace_window(app: &AppHandle) {
+    if let Some(main_window) = app.get_webview_window("main") {
+        if let Err(e) = main_window.show() {
+            error!("Failed to show main window: {}", e);
+        }
+        if let Err(e) = main_window.set_focus() {
+            error!("Failed to focus main window: {}", e);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            if let Err(e) = app.set_activation_policy(tauri::ActivationPolicy::Regular) {
+                error!("Failed to set activation policy to Regular: {}", e);
+            }
+        }
+    }
+}
+
+fn emit_session_window_state(app: &AppHandle, payload: SessionWindowStatePayload) {
+    if let Err(e) = app.emit("session-window-state", payload) {
+        warn!("Failed to emit session-window-state: {}", e);
+    }
+}
+
+fn session_window_state_payload(
     stage: FullSystemProgressStage,
-    transcript_text: Option<String>,
+    summary_text: Option<String>,
+    raw_transcript_text: Option<String>,
     history_entry_id: Option<i64>,
-) -> crate::overlay::FullSystemProgressPayload {
+) -> SessionWindowStatePayload {
     match stage {
-        FullSystemProgressStage::Preparing => crate::overlay::FullSystemProgressPayload {
+        FullSystemProgressStage::Preparing => SessionWindowStatePayload {
             stage: "preparing".to_string(),
-            title: "Preparing capture".to_string(),
-            subtitle: "Getting the system and microphone audio ready.".to_string(),
+            title: "Preparing session".to_string(),
+            subtitle: "System audio and microphone capture are being prepared.".to_string(),
             progress_label: "Preparing audio".to_string(),
             progress_value: 0.18,
-            footer_note: "Large recordings can take a little longer.".to_string(),
-            transcript_text: None,
+            summary_text: None,
+            raw_transcript_text: None,
             history_entry_id: None,
         },
-        FullSystemProgressStage::Transcribing => crate::overlay::FullSystemProgressPayload {
+        FullSystemProgressStage::Transcribing => SessionWindowStatePayload {
             stage: "transcribing".to_string(),
-            title: "Transcribing system audio".to_string(),
-            subtitle: "Working through the captured audio now.".to_string(),
+            title: "Transcribing session".to_string(),
+            subtitle: "Working through the captured system and microphone audio.".to_string(),
             progress_label: "Transcribing".to_string(),
             progress_value: 0.66,
-            footer_note: "Uttr will save the finished transcript to History.".to_string(),
-            transcript_text: None,
+            summary_text: None,
+            raw_transcript_text: None,
             history_entry_id: None,
         },
-        FullSystemProgressStage::Processing => crate::overlay::FullSystemProgressPayload {
+        FullSystemProgressStage::Processing => SessionWindowStatePayload {
             stage: "processing".to_string(),
-            title: "Polishing transcript".to_string(),
-            subtitle: "Applying post-processing before saving.".to_string(),
+            title: "Preparing summary".to_string(),
+            subtitle: "Cleaning up the transcript before saving the session.".to_string(),
             progress_label: "Post-processing".to_string(),
             progress_value: 0.88,
-            footer_note: "Cleaning up punctuation and formatting.".to_string(),
-            transcript_text: None,
+            summary_text: None,
+            raw_transcript_text: None,
             history_entry_id: None,
         },
-        FullSystemProgressStage::Complete => crate::overlay::FullSystemProgressPayload {
+        FullSystemProgressStage::Complete => SessionWindowStatePayload {
             stage: "complete".to_string(),
-            title: "Transcript ready".to_string(),
-            subtitle: "Saved to History. Copy it now or open the full entry.".to_string(),
+            title: "Session saved".to_string(),
+            subtitle: "The transcript is ready in History under Sessions.".to_string(),
             progress_label: "Complete".to_string(),
             progress_value: 1.0,
-            footer_note: "Ready for review.".to_string(),
-            transcript_text,
+            summary_text,
+            raw_transcript_text,
             history_entry_id,
         },
     }
+}
+
+fn emit_active_session_window_state(app: &AppHandle) {
+    emit_session_window_state(
+        app,
+        SessionWindowStatePayload {
+            stage: "active".to_string(),
+            title: "Live session".to_string(),
+            subtitle: "Capturing system audio and microphone audio.".to_string(),
+            progress_label: "Recording".to_string(),
+            progress_value: 0.0,
+            summary_text: None,
+            raw_transcript_text: None,
+            history_entry_id: None,
+        },
+    );
+}
+
+fn append_live_text(existing: &mut String, incoming: &str) {
+    let incoming = incoming.trim();
+    if incoming.is_empty() {
+        return;
+    }
+    if !existing.trim().is_empty() {
+        existing.push(' ');
+    }
+    existing.push_str(incoming);
+}
+
+fn emit_live_session_summary_state(
+    app: &AppHandle,
+    chunk_count: u64,
+    summary_text: Option<String>,
+    summary_error: Option<String>,
+) {
+    let (subtitle, body) = match (summary_text, summary_error) {
+        (Some(summary), _) if !summary.trim().is_empty() => (
+            "Capturing system audio and microphone audio.".to_string(),
+            Some(summary),
+        ),
+        (_, Some(error)) => (
+            "Capturing audio. Live summary is unavailable.".to_string(),
+            Some(error),
+        ),
+        _ => (
+            "Capturing system audio and microphone audio.".to_string(),
+            None,
+        ),
+    };
+
+    emit_session_window_state(
+        app,
+        SessionWindowStatePayload {
+            stage: "active".to_string(),
+            title: "Live session".to_string(),
+            subtitle,
+            progress_label: format!("Chunk {} summarized", chunk_count),
+            progress_value: 0.0,
+            summary_text: body,
+            raw_transcript_text: None,
+            history_entry_id: None,
+        },
+    );
+}
+
+fn openai_summary_provider(settings: &AppSettings) -> Option<PostProcessProvider> {
+    settings
+        .post_process_provider("openai")
+        .cloned()
+        .or_else(|| {
+            settings
+                .post_process_providers
+                .iter()
+                .find(|provider| provider.id == "openai")
+                .cloned()
+        })
+}
+
+#[derive(Debug)]
+struct LiveSummaryResult {
+    summary: String,
+    provider_label: String,
+}
+
+fn build_live_summary_prompt(transcript_text: &str, previous_summary: Option<String>) -> String {
+    let previous = previous_summary
+        .filter(|summary| !summary.trim().is_empty())
+        .unwrap_or_else(|| "No previous summary yet.".to_string());
+    format!(
+        "Update the live session summary from the transcript so far.\n\nPrevious summary:\n{}\n\nTranscript so far:\n{}\n\nReturn concise markdown with:\n- Summary\n- Action items\n- Notable points\n\nDo not invent details that are not in the transcript.",
+        previous, transcript_text
+    )
+}
+
+async fn ensure_backend_summary_install_token(app: &AppHandle) -> Result<String, String> {
+    let settings = get_settings(app);
+    if settings.install_token.trim().is_empty() {
+        bootstrap_install_state(app).await?;
+    } else {
+        refresh_entitlement_state(app).await?;
+    }
+
+    let refreshed = get_settings(app);
+    let install_token = refreshed.install_token.trim();
+    if install_token.is_empty() {
+        return Err("Install token is required for backend summaries.".to_string());
+    }
+
+    Ok(install_token.to_string())
+}
+
+async fn summarize_live_session(
+    app: &AppHandle,
+    transcript_text: &str,
+    previous_summary: Option<String>,
+    chunk_count: u64,
+) -> Result<LiveSummaryResult, String> {
+    let previous_summary_for_backend = previous_summary.clone();
+    let prompt = build_live_summary_prompt(transcript_text, previous_summary);
+
+    match summary_client::summarize_with_codex_app(
+        prompt.clone(),
+        FULL_SYSTEM_SUMMARY_SYSTEM_PROMPT.to_string(),
+    )
+    .await
+    {
+        Ok(summary) => {
+            return Ok(LiveSummaryResult {
+                summary,
+                provider_label: "Codex".to_string(),
+            });
+        }
+        Err(error) => summary_client::summarize_codex_unavailable(&error),
+    }
+
+    let settings = get_settings(app);
+    if let Some(provider) = openai_summary_provider(&settings) {
+        if let Some(api_key) = byok_secrets::load_openai_api_key(app, &settings)? {
+            let model = settings
+                .post_process_models
+                .get("openai")
+                .map(|model| model.trim())
+                .filter(|model| !model.is_empty())
+                .unwrap_or(FULL_SYSTEM_SUMMARY_MODEL_FALLBACK);
+            let summary = summary_client::summarize_with_provider(
+                &provider,
+                api_key,
+                model,
+                prompt.clone(),
+                FULL_SYSTEM_SUMMARY_SYSTEM_PROMPT,
+            )
+            .await?;
+
+            return Ok(LiveSummaryResult {
+                summary,
+                provider_label: "OpenAI BYOK".to_string(),
+            });
+        }
+    }
+
+    let install_token = ensure_backend_summary_install_token(app).await?;
+    let result = summary_client::summarize_with_backend(
+        &install_token,
+        transcript_text,
+        previous_summary_for_backend.as_deref(),
+        chunk_count,
+    )
+    .await?;
+
+    let mut settings = get_settings(app);
+    settings.anonymous_trial_state = result.trial_state;
+    settings.access_state = result.access_state;
+    settings.entitlement_state = result.entitlement_state;
+    write_settings(app, settings);
+
+    Ok(LiveSummaryResult {
+        summary: result.summary,
+        provider_label: "Uttr backend".to_string(),
+    })
+}
+
+fn friendly_live_summary_error(error: &str) -> String {
+    let lower = error.to_ascii_lowercase();
+
+    if lower.contains("insufficient_quota") || lower.contains("current quota") {
+        return "OpenAI quota is exhausted for the saved API key. Recording continues, but live summaries are paused for this session.".to_string();
+    }
+
+    if lower.contains("status 429") || lower.contains("too many requests") {
+        return "OpenAI is rate limiting live summaries. Recording continues, but live summaries are paused for this session.".to_string();
+    }
+
+    if lower.contains("status 401")
+        || lower.contains("invalid_api_key")
+        || lower.contains("incorrect api key")
+        || lower.contains("unauthorized")
+    {
+        return "The saved OpenAI API key was rejected. Recording continues, but live summaries are paused for this session.".to_string();
+    }
+
+    if lower.contains("status 403") || lower.contains("forbidden") {
+        return "The saved OpenAI API key does not have access to live summaries. Recording continues, but summaries are paused for this session.".to_string();
+    }
+
+    if lower.contains("api key") && lower.contains("settings") {
+        return error.to_string();
+    }
+
+    "OpenAI could not update the live summary. Recording continues.".to_string()
+}
+
+fn should_pause_live_summaries(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("insufficient_quota")
+        || lower.contains("current quota")
+        || lower.contains("status 429")
+        || lower.contains("too many requests")
+        || lower.contains("status 401")
+        || lower.contains("invalid_api_key")
+        || lower.contains("incorrect api key")
+        || lower.contains("unauthorized")
+        || lower.contains("status 403")
+        || lower.contains("forbidden")
+        || (lower.contains("api key") && lower.contains("settings"))
+}
+
+async fn transcribe_and_summarize_live_chunk(
+    app: &AppHandle,
+    runtime: &Arc<FullSystemLiveRuntime>,
+    tm: &Arc<TranscriptionManager>,
+    chunk_samples: Vec<f32>,
+    is_final_chunk: bool,
+    record_samples: bool,
+) {
+    if chunk_samples.is_empty() {
+        return;
+    }
+
+    if record_samples {
+        runtime
+            .recorded_samples
+            .lock()
+            .unwrap()
+            .extend_from_slice(&chunk_samples);
+    }
+
+    let chunk_index = runtime.chunk_count.load(Ordering::Relaxed) + 1;
+    emit_session_window_state(
+        app,
+        SessionWindowStatePayload {
+            stage: "transcribing".to_string(),
+            title: "Live session".to_string(),
+            subtitle: "Transcribing the latest audio chunk.".to_string(),
+            progress_label: if is_final_chunk {
+                "Transcribing final chunk".to_string()
+            } else {
+                format!("Transcribing chunk {}", chunk_index)
+            },
+            progress_value: 0.0,
+            summary_text: runtime.summary_text.lock().unwrap().clone(),
+            raw_transcript_text: None,
+            history_entry_id: None,
+        },
+    );
+
+    let transcription = match tm
+        .transcribe_with_source(chunk_samples, Some("full_system_audio"))
+        .await
+    {
+        Ok(text) => text,
+        Err(error) => {
+            warn!(
+                "Live full-system chunk {} transcription failed: {}",
+                chunk_index, error
+            );
+            *runtime.summary_error.lock().unwrap() = Some(format!(
+                "Live transcription failed for chunk {}: {}",
+                chunk_index, error
+            ));
+            emit_live_session_summary_state(
+                app,
+                runtime.chunk_count.load(Ordering::Relaxed),
+                runtime.summary_text.lock().unwrap().clone(),
+                runtime.summary_error.lock().unwrap().clone(),
+            );
+            return;
+        }
+    };
+
+    if !transcription.trim().is_empty() {
+        let transcript_so_far = {
+            let mut transcript = runtime.transcript_text.lock().unwrap();
+            append_live_text(&mut transcript, &transcription);
+            transcript.clone()
+        };
+
+        let completed_chunk = runtime.chunk_count.fetch_add(1, Ordering::Relaxed) + 1;
+        if runtime.summary_disabled.load(Ordering::Relaxed) {
+            emit_live_session_summary_state(
+                app,
+                completed_chunk,
+                runtime.summary_text.lock().unwrap().clone(),
+                runtime.summary_error.lock().unwrap().clone(),
+            );
+            return;
+        }
+
+        emit_session_window_state(
+            app,
+            SessionWindowStatePayload {
+                stage: "processing".to_string(),
+                title: "Live session".to_string(),
+                subtitle: "Updating the live summary.".to_string(),
+                progress_label: format!("Summarizing chunk {}", completed_chunk),
+                progress_value: 0.0,
+                summary_text: runtime.summary_text.lock().unwrap().clone(),
+                raw_transcript_text: None,
+                history_entry_id: None,
+            },
+        );
+
+        let previous_summary = runtime.summary_text.lock().unwrap().clone();
+        match summarize_live_session(app, &transcript_so_far, previous_summary, completed_chunk)
+            .await
+        {
+            Ok(result) => {
+                let summary = result.summary;
+                *runtime.summary_text.lock().unwrap() = Some(summary.clone());
+                *runtime.summary_provider.lock().unwrap() = Some(result.provider_label);
+                *runtime.summary_error.lock().unwrap() = None;
+                emit_live_session_summary_state(app, completed_chunk, Some(summary), None);
+            }
+            Err(error) => {
+                let message = friendly_live_summary_error(&error);
+                if should_pause_live_summaries(&error) {
+                    runtime.summary_disabled.store(true, Ordering::Relaxed);
+                }
+                *runtime.summary_error.lock().unwrap() = Some(message.clone());
+                emit_live_session_summary_state(
+                    app,
+                    completed_chunk,
+                    runtime.summary_text.lock().unwrap().clone(),
+                    Some(message),
+                );
+            }
+        }
+    }
+}
+
+fn start_full_system_live_session(app: &AppHandle, binding_id: &str) {
+    let runtime = Arc::new(FullSystemLiveRuntime::new());
+    let worker_runtime = Arc::clone(&runtime);
+    let worker_app = app.clone();
+    let worker_binding = binding_id.to_string();
+    let tm = Arc::clone(&app.state::<Arc<TranscriptionManager>>());
+    let full_system_audio = Arc::clone(&app.state::<Arc<FullSystemAudioSessionManager>>());
+
+    let worker_handle = tauri::async_runtime::spawn(async move {
+        let mut buffered = Vec::<f32>::new();
+
+        while !worker_runtime.stop_requested.load(Ordering::Relaxed) {
+            if let Some(delta) = full_system_audio.drain_session_delta(&worker_binding) {
+                if !delta.is_empty() {
+                    buffered.extend_from_slice(&delta);
+                }
+            }
+
+            while buffered.len() >= FULL_SYSTEM_LIVE_CHUNK_SAMPLES
+                && !worker_runtime.stop_requested.load(Ordering::Relaxed)
+            {
+                let chunk: Vec<f32> = buffered.drain(..FULL_SYSTEM_LIVE_CHUNK_SAMPLES).collect();
+                transcribe_and_summarize_live_chunk(
+                    &worker_app,
+                    &worker_runtime,
+                    &tm,
+                    chunk,
+                    false,
+                    true,
+                )
+                .await;
+            }
+
+            sleep(FULL_SYSTEM_LIVE_CHUNK_POLL_INTERVAL).await;
+        }
+
+        if !buffered.is_empty() {
+            worker_runtime
+                .pending_samples
+                .lock()
+                .unwrap()
+                .extend_from_slice(&buffered);
+        }
+    });
+
+    let mut guard = FULL_SYSTEM_LIVE_SESSION.lock().unwrap();
+    if let Some(previous) = guard.take() {
+        previous
+            .runtime
+            .stop_requested
+            .store(true, Ordering::Relaxed);
+        previous.worker_handle.abort();
+    }
+    *guard = Some(FullSystemLiveSession {
+        binding_id: binding_id.to_string(),
+        runtime,
+        worker_handle,
+    });
+}
+
+fn signal_full_system_live_session_stop(binding_id: &str) {
+    let guard = FULL_SYSTEM_LIVE_SESSION.lock().unwrap();
+    if let Some(session) = guard.as_ref() {
+        if session.binding_id == binding_id {
+            session
+                .runtime
+                .stop_requested
+                .store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+async fn finish_full_system_live_session(
+    app: &AppHandle,
+    binding_id: &str,
+    tail_samples: Option<Vec<f32>>,
+    tm: Arc<TranscriptionManager>,
+) -> Option<FullSystemLiveFinal> {
+    let session = {
+        let mut guard = FULL_SYSTEM_LIVE_SESSION.lock().unwrap();
+        let Some(session) = guard.take() else {
+            return None;
+        };
+        if session.binding_id != binding_id {
+            *guard = Some(session);
+            return None;
+        }
+        session
+    };
+
+    session
+        .runtime
+        .stop_requested
+        .store(true, Ordering::Relaxed);
+    if let Err(error) = session.worker_handle.await {
+        warn!("Live full-system worker join error: {}", error);
+    }
+
+    let mut final_samples = {
+        let mut pending = session.runtime.pending_samples.lock().unwrap();
+        std::mem::take(&mut *pending)
+    };
+    if let Some(tail_samples) = tail_samples.filter(|samples| !samples.is_empty()) {
+        final_samples.extend_from_slice(&tail_samples);
+    }
+    if !final_samples.is_empty() {
+        transcribe_and_summarize_live_chunk(app, &session.runtime, &tm, final_samples, true, true)
+            .await;
+    }
+
+    let transcript_text = session.runtime.transcript_text.lock().unwrap().clone();
+    let summary_text = session.runtime.summary_text.lock().unwrap().clone();
+    let summary_provider = session.runtime.summary_provider.lock().unwrap().clone();
+    let recorded_samples = session.runtime.recorded_samples.lock().unwrap().clone();
+    let chunk_count = session.runtime.chunk_count.load(Ordering::Relaxed);
+
+    if transcript_text.trim().is_empty() && recorded_samples.is_empty() {
+        return None;
+    }
+
+    Some(FullSystemLiveFinal {
+        transcript_text,
+        summary_text,
+        summary_provider,
+        recorded_samples,
+        chunk_count,
+    })
 }
 
 fn handle_transcription_stop(
@@ -979,9 +1548,14 @@ fn handle_transcription_stop(
         let has_incremental_progress =
             use_incremental && tm_for_worker.has_incremental_progress(&binding_id);
         if completion_mode == TranscriptionCompletionMode::FullSystemOverlay {
-            crate::overlay::update_full_system_progress_overlay(
+            emit_session_window_state(
                 &ah,
-                &full_system_progress_payload(FullSystemProgressStage::Transcribing, None, None),
+                session_window_state_payload(
+                    FullSystemProgressStage::Transcribing,
+                    None,
+                    None,
+                    None,
+                ),
             );
         }
 
@@ -1096,10 +1670,11 @@ fn handle_transcription_stop(
                     let settings = get_settings(&ah);
                     if post_process {
                         if completion_mode == TranscriptionCompletionMode::FullSystemOverlay {
-                            crate::overlay::update_full_system_progress_overlay(
+                            emit_session_window_state(
                                 &ah,
-                                &full_system_progress_payload(
+                                session_window_state_payload(
                                     FullSystemProgressStage::Processing,
+                                    None,
                                     None,
                                     None,
                                 ),
@@ -1122,15 +1697,17 @@ fn handle_transcription_stop(
                                 transcription.clone(),
                                 post_processed_text,
                                 post_process_prompt,
+                                "full_system_audio",
                             )
                             .await
                         {
                             Ok(history_entry_id) => {
-                                crate::overlay::update_full_system_progress_overlay(
+                                emit_session_window_state(
                                     &ah,
-                                    &full_system_progress_payload(
+                                    session_window_state_payload(
                                         FullSystemProgressStage::Complete,
-                                        Some(final_text),
+                                        None,
+                                        Some(transcription.clone()),
                                         Some(history_entry_id),
                                     ),
                                 );
@@ -1163,6 +1740,7 @@ fn handle_transcription_stop(
                                     transcription_for_history,
                                     post_processed_text,
                                     post_process_prompt,
+                                    "dictation",
                                 )
                                 .await
                             {
@@ -1552,6 +2130,9 @@ impl ShortcutAction for FullSystemTranscribeAction {
                 start_time.elapsed().as_millis()
             );
             if recording_started {
+                focus_workspace_window(app);
+                emit_active_session_window_state(app);
+                start_full_system_live_session(app, &binding_id);
                 show_recording_overlay(app);
                 log::info!(
                     "[latency] full-system overlay requested binding={} warming=false elapsed_ms={}",
@@ -1574,6 +2155,9 @@ impl ShortcutAction for FullSystemTranscribeAction {
                 .started
             {
                 recording_started = true;
+                focus_workspace_window(app);
+                emit_active_session_window_state(app);
+                start_full_system_live_session(app, &binding_id);
                 show_recording_overlay(app);
                 log::info!(
                     "[latency] full-system overlay requested binding={} warming=false elapsed_ms={}",
@@ -1649,13 +2233,15 @@ impl ShortcutAction for FullSystemTranscribeAction {
         let post_process = self.post_process || get_settings(app).post_process_enabled;
 
         change_tray_icon(app, TrayIconState::Transcribing);
-        crate::overlay::show_full_system_progress_overlay(
+        utils::hide_recording_overlay(app);
+        emit_session_window_state(
             app,
-            &full_system_progress_payload(FullSystemProgressStage::Preparing, None, None),
+            session_window_state_payload(FullSystemProgressStage::Preparing, None, None, None),
         );
         rm.remove_mute();
         play_feedback_sound(app, SoundType::Stop);
 
+        signal_full_system_live_session_stop(binding_id);
         let stop_result: FullSystemSessionStopResult = full_system_audio.stop_session();
         log::info!(
             "[latency] full-system samples retrieved binding={} sample_count={} elapsed_ms={}",
@@ -1667,17 +2253,99 @@ impl ShortcutAction for FullSystemTranscribeAction {
                 .unwrap_or(0),
             stop_time.elapsed().as_millis()
         );
-        handle_transcription_stop(
-            app,
-            binding_id,
-            stop_result.transcription_samples,
-            None,
-            post_process,
-            false,
-            TranscriptionCompletionMode::FullSystemOverlay,
-            tm,
-            hm,
-        );
+
+        let live_tail_samples = stop_result.transcription_samples;
+        let live_app = app.clone();
+        let live_binding_id = binding_id.to_string();
+        let live_tm = Arc::clone(&tm);
+        let live_hm = Arc::clone(&hm);
+        tauri::async_runtime::spawn(async move {
+            let _finish_guard = FinishGuard(live_app.clone());
+            let mut ui_guard = UiResetGuard::new(live_app.clone());
+            let fallback_samples = live_tail_samples.clone();
+            if let Some(live_final) = finish_full_system_live_session(
+                &live_app,
+                &live_binding_id,
+                live_tail_samples,
+                Arc::clone(&live_tm),
+            )
+            .await
+            {
+                if live_final.transcript_text.trim().is_empty() {
+                    debug!("Live full-system session stopped without transcript text");
+                    emit_session_window_state(
+                        &live_app,
+                        session_window_state_payload(
+                            FullSystemProgressStage::Complete,
+                            Some("No transcript was captured for this session.".to_string()),
+                            None,
+                            None,
+                        ),
+                    );
+                    change_tray_icon(&live_app, TrayIconState::Idle);
+                    ui_guard.suppress();
+                    return;
+                }
+
+                match live_hm
+                    .save_transcription(
+                        live_final.recorded_samples,
+                        live_final.transcript_text.clone(),
+                        live_final.summary_text.clone(),
+                        Some(format!(
+                            "Live session summary via {} after {} chunk(s)",
+                            live_final
+                                .summary_provider
+                                .clone()
+                                .unwrap_or_else(|| "live summary".to_string()),
+                            live_final.chunk_count
+                        )),
+                        "full_system_audio",
+                    )
+                    .await
+                {
+                    Ok(history_entry_id) => {
+                        emit_session_window_state(
+                            &live_app,
+                            session_window_state_payload(
+                                FullSystemProgressStage::Complete,
+                                live_final.summary_text.clone(),
+                                Some(live_final.transcript_text.clone()),
+                                Some(history_entry_id),
+                            ),
+                        );
+                    }
+                    Err(error) => {
+                        warn!("Failed to save live full-system session: {}", error);
+                        emit_session_window_state(
+                            &live_app,
+                            session_window_state_payload(
+                                FullSystemProgressStage::Complete,
+                                Some(format!("Session could not be saved: {}", error)),
+                                Some(live_final.transcript_text.clone()),
+                                None,
+                            ),
+                        );
+                    }
+                }
+                change_tray_icon(&live_app, TrayIconState::Idle);
+                ui_guard.suppress();
+                return;
+            }
+
+            drop(ui_guard);
+            handle_transcription_stop(
+                &live_app,
+                &live_binding_id,
+                fallback_samples,
+                None,
+                post_process,
+                false,
+                TranscriptionCompletionMode::FullSystemOverlay,
+                live_tm,
+                live_hm,
+            );
+        });
 
         debug!(
             "FullSystemTranscribeAction::stop completed in {:?}",
@@ -1799,11 +2467,12 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
-        clean_post_process_response, is_effectively_silent_audio, is_supported_post_process_model,
-        select_preferred_groq_model, should_refresh_microphone_stream_after_suspected_no_input,
-        toggle_post_process_enabled, transcription_timeout_for_samples,
-        transcription_watchdog_delay, usable_post_processed_text, TranscriptionCompletionMode,
-        ACTION_MAP, FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT,
+        clean_post_process_response, friendly_live_summary_error, is_effectively_silent_audio,
+        is_supported_post_process_model, select_preferred_groq_model, should_pause_live_summaries,
+        should_refresh_microphone_stream_after_suspected_no_input, toggle_post_process_enabled,
+        transcription_timeout_for_samples, transcription_watchdog_delay,
+        usable_post_processed_text, TranscriptionCompletionMode, ACTION_MAP,
+        FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT,
     };
     use crate::settings::get_default_settings;
 
@@ -1859,6 +2528,27 @@ mod tests {
         let long_timeout = transcription_timeout_for_samples(16_000 * 60 * 31);
         let long_watchdog = transcription_watchdog_delay(16_000 * 60 * 31);
         assert!(long_watchdog > long_timeout);
+    }
+
+    #[test]
+    fn live_summary_quota_errors_are_user_facing() {
+        let raw = r#"API request failed with status 429 Too Many Requests: {
+          "error": {
+            "message": "You exceeded your current quota, please check your plan and billing details.",
+            "type": "insufficient_quota",
+            "code": "insufficient_quota"
+          }
+        }"#;
+
+        let friendly = friendly_live_summary_error(raw);
+
+        assert_eq!(
+            friendly,
+            "OpenAI quota is exhausted for the saved API key. Recording continues, but live summaries are paused for this session."
+        );
+        assert!(should_pause_live_summaries(raw));
+        assert!(!friendly.contains('{'));
+        assert!(!friendly.contains("insufficient_quota"));
     }
 
     #[test]

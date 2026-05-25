@@ -261,9 +261,6 @@ export const ModelsSettings: React.FC = () => {
     <div className="mx-auto w-full max-w-3xl space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="space-y-2">
-          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-text/34">
-            {t("settings.models.eyebrow", { defaultValue: "Model library" })}
-          </p>
           <h1 className="text-[28px] font-semibold tracking-tight text-text">
             {t("settings.models.title")}
           </h1>

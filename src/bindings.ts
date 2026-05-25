@@ -702,6 +702,22 @@ async getFullSystemAudioReadinessStatus() : Promise<FullSystemAudioReadinessStat
 async setRecordFullSystemAudioEnabled(enabled: boolean) : Promise<FullSystemAudioToggleResult> {
     return await TAURI_INVOKE("set_record_full_system_audio_enabled", { enabled });
 },
+async startFullSystemAudioSession() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("start_full_system_audio_session") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
+async stopFullSystemAudioSession() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("stop_full_system_audio_session") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async setClamshellMicrophone(deviceName: string) : Promise<Result<null, string>> {
     try {
     return { status: "ok", data: await TAURI_INVOKE("set_clamshell_microphone", { deviceName }) };
@@ -846,7 +862,7 @@ export type FileTranscriptionResult = { file_name: string; transcription_text: s
 export type FullSystemAudioReadinessStatus = { supported: boolean; ready: boolean; screen_recording_permission_granted: boolean | null; reason: string | null }
 export type FullSystemAudioSupportStatus = { supported: boolean; reason: string | null }
 export type FullSystemAudioToggleResult = { requested_enabled: boolean; stored_enabled: boolean; support: FullSystemAudioSupportStatus; readiness: FullSystemAudioReadinessStatus; error: string | null }
-export type HistoryEntry = { id: number; file_name: string; timestamp: number; saved: boolean; title: string; transcription_text: string; post_processed_text: string | null; post_process_prompt: string | null }
+export type HistoryEntry = { id: number; file_name: string; timestamp: number; saved: boolean; title: string; transcription_text: string; post_processed_text: string | null; post_process_prompt: string | null; recording_source: string }
 /**
  * Result of changing keyboard implementation
  */

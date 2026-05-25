@@ -1,5 +1,4 @@
-import { emit, listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./RecordingOverlay.css";
 import i18n, { syncLanguageFromSettings } from "@/i18n";
@@ -11,25 +10,8 @@ type OverlayState =
   | "recording"
   | "trial_ended"
   | "transcribing"
-  | "processing"
-  | "full_system_progress";
+  | "processing";
 type OverlayAlertKind = "no_input" | "trial_ended";
-type FullSystemProgressStage =
-  | "preparing"
-  | "transcribing"
-  | "processing"
-  | "complete";
-
-interface FullSystemProgressPayload {
-  stage: FullSystemProgressStage;
-  title: string;
-  subtitle: string;
-  progressLabel: string;
-  progressValue: number;
-  footerNote: string;
-  transcriptText?: string | null;
-  historyEntryId?: number | null;
-}
 
 const INPUT_ATTACK_SMOOTHING_KEEP = 0.18;
 const INPUT_ATTACK_SMOOTHING_NEW = 0.82;
@@ -88,9 +70,6 @@ const RecordingOverlay: React.FC = () => {
     null,
   );
   const [hasDetectedSpeech, setHasDetectedSpeech] = useState(false);
-  const [fullSystemProgress, setFullSystemProgress] =
-    useState<FullSystemProgressPayload | null>(null);
-  const [overlayActionPending, setOverlayActionPending] = useState(false);
   const waveContainerRef = useRef<HTMLDivElement | null>(null);
   const siriWaveRef = useRef<SiriWave | null>(null);
   const smoothedLevelsRef = useRef<number[]>(Array(16).fill(0));
@@ -105,7 +84,6 @@ const RecordingOverlay: React.FC = () => {
   const isRecordingState = state === "recording";
   const isWarmingState = state === "warming";
   const isProcessingState = state === "transcribing" || state === "processing";
-  const isFullSystemProgressState = state === "full_system_progress";
   const shouldShowOverlayAlert = overlayAlert !== null;
   const shouldShowWarmingPane = isWarmingState && !shouldShowOverlayAlert;
 
@@ -135,10 +113,6 @@ const RecordingOverlay: React.FC = () => {
         setLevels(Array(16).fill(0));
         setOverlayAlert(overlayState === "trial_ended" ? "trial_ended" : null);
         setHasDetectedSpeech(false);
-        setOverlayActionPending(false);
-        if (overlayState !== "full_system_progress") {
-          setFullSystemProgress(null);
-        }
         lastSpeechEnergyRef.current = 0;
         quietSinceRef.current = null;
         setIsVisible(true);
@@ -154,8 +128,6 @@ const RecordingOverlay: React.FC = () => {
         lastHideAtRef.current = Date.now();
         setOverlayAlert(null);
         setHasDetectedSpeech(false);
-        setFullSystemProgress(null);
-        setOverlayActionPending(false);
         lastSpeechEnergyRef.current = 0;
         quietSinceRef.current = null;
         setIsVisible(false);
@@ -168,19 +140,6 @@ const RecordingOverlay: React.FC = () => {
           setIsVisible(true);
         },
       );
-
-      const unlistenFullSystemProgress =
-        await listen<FullSystemProgressPayload>(
-          "overlay-full-system-progress",
-          (event) => {
-            isVisibleRef.current = true;
-            setOverlayAlert(null);
-            setOverlayActionPending(false);
-            setState("full_system_progress");
-            setFullSystemProgress(event.payload);
-            setIsVisible(true);
-          },
-        );
 
       // Listen for mic-level updates
       const unlistenLevel = await listen<number[]>("mic-level", (event) => {
@@ -288,7 +247,6 @@ const RecordingOverlay: React.FC = () => {
         unlistenShow();
         unlistenHide();
         unlistenAlert();
-        unlistenFullSystemProgress();
         unlistenLevel();
         return;
       }
@@ -297,7 +255,6 @@ const RecordingOverlay: React.FC = () => {
         unlistenShow,
         unlistenHide,
         unlistenAlert,
-        unlistenFullSystemProgress,
         unlistenLevel,
       );
     };
@@ -429,53 +386,6 @@ const RecordingOverlay: React.FC = () => {
     );
   }, [hasDetectedSpeech, waveEnergy]);
 
-  const handleCopyTranscript = async () => {
-    if (!fullSystemProgress?.transcriptText || overlayActionPending) {
-      return;
-    }
-
-    try {
-      setOverlayActionPending(true);
-      await navigator.clipboard.writeText(fullSystemProgress.transcriptText);
-      await invoke("dismiss_overlay");
-    } catch (error) {
-      console.error("Failed to copy full-system transcript:", error);
-      setOverlayActionPending(false);
-    }
-  };
-
-  const handleViewHistoryEntry = async () => {
-    if (overlayActionPending) {
-      return;
-    }
-
-    try {
-      setOverlayActionPending(true);
-      await emit("show-history-entry", {
-        entryId: fullSystemProgress?.historyEntryId ?? null,
-      });
-      await invoke("show_main_window");
-      await invoke("dismiss_overlay");
-    } catch (error) {
-      console.error("Failed to open history entry:", error);
-      setOverlayActionPending(false);
-    }
-  };
-
-  const handleDismissOverlay = async () => {
-    if (overlayActionPending) {
-      return;
-    }
-
-    try {
-      setOverlayActionPending(true);
-      await invoke("dismiss_overlay");
-    } catch (error) {
-      console.error("Failed to dismiss overlay:", error);
-      setOverlayActionPending(false);
-    }
-  };
-
   useEffect(() => {
     if (!isVisible) {
       return;
@@ -567,92 +477,6 @@ const RecordingOverlay: React.FC = () => {
   const warmingTitle = i18n.t("overlay.warmingMic", {
     defaultValue: "Warming mic...",
   });
-  const fullSystemEyebrow = i18n.t("overlay.fullSystemEyebrow", {
-    defaultValue: "Full system",
-  });
-  const progressPercent = Math.round(
-    (fullSystemProgress?.progressValue ?? 0) * 100,
-  );
-
-  if (isFullSystemProgressState && fullSystemProgress) {
-    return (
-      <div
-        dir={direction}
-        className={`recording-overlay recording-overlay-full-system ${isVisible ? "fade-in" : ""}`}
-      >
-        <div className="overlay-progress-card" role="status" aria-live="polite">
-          <div className="overlay-progress-status-row">
-            <div className="overlay-progress-eyebrow">{fullSystemEyebrow}</div>
-          </div>
-          <div className="overlay-progress-headline">
-            <div className="overlay-progress-headline-top">
-              <div className="overlay-progress-headline-title">
-                <h1>{fullSystemProgress.title}</h1>
-              </div>
-              {fullSystemProgress.stage === "complete" && (
-                <div className="overlay-progress-actions">
-                  <button
-                    type="button"
-                    className="overlay-progress-button overlay-progress-button-primary"
-                    onClick={handleCopyTranscript}
-                    disabled={
-                      overlayActionPending || !fullSystemProgress.transcriptText
-                    }
-                  >
-                    {i18n.t("overlay.fullSystemProgress.copy", {
-                      defaultValue: "Copy",
-                    })}
-                  </button>
-                  <button
-                    type="button"
-                    className="overlay-progress-button"
-                    onClick={handleViewHistoryEntry}
-                    disabled={overlayActionPending}
-                  >
-                    {i18n.t("overlay.fullSystemProgress.view", {
-                      defaultValue: "View",
-                    })}
-                  </button>
-                  <button
-                    type="button"
-                    className="overlay-progress-button overlay-progress-button-ghost"
-                    onClick={handleDismissOverlay}
-                    disabled={overlayActionPending}
-                  >
-                    {i18n.t("overlay.fullSystemProgress.exit", {
-                      defaultValue: "Exit",
-                    })}
-                  </button>
-                </div>
-              )}
-            </div>
-            <p>{fullSystemProgress.subtitle}</p>
-          </div>
-          <div className="overlay-progress-meter">
-            <div className="overlay-progress-meter-topline">
-              <div className="overlay-progress-meter-label">
-                {fullSystemProgress.progressLabel}
-              </div>
-              <div className="overlay-progress-meter-value">
-                {progressPercent}%
-              </div>
-            </div>
-            <div className="overlay-progress-track" aria-hidden>
-              <div
-                className="overlay-progress-fill"
-                style={{ width: `${progressPercent}%` }}
-              />
-            </div>
-          </div>
-          <div className="overlay-progress-footer">
-            <span className="overlay-progress-pulse" aria-hidden />
-            <span>{fullSystemProgress.footerNote}</span>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div
       dir={direction}

@@ -73,6 +73,17 @@ public func uttrFullSystemAudioStopCapture() -> UttrFullSystemAudioStopResult {
     )
 }
 
+@_cdecl("uttr_full_system_audio_drain_capture")
+public func uttrFullSystemAudioDrainCapture() -> UttrFullSystemAudioStopResult {
+    return makeStopResult(
+        stopped: 0,
+        sampleRate: 0,
+        channelCount: 0,
+        frameCount: 0,
+        pcm: makeEmptyPcmBuffer()
+    )
+}
+
 @_cdecl("uttr_full_system_audio_cancel_capture")
 public func uttrFullSystemAudioCancelCapture() {}
 

@@ -1,27 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getVersion } from "@tauri-apps/api/app";
-import {
-  FlaskConical,
-  History,
-  Cpu,
-  AudioLines,
-  FileAudio,
-  KeyRound,
-} from "lucide-react";
+import { History, Home, FileAudio, Settings } from "lucide-react";
 import { useSettings } from "../hooks/useSettings";
-import {
-  GeneralSettings,
-  HistorySettings,
-  DebugSettings,
-  ModelsSettings,
-  ApiKeysSettings,
-  FileTranscriptionSettings,
-} from "./settings";
 import UpdateChecker from "./update-checker";
 import { ManageSubscriptionButton } from "./settings/ManageSubscriptionButton";
 import { UpgradeButton } from "./settings/UpgradeButton";
-import { shouldShowModelControls } from "@/lib/utils/premiumFeatures";
 
 export type SidebarSection = keyof typeof SECTIONS_CONFIG;
 
@@ -37,47 +21,33 @@ interface SectionConfig {
   labelKey: string;
   defaultLabel?: string;
   icon: React.ComponentType<IconProps>;
-  component: React.ComponentType;
   enabled: (settings: any) => boolean;
 }
 
 export const SECTIONS_CONFIG = {
-  general: {
-    labelKey: "sidebar.general",
-    icon: AudioLines,
-    component: GeneralSettings,
+  home: {
+    labelKey: "sidebar.home",
+    defaultLabel: "Home",
+    icon: Home,
     enabled: () => true,
   },
-  models: {
-    labelKey: "sidebar.models",
-    icon: Cpu,
-    component: ModelsSettings,
-    enabled: () => true,
-  },
-  apiKeys: {
-    labelKey: "sidebar.apiKeys",
-    icon: KeyRound,
-    component: ApiKeysSettings,
+  files: {
+    labelKey: "sidebar.files",
+    defaultLabel: "Files",
+    icon: FileAudio,
     enabled: () => true,
   },
   history: {
     labelKey: "sidebar.history",
+    defaultLabel: "History",
     icon: History,
-    component: HistorySettings,
     enabled: () => true,
   },
-  fileTranscription: {
-    labelKey: "sidebar.fileTranscription",
-    defaultLabel: "File Transcription",
-    icon: FileAudio,
-    component: FileTranscriptionSettings,
+  settings: {
+    labelKey: "sidebar.settings",
+    defaultLabel: "Settings",
+    icon: Settings,
     enabled: () => true,
-  },
-  debug: {
-    labelKey: "sidebar.debug",
-    icon: FlaskConical,
-    component: DebugSettings,
-    enabled: (settings) => settings?.debug_mode ?? false,
   },
 } as const satisfies Record<string, SectionConfig>;
 
@@ -91,11 +61,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSectionChange,
 }) => {
   const { t } = useTranslation();
-  const { settings, installAccess } = useSettings();
+  const { installAccess } = useSettings();
   const [version, setVersion] = useState("");
   const versionTapCountRef = useRef(0);
   const versionTapTimerRef = useRef<number | null>(null);
-  const showModelControls = shouldShowModelControls(installAccess);
+  const showAccountControls = installAccess !== null;
 
   useEffect(() => {
     const fetchVersion = async () => {
@@ -133,18 +103,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
         versionTapTimerRef.current = null;
       }
       versionTapCountRef.current = 0;
-      onSectionChange("apiKeys");
+      onSectionChange("settings");
     }
   };
 
   const availableSections = Object.entries(SECTIONS_CONFIG)
-    .filter(([id, config]) => {
-      if (id === "models" && !showModelControls) {
-        return false;
-      }
-
-      return config.enabled(settings);
-    })
+    .filter(([, config]) => config.enabled())
     .map(([id, config]) => ({ id: id as SidebarSection, ...config }));
 
   return (
@@ -200,8 +164,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
       <div className="mt-4 shrink-0 border-t border-white/6 px-2 pt-4">
         <div className="flex flex-col gap-1.5 text-xs text-text/48">
-          <UpgradeButton />
-          <ManageSubscriptionButton />
+          {showAccountControls && <UpgradeButton />}
+          {showAccountControls && <ManageSubscriptionButton />}
           <UpdateChecker className="min-w-0" />
           <button
             type="button"
