@@ -23,6 +23,10 @@ export const GeneralSettings: React.FC = () => {
   const { getSetting, updateSetting, isUpdating } = useSettings();
   const postProcessEnabled = getSetting("post_process_enabled") || false;
   const editModeEnabled = Boolean(getSetting("edit_mode_enabled"));
+  const postProcessPromptPreset =
+    (getSetting("post_process_cleaning_prompt_preset") as string | undefined) ??
+    "strict";
+  const usesCustomPrompt = postProcessPromptPreset === "custom";
   const showByokSettings = Boolean(
     getSetting("byok_enabled") || getSetting("debug_mode"),
   );
@@ -60,7 +64,7 @@ export const GeneralSettings: React.FC = () => {
           descriptionMode="tooltip"
           grouped={true}
         />
-        {postProcessEnabled && showByokSettings && (
+        {postProcessEnabled && showByokSettings && usesCustomPrompt && (
           <PostProcessingSettingsApi />
         )}
         {postProcessEnabled && <PostProcessingSettingsAdvanced />}

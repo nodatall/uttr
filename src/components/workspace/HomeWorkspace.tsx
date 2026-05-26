@@ -42,6 +42,9 @@ const isLiveSession = (stage: SessionWindowStage) =>
   stage === "transcribing" ||
   stage === "processing";
 
+const isSessionProcessing = (stage: SessionWindowStage) =>
+  stage === "preparing" || stage === "transcribing" || stage === "processing";
+
 export const HomeWorkspace: React.FC<HomeWorkspaceProps> = ({
   sessionState,
 }) => {
@@ -50,6 +53,8 @@ export const HomeWorkspace: React.FC<HomeWorkspaceProps> = ({
   const [isStopping, setIsStopping] = useState(false);
   const [isTranscriptModalOpen, setIsTranscriptModalOpen] = useState(false);
   const live = isLiveSession(sessionState.stage);
+  const recording = sessionState.stage === "active";
+  const processing = isSessionProcessing(sessionState.stage);
   const complete = sessionState.stage === "complete";
   const progress = Math.max(0, Math.min(100, sessionState.progressValue * 100));
   const rawTranscript = sessionState.rawTranscriptText?.trim() ?? "";
@@ -160,7 +165,7 @@ export const HomeWorkspace: React.FC<HomeWorkspaceProps> = ({
           </div>
         )}
         <div className="flex flex-wrap gap-2">
-          {live ? (
+          {recording ? (
             <Button
               type="button"
               variant="danger"
@@ -173,6 +178,20 @@ export const HomeWorkspace: React.FC<HomeWorkspaceProps> = ({
                 {isStopping
                   ? t("workspace.home.stopping", { defaultValue: "Stopping" })
                   : t("workspace.home.stop", { defaultValue: "Stop" })}
+              </span>
+            </Button>
+          ) : processing ? (
+            <Button
+              type="button"
+              variant="secondary"
+              disabled
+              className="flex items-center gap-2 rounded-full"
+            >
+              <Activity className="h-4 w-4" />
+              <span>
+                {t("workspace.home.processing", {
+                  defaultValue: "Processing",
+                })}
               </span>
             </Button>
           ) : (
@@ -232,11 +251,15 @@ export const HomeWorkspace: React.FC<HomeWorkspaceProps> = ({
                     {sessionState.progressLabel}
                   </p>
                   <p className="text-sm font-medium tabular-nums text-logo-primary">
-                    {live
+                    {recording
                       ? t("workspace.home.recording", {
                           defaultValue: "Recording",
                         })
-                      : `${Math.round(progress)}%`}
+                      : processing
+                        ? t("workspace.home.processing", {
+                            defaultValue: "Processing",
+                          })
+                        : `${Math.round(progress)}%`}
                   </p>
                 </div>
                 <div className="h-2 w-full overflow-hidden rounded-full bg-white/8">

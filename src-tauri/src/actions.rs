@@ -17,7 +17,7 @@ use crate::managers::transcription::TranscriptionManager;
 use crate::settings::{
     get_settings, normalize_custom_vocabulary_terms, write_settings, AppSettings,
     CleaningPromptPreset, PostProcessProvider, APPLE_INTELLIGENCE_PROVIDER_ID,
-    NUANCED_CLEANING_PROMPT, STRICT_CLEANING_PROMPT,
+    STRICT_CLEANING_PROMPT,
 };
 use crate::shortcut;
 use crate::summary_client;
@@ -218,7 +218,7 @@ const GROQ_MODEL_PREFERENCES: &[&str] = &[
 const FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT: Duration = Duration::from_secs(45);
 const FULL_PASS_TRANSCRIPTION_TIMEOUT_PER_TEN_MINUTES: Duration = Duration::from_secs(60);
 const FULL_PASS_TRANSCRIPTION_WATCHDOG_GRACE: Duration = Duration::from_secs(15);
-const POST_PROCESS_TIMEOUT_DEFAULT: Duration = Duration::from_secs(60);
+const POST_PROCESS_TIMEOUT_DEFAULT: Duration = Duration::from_secs(20);
 const SHORT_UTTERANCE_SAMPLES: usize = 16_000 * 10;
 
 static AUTO_SELECTED_MODEL_CACHE: Lazy<Mutex<HashMap<String, String>>> =
@@ -676,8 +676,9 @@ fn resolved_post_process_system_prompt(
     context: Option<&AppContextSnapshot>,
 ) -> Option<String> {
     let base = match settings.post_process_cleaning_prompt_preset {
-        CleaningPromptPreset::Strict => Some(STRICT_CLEANING_PROMPT.to_string()),
-        CleaningPromptPreset::Nuanced => Some(NUANCED_CLEANING_PROMPT.to_string()),
+        CleaningPromptPreset::Strict | CleaningPromptPreset::Nuanced => {
+            Some(STRICT_CLEANING_PROMPT.to_string())
+        }
         CleaningPromptPreset::Custom => {
             if settings.post_process_system_prompt.trim().is_empty() {
                 None

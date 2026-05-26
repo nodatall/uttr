@@ -13,6 +13,12 @@ struct ChatMessage {
 struct ChatCompletionRequest {
     model: String,
     messages: Vec<ChatMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_completion_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    include_reasoning: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,6 +82,10 @@ fn create_client(provider: &PostProcessProvider, api_key: &str) -> Result<reqwes
         .map_err(|e| format!("Failed to build HTTP client: {}", e))
 }
 
+fn uses_fast_groq_post_process_defaults(provider: &PostProcessProvider, model: &str) -> bool {
+    provider.id == "groq" && model == "openai/gpt-oss-20b"
+}
+
 /// Send a chat completion request to an OpenAI-compatible API
 /// Returns Ok(Some(content)) on success, Ok(None) if response has no content,
 /// or Err on actual errors (HTTP, parsing, etc.)
@@ -107,9 +117,13 @@ pub async fn send_chat_completion(
         content: prompt,
     });
 
+    let uses_fast_groq_default = uses_fast_groq_post_process_defaults(provider, model);
     let request_body = ChatCompletionRequest {
         model: model.to_string(),
         messages,
+        max_completion_tokens: uses_fast_groq_default.then_some(4096),
+        reasoning_effort: uses_fast_groq_default.then_some("low"),
+        include_reasoning: uses_fast_groq_default.then_some(false),
     };
 
     let response = client
@@ -140,6 +154,37 @@ pub async fn send_chat_completion(
         .choices
         .first()
         .and_then(|choice| choice.message.content.clone()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn provider(id: &str) -> PostProcessProvider {
+        PostProcessProvider {
+            id: id.to_string(),
+            label: id.to_string(),
+            base_url: "https://example.com/v1".to_string(),
+            allow_base_url_edit: false,
+            models_endpoint: Some("/models".to_string()),
+        }
+    }
+
+    #[test]
+    fn fast_groq_defaults_only_apply_to_gpt_oss_20b() {
+        assert!(uses_fast_groq_post_process_defaults(
+            &provider("groq"),
+            "openai/gpt-oss-20b"
+        ));
+        assert!(!uses_fast_groq_post_process_defaults(
+            &provider("groq"),
+            "llama-3.3-70b-versatile"
+        ));
+        assert!(!uses_fast_groq_post_process_defaults(
+            &provider("openai"),
+            "openai/gpt-oss-20b"
+        ));
+    }
 }
 
 /// Fetch available models from an OpenAI-compatible API
