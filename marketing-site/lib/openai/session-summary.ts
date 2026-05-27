@@ -16,23 +16,51 @@ interface OpenAiChatCompletionResponse {
   }>;
 }
 
-function buildSummaryPrompt(input: SessionSummaryInput) {
+export const SESSION_SUMMARY_SYSTEM_PROMPT =
+  "You are the live meeting summarizer inside Uttr, a macOS transcription app. Update meeting notes from transcript text only. Return valid JSON only.";
+
+export function buildSummaryPrompt(input: SessionSummaryInput) {
   const previous = input.previousSummary?.trim() || "No previous summary yet.";
 
-  return `Update the live session summary from the transcript so far.
+  return `Update the live meeting summary incrementally.
 
-Previous summary:
+Rules:
+- Use only facts supported by the transcript.
+- Do not invent decisions, tasks, names, deadlines, or speakers.
+- Preserve useful existing information.
+- Merge duplicates.
+- If a task has no owner, use "Unassigned".
+- If a task has no deadline, use "No deadline".
+- Keep all text concise for a desktop meeting UI.
+
+Previous rendered summary:
 ${previous}
 
 Transcript so far:
 ${input.transcriptText}
 
-Return concise markdown with:
-- Summary
-- Action items
-- Notable points
+Return valid JSON only. Do not include markdown, code fences, commentary, or extra fields.
 
-Do not invent details that are not in the transcript.`;
+Use exactly this shape:
+{
+  "current_gist": "one to three concise sentences",
+  "key_points": [
+    { "text": "important discussion point" }
+  ],
+  "action_items": [
+    {
+      "task": "specific task",
+      "owner": "owner name or Unassigned",
+      "deadline": "deadline or No deadline",
+      "status": "Open"
+    }
+  ],
+  "timeline": [
+    { "time": "chunk or timestamp", "event": "brief event or topic change" }
+  ]
+}
+
+Rendered sections must map only to: Current gist, Key points, Action items, Timeline.`;
 }
 
 function extractAssistantText(payload: OpenAiChatCompletionResponse) {
@@ -72,8 +100,7 @@ export async function summarizeSessionWithOpenAi(input: SessionSummaryInput) {
         messages: [
           {
             role: "system",
-            content:
-              "You summarize live desktop audio sessions. Be concise, concrete, and faithful to the transcript.",
+            content: SESSION_SUMMARY_SYSTEM_PROMPT,
           },
           {
             role: "user",

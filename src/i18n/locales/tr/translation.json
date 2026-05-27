@@ -503,7 +503,7 @@
         "description": "Dizüstü bilgisayar kapağı kapalıyken kullanılacak mikrofon"
       },
       "postProcessingToggle": {
-        "label": "AI Cleanup",
+        "label": "Post Processing",
         "description": "Use AI for context-aware text refinement after transcription"
       },
       "muteWhileRecording": {

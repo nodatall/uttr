@@ -475,7 +475,7 @@
         "description": "الميكروفون المراد استخدامه عندما يكون غطاء المحمول مغلقاً"
       },
       "postProcessingToggle": {
-        "label": "AI Cleanup",
+        "label": "Post Processing",
         "description": "Use AI for context-aware text refinement after transcription"
       },
       "muteWhileRecording": {

@@ -503,7 +503,7 @@
         "description": "Microfono da usare quando il portatile è chiuso"
       },
       "postProcessingToggle": {
-        "label": "AI Cleanup",
+        "label": "Post Processing",
         "description": "Use AI for context-aware text refinement after transcription"
       },
       "muteWhileRecording": {

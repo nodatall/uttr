@@ -503,7 +503,7 @@
         "description": "Mikrofon, který se použije při zavřeném víku notebooku"
       },
       "postProcessingToggle": {
-        "label": "AI Cleanup",
+        "label": "Post Processing",
         "description": "Use AI for context-aware text refinement after transcription"
       },
       "muteWhileRecording": {

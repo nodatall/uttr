@@ -503,7 +503,7 @@
         "description": "笔记本电脑盖子关闭时使用的麦克风"
       },
       "postProcessingToggle": {
-        "label": "AI Cleanup",
+        "label": "Post Processing",
         "description": "Use AI for context-aware text refinement after transcription"
       },
       "muteWhileRecording": {

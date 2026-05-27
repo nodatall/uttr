@@ -503,7 +503,7 @@
         "description": "노트북 덮개가 닫혀 있을 때 사용할 마이크"
       },
       "postProcessingToggle": {
-        "label": "AI Cleanup",
+        "label": "Post Processing",
         "description": "Use AI for context-aware text refinement after transcription"
       },
       "muteWhileRecording": {

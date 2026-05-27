@@ -503,7 +503,7 @@
         "description": "Мікрофон для використання при закритій кришці ноутбука"
       },
       "postProcessingToggle": {
-        "label": "AI Cleanup",
+        "label": "Post Processing",
         "description": "Use AI for context-aware text refinement after transcription"
       },
       "muteWhileRecording": {

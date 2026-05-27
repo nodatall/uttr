@@ -30,7 +30,7 @@ use crate::TranscriptionCoordinator;
 use ferrous_opencc::{config::BuiltinConfig, OpenCC};
 use log::{debug, error, warn};
 use once_cell::sync::Lazy;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
@@ -50,9 +50,11 @@ const RELEASE_SMOKE_TRANSCRIBING_HOLD_MS_DEFAULT: u64 = 1_500;
 const FULL_SYSTEM_LIVE_CHUNK_SECONDS: usize = 10;
 const FULL_SYSTEM_LIVE_CHUNK_SAMPLES: usize = 16_000 * FULL_SYSTEM_LIVE_CHUNK_SECONDS;
 const FULL_SYSTEM_LIVE_CHUNK_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const FULL_SYSTEM_LIVE_SUMMARY_SECONDS: usize = 60;
+const FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL: u64 =
+    (FULL_SYSTEM_LIVE_SUMMARY_SECONDS / FULL_SYSTEM_LIVE_CHUNK_SECONDS) as u64;
 const FULL_SYSTEM_SUMMARY_MODEL_FALLBACK: &str = "gpt-4o-mini";
-const FULL_SYSTEM_SUMMARY_SYSTEM_PROMPT: &str =
-    "You summarize live desktop audio sessions. Be concise, concrete, and faithful to the transcript.";
+const FULL_SYSTEM_SUMMARY_SYSTEM_PROMPT: &str = "You are the live meeting summarizer inside Uttr, a macOS transcription app. Update meeting notes from transcript text only. Return valid JSON only.";
 
 #[derive(Clone, Copy)]
 enum DeferredOverlayState {
@@ -1163,6 +1165,46 @@ fn emit_live_session_summary_state(
     );
 }
 
+fn emit_live_session_transcribed_state(
+    app: &AppHandle,
+    chunk_count: u64,
+    summary_text: Option<String>,
+    summary_error: Option<String>,
+) {
+    let (subtitle, body) = match (summary_text, summary_error) {
+        (Some(summary), _) if !summary.trim().is_empty() => (
+            "Capturing system audio and microphone audio.".to_string(),
+            Some(summary),
+        ),
+        (_, Some(error)) => (
+            "Capturing audio. Live summary is unavailable.".to_string(),
+            Some(error),
+        ),
+        _ => (
+            "Capturing system audio and microphone audio.".to_string(),
+            None,
+        ),
+    };
+
+    emit_session_window_state(
+        app,
+        SessionWindowStatePayload {
+            stage: "active".to_string(),
+            title: "Live session".to_string(),
+            subtitle,
+            progress_label: format!("Transcribed chunk {}", chunk_count),
+            progress_value: 0.0,
+            summary_text: body,
+            raw_transcript_text: None,
+            history_entry_id: None,
+        },
+    );
+}
+
+fn should_update_live_summary(completed_chunk: u64, is_final_chunk: bool) -> bool {
+    is_final_chunk || completed_chunk % FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL == 0
+}
+
 fn openai_summary_provider(settings: &AppSettings) -> Option<PostProcessProvider> {
     settings
         .post_process_provider("openai")
@@ -1182,14 +1224,195 @@ struct LiveSummaryResult {
     provider_label: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct MeetingSummaryState {
+    current_gist: String,
+    #[serde(default)]
+    key_points: Vec<SummaryPoint>,
+    #[serde(default)]
+    action_items: Vec<SummaryActionItem>,
+    #[serde(default)]
+    timeline: Vec<SummaryTimelineEvent>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct SummaryPoint {
+    text: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct SummaryActionItem {
+    task: String,
+    owner: String,
+    deadline: String,
+    status: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct SummaryTimelineEvent {
+    time: String,
+    event: String,
+}
+
+fn meeting_summary_prompt_contract() -> &'static str {
+    r#"Return valid JSON only. Do not include markdown, code fences, commentary, or extra fields.
+
+Use exactly this shape:
+{
+  "current_gist": "one to three concise sentences",
+  "key_points": [
+    { "text": "important discussion point" }
+  ],
+  "action_items": [
+    {
+      "task": "specific task",
+      "owner": "owner name or Unassigned",
+      "deadline": "deadline or No deadline",
+      "status": "Open"
+    }
+  ],
+  "timeline": [
+    { "time": "chunk or timestamp", "event": "brief event or topic change" }
+  ]
+}
+
+Rendered sections must map only to: Current gist, Key points, Action items, Timeline."#
+}
+
 fn build_live_summary_prompt(transcript_text: &str, previous_summary: Option<String>) -> String {
     let previous = previous_summary
         .filter(|summary| !summary.trim().is_empty())
         .unwrap_or_else(|| "No previous summary yet.".to_string());
     format!(
-        "Update the live session summary from the transcript so far.\n\nPrevious summary:\n{}\n\nTranscript so far:\n{}\n\nReturn concise markdown with:\n- Summary\n- Action items\n- Notable points\n\nDo not invent details that are not in the transcript.",
-        previous, transcript_text
+        "Update the live meeting summary incrementally.\n\nRules:\n- Use only facts supported by the transcript.\n- Do not invent decisions, tasks, names, deadlines, or speakers.\n- Preserve useful existing information.\n- Merge duplicates.\n- If a task has no owner, use \"Unassigned\".\n- If a task has no deadline, use \"No deadline\".\n- Keep all text concise for a desktop meeting UI.\n\nPrevious rendered summary:\n{}\n\nTranscript so far:\n{}\n\n{}",
+        previous,
+        transcript_text,
+        meeting_summary_prompt_contract()
     )
+}
+
+fn extract_json_object(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    let without_fence = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .and_then(|rest| rest.strip_suffix("```"))
+        .map(str::trim)
+        .unwrap_or(trimmed);
+
+    let start = without_fence.find('{')?;
+    let end = without_fence.rfind('}')?;
+    (start <= end).then_some(&without_fence[start..=end])
+}
+
+fn parse_meeting_summary_state(text: &str) -> Option<MeetingSummaryState> {
+    let json = extract_json_object(text)?;
+    let mut state: MeetingSummaryState = serde_json::from_str(json).ok()?;
+    state.current_gist = state.current_gist.trim().to_string();
+    state
+        .key_points
+        .iter_mut()
+        .for_each(|item| item.text = item.text.trim().to_string());
+    state.key_points.retain(|item| !item.text.is_empty());
+    state.action_items.iter_mut().for_each(|item| {
+        item.task = item.task.trim().to_string();
+        item.owner = item.owner.trim().to_string();
+        item.deadline = item.deadline.trim().to_string();
+        item.status = item.status.trim().to_string();
+    });
+    state.action_items.retain(|item| !item.task.is_empty());
+    state.timeline.iter_mut().for_each(|item| {
+        item.time = item.time.trim().to_string();
+        item.event = item.event.trim().to_string();
+    });
+    state.timeline.retain(|item| !item.event.is_empty());
+
+    (!state.current_gist.is_empty()
+        || !state.key_points.is_empty()
+        || !state.action_items.is_empty()
+        || !state.timeline.is_empty())
+    .then_some(state)
+}
+
+fn render_meeting_summary_markdown(state: &MeetingSummaryState) -> String {
+    let mut output = String::new();
+    output.push_str("## Current gist\n");
+    output.push_str(if state.current_gist.trim().is_empty() {
+        "No clear gist yet."
+    } else {
+        state.current_gist.trim()
+    });
+    output.push_str("\n\n## Key points\n");
+    if state.key_points.is_empty() {
+        output.push_str("- None yet.\n");
+    } else {
+        for point in &state.key_points {
+            output.push_str("- ");
+            output.push_str(point.text.trim());
+            output.push('\n');
+        }
+    }
+
+    output.push_str("\n## Action items\n");
+    if state.action_items.is_empty() {
+        output.push_str("- None yet.\n");
+    } else {
+        for item in &state.action_items {
+            let owner = if item.owner.trim().is_empty() {
+                "Unassigned"
+            } else {
+                item.owner.trim()
+            };
+            let deadline = if item.deadline.trim().is_empty() {
+                "No deadline"
+            } else {
+                item.deadline.trim()
+            };
+            let status = if item.status.trim().is_empty() {
+                "Open"
+            } else {
+                item.status.trim()
+            };
+            output.push_str("- Task: ");
+            output.push_str(item.task.trim());
+            output.push_str("\n  - Owner: ");
+            output.push_str(owner);
+            output.push_str("\n  - Deadline: ");
+            output.push_str(deadline);
+            output.push_str("\n  - Status: ");
+            output.push_str(status);
+            output.push('\n');
+        }
+    }
+
+    output.push_str("\n## Timeline\n");
+    if state.timeline.is_empty() {
+        output.push_str("- None yet.\n");
+    } else {
+        for event in &state.timeline {
+            output.push_str("- ");
+            if !event.time.trim().is_empty() {
+                output.push_str(event.time.trim());
+                output.push_str(" - ");
+            }
+            output.push_str(event.event.trim());
+            output.push('\n');
+        }
+    }
+
+    output.trim().to_string()
+}
+
+fn normalize_live_summary_output(raw_summary: &str, previous_summary: Option<&str>) -> String {
+    if let Some(state) = parse_meeting_summary_state(raw_summary) {
+        return render_meeting_summary_markdown(&state);
+    }
+
+    previous_summary
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty())
+        .unwrap_or_else(|| raw_summary.trim())
+        .to_string()
 }
 
 async fn ensure_backend_summary_install_token(app: &AppHandle) -> Result<String, String> {
@@ -1226,7 +1449,10 @@ async fn summarize_live_session(
     {
         Ok(summary) => {
             return Ok(LiveSummaryResult {
-                summary,
+                summary: normalize_live_summary_output(
+                    &summary,
+                    previous_summary_for_backend.as_deref(),
+                ),
                 provider_label: "Codex".to_string(),
             });
         }
@@ -1252,7 +1478,10 @@ async fn summarize_live_session(
             .await?;
 
             return Ok(LiveSummaryResult {
-                summary,
+                summary: normalize_live_summary_output(
+                    &summary,
+                    previous_summary_for_backend.as_deref(),
+                ),
                 provider_label: "OpenAI BYOK".to_string(),
             });
         }
@@ -1274,7 +1503,10 @@ async fn summarize_live_session(
     write_settings(app, settings);
 
     Ok(LiveSummaryResult {
-        summary: result.summary,
+        summary: normalize_live_summary_output(
+            &result.summary,
+            previous_summary_for_backend.as_deref(),
+        ),
         provider_label: "Uttr backend".to_string(),
     })
 }
@@ -1452,23 +1684,35 @@ async fn transcribe_and_summarize_live_chunk(
     }
 
     let chunk_index = runtime.chunk_count.load(Ordering::Relaxed) + 1;
-    emit_session_window_state(
-        app,
-        SessionWindowStatePayload {
-            stage: "transcribing".to_string(),
-            title: "Live session".to_string(),
-            subtitle: "Transcribing the latest audio chunk.".to_string(),
-            progress_label: if is_final_chunk {
-                "Transcribing final chunk".to_string()
-            } else {
-                format!("Transcribing chunk {}", chunk_index)
+    if is_final_chunk {
+        emit_session_window_state(
+            app,
+            SessionWindowStatePayload {
+                stage: "transcribing".to_string(),
+                title: "Preparing summary".to_string(),
+                subtitle: "Finishing the final audio chunk.".to_string(),
+                progress_label: "Transcribing final chunk".to_string(),
+                progress_value: 0.72,
+                summary_text: runtime.summary_text.lock().unwrap().clone(),
+                raw_transcript_text: None,
+                history_entry_id: None,
             },
-            progress_value: 0.0,
-            summary_text: runtime.summary_text.lock().unwrap().clone(),
-            raw_transcript_text: None,
-            history_entry_id: None,
-        },
-    );
+        );
+    } else if !runtime.stop_requested.load(Ordering::Relaxed) {
+        emit_session_window_state(
+            app,
+            SessionWindowStatePayload {
+                stage: "active".to_string(),
+                title: "Live session".to_string(),
+                subtitle: "Capturing system audio and microphone audio.".to_string(),
+                progress_label: format!("Transcribing chunk {}", chunk_index),
+                progress_value: 0.0,
+                summary_text: runtime.summary_text.lock().unwrap().clone(),
+                raw_transcript_text: None,
+                history_entry_id: None,
+            },
+        );
+    }
 
     let transcription = match tm
         .transcribe_with_source(chunk_samples, Some("full_system_audio"))
@@ -1484,12 +1728,28 @@ async fn transcribe_and_summarize_live_chunk(
                 "Live transcription failed for chunk {}: {}",
                 chunk_index, error
             ));
-            emit_live_session_summary_state(
-                app,
-                runtime.chunk_count.load(Ordering::Relaxed),
-                runtime.summary_text.lock().unwrap().clone(),
-                runtime.summary_error.lock().unwrap().clone(),
-            );
+            if is_final_chunk {
+                emit_session_window_state(
+                    app,
+                    SessionWindowStatePayload {
+                        stage: "processing".to_string(),
+                        title: "Preparing summary".to_string(),
+                        subtitle: "Unable to transcribe the final audio chunk.".to_string(),
+                        progress_label: "Processing".to_string(),
+                        progress_value: 0.88,
+                        summary_text: runtime.summary_error.lock().unwrap().clone(),
+                        raw_transcript_text: None,
+                        history_entry_id: None,
+                    },
+                );
+            } else if !runtime.stop_requested.load(Ordering::Relaxed) {
+                emit_live_session_summary_state(
+                    app,
+                    runtime.chunk_count.load(Ordering::Relaxed),
+                    runtime.summary_text.lock().unwrap().clone(),
+                    runtime.summary_error.lock().unwrap().clone(),
+                );
+            }
             return;
         }
     };
@@ -1502,29 +1762,73 @@ async fn transcribe_and_summarize_live_chunk(
         };
 
         let completed_chunk = runtime.chunk_count.fetch_add(1, Ordering::Relaxed) + 1;
-        if runtime.summary_disabled.load(Ordering::Relaxed) {
-            emit_live_session_summary_state(
-                app,
-                completed_chunk,
-                runtime.summary_text.lock().unwrap().clone(),
-                runtime.summary_error.lock().unwrap().clone(),
-            );
+        if !should_update_live_summary(completed_chunk, is_final_chunk) {
+            if !runtime.stop_requested.load(Ordering::Relaxed) {
+                emit_live_session_transcribed_state(
+                    app,
+                    completed_chunk,
+                    runtime.summary_text.lock().unwrap().clone(),
+                    runtime.summary_error.lock().unwrap().clone(),
+                );
+            }
             return;
         }
 
-        emit_session_window_state(
-            app,
-            SessionWindowStatePayload {
-                stage: "processing".to_string(),
-                title: "Live session".to_string(),
-                subtitle: "Updating the live summary.".to_string(),
-                progress_label: format!("Summarizing chunk {}", completed_chunk),
-                progress_value: 0.0,
-                summary_text: runtime.summary_text.lock().unwrap().clone(),
-                raw_transcript_text: None,
-                history_entry_id: None,
-            },
-        );
+        if runtime.summary_disabled.load(Ordering::Relaxed) {
+            if is_final_chunk {
+                emit_session_window_state(
+                    app,
+                    SessionWindowStatePayload {
+                        stage: "processing".to_string(),
+                        title: "Preparing summary".to_string(),
+                        subtitle: "Saving the session.".to_string(),
+                        progress_label: "Processing".to_string(),
+                        progress_value: 0.88,
+                        summary_text: runtime.summary_text.lock().unwrap().clone(),
+                        raw_transcript_text: None,
+                        history_entry_id: None,
+                    },
+                );
+            } else if !runtime.stop_requested.load(Ordering::Relaxed) {
+                emit_live_session_summary_state(
+                    app,
+                    completed_chunk,
+                    runtime.summary_text.lock().unwrap().clone(),
+                    runtime.summary_error.lock().unwrap().clone(),
+                );
+            }
+            return;
+        }
+
+        if is_final_chunk {
+            emit_session_window_state(
+                app,
+                SessionWindowStatePayload {
+                    stage: "processing".to_string(),
+                    title: "Preparing summary".to_string(),
+                    subtitle: "Updating the final summary.".to_string(),
+                    progress_label: "Summarizing final chunk".to_string(),
+                    progress_value: 0.88,
+                    summary_text: runtime.summary_text.lock().unwrap().clone(),
+                    raw_transcript_text: None,
+                    history_entry_id: None,
+                },
+            );
+        } else if !runtime.stop_requested.load(Ordering::Relaxed) {
+            emit_session_window_state(
+                app,
+                SessionWindowStatePayload {
+                    stage: "active".to_string(),
+                    title: "Live session".to_string(),
+                    subtitle: "Capturing system audio and microphone audio.".to_string(),
+                    progress_label: format!("Summarizing chunk {}", completed_chunk),
+                    progress_value: 0.0,
+                    summary_text: runtime.summary_text.lock().unwrap().clone(),
+                    raw_transcript_text: None,
+                    history_entry_id: None,
+                },
+            );
+        }
 
         let previous_summary = runtime.summary_text.lock().unwrap().clone();
         match summarize_live_session(app, &transcript_so_far, previous_summary, completed_chunk)
@@ -1535,7 +1839,23 @@ async fn transcribe_and_summarize_live_chunk(
                 *runtime.summary_text.lock().unwrap() = Some(summary.clone());
                 *runtime.summary_provider.lock().unwrap() = Some(result.provider_label);
                 *runtime.summary_error.lock().unwrap() = None;
-                emit_live_session_summary_state(app, completed_chunk, Some(summary), None);
+                if is_final_chunk {
+                    emit_session_window_state(
+                        app,
+                        SessionWindowStatePayload {
+                            stage: "processing".to_string(),
+                            title: "Preparing summary".to_string(),
+                            subtitle: "Saving the session.".to_string(),
+                            progress_label: "Saving".to_string(),
+                            progress_value: 0.92,
+                            summary_text: Some(summary),
+                            raw_transcript_text: None,
+                            history_entry_id: None,
+                        },
+                    );
+                } else if !runtime.stop_requested.load(Ordering::Relaxed) {
+                    emit_live_session_summary_state(app, completed_chunk, Some(summary), None);
+                }
             }
             Err(error) => {
                 let message = friendly_live_summary_error(&error);
@@ -1543,12 +1863,29 @@ async fn transcribe_and_summarize_live_chunk(
                     runtime.summary_disabled.store(true, Ordering::Relaxed);
                 }
                 *runtime.summary_error.lock().unwrap() = Some(message.clone());
-                emit_live_session_summary_state(
-                    app,
-                    completed_chunk,
-                    runtime.summary_text.lock().unwrap().clone(),
-                    Some(message),
-                );
+                if is_final_chunk {
+                    emit_session_window_state(
+                        app,
+                        SessionWindowStatePayload {
+                            stage: "processing".to_string(),
+                            title: "Preparing summary".to_string(),
+                            subtitle: "Saving the session without a final summary update."
+                                .to_string(),
+                            progress_label: "Saving".to_string(),
+                            progress_value: 0.92,
+                            summary_text: runtime.summary_text.lock().unwrap().clone(),
+                            raw_transcript_text: None,
+                            history_entry_id: None,
+                        },
+                    );
+                } else if !runtime.stop_requested.load(Ordering::Relaxed) {
+                    emit_live_session_summary_state(
+                        app,
+                        completed_chunk,
+                        runtime.summary_text.lock().unwrap().clone(),
+                        Some(message),
+                    );
+                }
             }
         }
     }
@@ -2835,14 +3172,17 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
-        build_edit_mode_prompt, clean_edit_mode_response, clean_post_process_response,
-        custom_vocabulary_prompt_block, friendly_live_summary_error, is_effectively_silent_audio,
-        is_supported_post_process_model, resolved_post_process_system_prompt,
+        build_edit_mode_prompt, build_live_summary_prompt, clean_edit_mode_response,
+        clean_post_process_response, custom_vocabulary_prompt_block, friendly_live_summary_error,
+        is_effectively_silent_audio, is_supported_post_process_model,
+        normalize_live_summary_output, parse_meeting_summary_state,
+        render_meeting_summary_markdown, resolved_post_process_system_prompt,
         select_preferred_groq_model, should_pause_live_summaries,
-        should_refresh_microphone_stream_after_suspected_no_input, toggle_post_process_enabled,
-        transcription_timeout_for_samples, transcription_watchdog_delay,
-        usable_post_processed_text, TranscriptionCompletionMode, ACTION_MAP,
-        FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT,
+        should_refresh_microphone_stream_after_suspected_no_input, should_update_live_summary,
+        toggle_post_process_enabled, transcription_timeout_for_samples,
+        transcription_watchdog_delay, usable_post_processed_text, MeetingSummaryState,
+        SummaryActionItem, SummaryPoint, SummaryTimelineEvent, TranscriptionCompletionMode,
+        ACTION_MAP, FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT, FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL,
     };
     use crate::app_context::AppContextSnapshot;
     use crate::settings::get_default_settings;
@@ -2987,6 +3327,104 @@ mod tests {
         assert!(should_pause_live_summaries(raw));
         assert!(!friendly.contains('{'));
         assert!(!friendly.contains("insufficient_quota"));
+    }
+
+    #[test]
+    fn live_summary_updates_every_minute_and_on_final_chunk() {
+        assert_eq!(FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL, 6);
+        assert!(!should_update_live_summary(1, false));
+        assert!(!should_update_live_summary(5, false));
+        assert!(should_update_live_summary(6, false));
+        assert!(!should_update_live_summary(7, false));
+        assert!(should_update_live_summary(12, false));
+        assert!(should_update_live_summary(3, true));
+    }
+
+    #[test]
+    fn live_summary_prompt_requests_only_supported_sections() {
+        let prompt = build_live_summary_prompt(
+            "Discussed launch timing and follow-up work.",
+            Some("## Current gist\nEarlier notes.".to_string()),
+        );
+
+        assert!(prompt.contains("current_gist"));
+        assert!(prompt.contains("key_points"));
+        assert!(prompt.contains("action_items"));
+        assert!(prompt.contains("timeline"));
+        assert!(prompt.contains("Current gist, Key points, Action items, Timeline"));
+        assert!(!prompt.contains("Notable points"));
+        assert!(!prompt.contains("Risks / blockers"));
+        assert!(!prompt.contains("Open questions"));
+    }
+
+    #[test]
+    fn meeting_summary_json_renders_to_four_section_markdown() {
+        let raw = r#"{
+          "current_gist": "The team discussed launch timing.",
+          "key_points": [{ "text": "Launch timing depends on summary quality." }],
+          "action_items": [{
+            "task": "Review the summary panel",
+            "owner": "Unassigned",
+            "deadline": "No deadline",
+            "status": "Open"
+          }],
+          "timeline": [{ "time": "00:60", "event": "Moved to action items." }]
+        }"#;
+
+        let state = parse_meeting_summary_state(raw).expect("valid summary json");
+        let rendered = render_meeting_summary_markdown(&state);
+
+        assert!(rendered.contains("## Current gist"));
+        assert!(rendered.contains("## Key points"));
+        assert!(rendered.contains("## Action items"));
+        assert!(rendered.contains("## Timeline"));
+        assert!(rendered.contains("- Task: Review the summary panel"));
+        assert!(!rendered.contains("## Notable points"));
+    }
+
+    #[test]
+    fn invalid_live_summary_output_keeps_previous_summary() {
+        let previous = "## Current gist\nThe existing summary should remain.";
+        let normalized = normalize_live_summary_output("not json", Some(previous));
+
+        assert_eq!(normalized, previous);
+    }
+
+    #[test]
+    fn empty_structured_summary_is_rejected() {
+        let raw = r#"{
+          "current_gist": " ",
+          "key_points": [],
+          "action_items": [],
+          "timeline": []
+        }"#;
+
+        assert!(parse_meeting_summary_state(raw).is_none());
+    }
+
+    #[test]
+    fn meeting_summary_renderer_fills_missing_action_metadata() {
+        let rendered = render_meeting_summary_markdown(&MeetingSummaryState {
+            current_gist: "Launch planning is underway.".to_string(),
+            key_points: vec![SummaryPoint {
+                text: "The summary needs to be easy to scan.".to_string(),
+            }],
+            action_items: vec![SummaryActionItem {
+                task: "Check the UI".to_string(),
+                owner: "".to_string(),
+                deadline: "".to_string(),
+                status: "".to_string(),
+            }],
+            timeline: vec![SummaryTimelineEvent {
+                time: "".to_string(),
+                event: "Reviewed next steps.".to_string(),
+            }],
+        });
+
+        assert!(rendered.contains("Owner: Unassigned"));
+        assert!(rendered.contains("Deadline: No deadline"));
+        assert!(rendered.contains("Status: Open"));
+        assert!(rendered.contains("- Reviewed next steps."));
     }
 
     #[test]

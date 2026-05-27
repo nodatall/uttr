@@ -79,7 +79,7 @@ const sampleHistoryEntries = [
     transcription_text:
       "every single month. It makes it easier for people to at least hold Bitcoin or buy back into Bitcoin. And I think we are in this healing process.",
     post_processed_text:
-      "Session summary: confidence improved as participants discussed recurring accumulation and the effect of higher prices on market optimism.",
+      "## Current gist\nThe meeting is about market confidence and how recurring Bitcoin accumulation affects sentiment.\n\n## Key points\n- Participants framed recurring monthly accumulation as easier for buyers to maintain.\n- Higher prices were discussed as improving optimism during a healing phase.\n\n## Action items\n- Task: Review whether this belongs in the market notes.\n  - Owner: Unassigned\n  - Deadline: No deadline\n  - Status: Open\n\n## Timeline\n- 00:01 - Discussion moved from accumulation habits to market confidence.",
     post_process_prompt: "Live session summary via OpenAI after 2 chunk(s)",
     recording_source: "full_system_audio",
   },
@@ -114,7 +114,7 @@ const sessionStates = {
     progressLabel: "Chunk 2 summarized",
     progressValue: 0,
     summaryText:
-      "Summary\n- Bitcoin confidence is improving as participants discuss monthly accumulation.\n- Higher prices are framed as helping sentiment recover.\n\nAction items\n- Review whether this belongs in the market notes.",
+      "## Current gist\nThe meeting is about Bitcoin confidence, monthly accumulation, and whether the discussion belongs in market notes.\n\n## Key points\n- Bitcoin confidence is improving as participants discuss monthly accumulation.\n- Higher prices are framed as helping sentiment recover.\n\n## Action items\n- Task: Review whether this belongs in the market notes.\n  - Owner: Unassigned\n  - Deadline: No deadline\n  - Status: Open\n\n## Timeline\n- 00:20 - Participants connected accumulation behavior to improving confidence.",
     rawTranscriptText: null,
     historyEntryId: null,
   },

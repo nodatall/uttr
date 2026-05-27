@@ -503,7 +503,7 @@
         "description": "筆記型電腦闔蓋時使用的麥克風"
       },
       "postProcessingToggle": {
-        "label": "AI Cleanup",
+        "label": "Post Processing",
         "description": "Use AI for context-aware text refinement after transcription"
       },
       "muteWhileRecording": {

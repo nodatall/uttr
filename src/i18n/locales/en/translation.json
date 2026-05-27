@@ -559,15 +559,15 @@
         "description": "Sensitivity for custom word corrections"
       },
       "historyLimit": {
-        "title": "History Limit",
-        "description": "Maximum number of history entries to keep",
-        "entries": "entries"
+        "title": "Normal Transcription Limit",
+        "description": "Maximum number of normal transcriptions to keep. Meetings are not capped.",
+        "entries": "normal transcriptions"
       },
       "recordingRetention": {
         "title": "Auto-Delete Recordings",
         "description": "Automatically delete old recordings to save space",
         "never": "Never",
-        "preserveLimit": "Keep latest {{count}}",
+        "preserveLimit": "Keep latest {{count}} normal transcriptions",
         "days3": "After 3 days",
         "weeks2": "After 2 weeks",
         "months3": "After 3 months",
@@ -587,7 +587,7 @@
         "description": "Microphone to use when laptop lid is closed"
       },
       "postProcessingToggle": {
-        "label": "AI Cleanup",
+        "label": "Post Processing",
         "description": "Use AI for context-aware text refinement after transcription"
       },
       "muteWhileRecording": {

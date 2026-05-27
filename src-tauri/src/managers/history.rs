@@ -289,12 +289,11 @@ impl HistoryManager {
         Ok(deleted_count)
     }
 
-    fn cleanup_by_count(&self, limit: usize) -> Result<()> {
-        let conn = self.get_connection()?;
-
-        // Get all entries that are not saved, ordered by timestamp desc
+    fn count_cleanup_candidates(conn: &Connection, limit: usize) -> Result<Vec<(i64, String)>> {
+        // Count-based history retention applies only to normal dictations.
+        // Meeting sessions are intentionally unbounded unless manually deleted.
         let mut stmt = conn.prepare(
-            "SELECT id, file_name FROM transcription_history WHERE saved = 0 ORDER BY timestamp DESC"
+            "SELECT id, file_name FROM transcription_history WHERE saved = 0 AND recording_source != 'full_system_audio' ORDER BY timestamp DESC"
         )?;
 
         let rows = stmt.query_map([], |row| {
@@ -306,9 +305,19 @@ impl HistoryManager {
             entries.push(row?);
         }
 
-        if entries.len() > limit {
-            let entries_to_delete = &entries[limit..];
-            let deleted_count = self.delete_entries_and_files(entries_to_delete)?;
+        Ok(if entries.len() > limit {
+            entries[limit..].to_vec()
+        } else {
+            Vec::new()
+        })
+    }
+
+    fn cleanup_by_count(&self, limit: usize) -> Result<()> {
+        let conn = self.get_connection()?;
+        let entries_to_delete = Self::count_cleanup_candidates(&conn, limit)?;
+
+        if !entries_to_delete.is_empty() {
+            let deleted_count = self.delete_entries_and_files(&entries_to_delete)?;
 
             if deleted_count > 0 {
                 debug!("Cleaned up {} old history entries by count", deleted_count);
@@ -316,6 +325,28 @@ impl HistoryManager {
         }
 
         Ok(())
+    }
+
+    fn time_cleanup_candidates(
+        conn: &Connection,
+        cutoff_timestamp: i64,
+    ) -> Result<Vec<(i64, String)>> {
+        // Time-based history retention applies only to normal dictations.
+        // Meeting sessions are intentionally unbounded unless manually deleted.
+        let mut stmt = conn.prepare(
+            "SELECT id, file_name FROM transcription_history WHERE saved = 0 AND timestamp < ?1 AND recording_source != 'full_system_audio'",
+        )?;
+
+        let rows = stmt.query_map(params![cutoff_timestamp], |row| {
+            Ok((row.get::<_, i64>("id")?, row.get::<_, String>("file_name")?))
+        })?;
+
+        let mut entries_to_delete: Vec<(i64, String)> = Vec::new();
+        for row in rows {
+            entries_to_delete.push(row?);
+        }
+
+        Ok(entries_to_delete)
     }
 
     fn cleanup_by_time(
@@ -333,19 +364,7 @@ impl HistoryManager {
             _ => unreachable!("Should not reach here"),
         };
 
-        // Get all unsaved entries older than the cutoff timestamp
-        let mut stmt = conn.prepare(
-            "SELECT id, file_name FROM transcription_history WHERE saved = 0 AND timestamp < ?1",
-        )?;
-
-        let rows = stmt.query_map(params![cutoff_timestamp], |row| {
-            Ok((row.get::<_, i64>("id")?, row.get::<_, String>("file_name")?))
-        })?;
-
-        let mut entries_to_delete: Vec<(i64, String)> = Vec::new();
-        for row in rows {
-            entries_to_delete.push(row?);
-        }
+        let entries_to_delete = Self::time_cleanup_candidates(&conn, cutoff_timestamp)?;
 
         let deleted_count = self.delete_entries_and_files(&entries_to_delete)?;
 
@@ -543,18 +562,29 @@ mod tests {
     }
 
     fn insert_entry(conn: &Connection, timestamp: i64, text: &str, post_processed: Option<&str>) {
+        insert_entry_with_source(conn, timestamp, text, post_processed, false, "dictation");
+    }
+
+    fn insert_entry_with_source(
+        conn: &Connection,
+        timestamp: i64,
+        text: &str,
+        post_processed: Option<&str>,
+        saved: bool,
+        recording_source: &str,
+    ) {
         conn.execute(
             "INSERT INTO transcription_history (file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, recording_source)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 format!("uttr-{}.wav", timestamp),
                 timestamp,
-                false,
+                saved,
                 format!("Recording {}", timestamp),
                 text,
                 post_processed,
                 Option::<String>::None,
-                "dictation"
+                recording_source
             ],
         )
         .expect("insert history entry");
@@ -581,5 +611,48 @@ mod tests {
         assert_eq!(entry.transcription_text, "second");
         assert_eq!(entry.post_processed_text.as_deref(), Some("processed"));
         assert_eq!(entry.recording_source, "dictation");
+    }
+
+    #[test]
+    fn count_cleanup_candidates_ignore_meeting_sessions() {
+        let conn = setup_conn();
+        insert_entry_with_source(&conn, 100, "old dictation", None, false, "dictation");
+        insert_entry_with_source(&conn, 200, "new dictation", None, false, "dictation");
+        insert_entry_with_source(
+            &conn,
+            50,
+            "old meeting",
+            Some("old meeting summary"),
+            false,
+            "full_system_audio",
+        );
+        insert_entry_with_source(&conn, 25, "saved old dictation", None, true, "dictation");
+
+        let entries_to_delete =
+            HistoryManager::count_cleanup_candidates(&conn, 1).expect("fetch cleanup candidates");
+
+        assert_eq!(entries_to_delete.len(), 1);
+        assert_eq!(entries_to_delete[0].1, "uttr-100.wav");
+    }
+
+    #[test]
+    fn time_cleanup_candidates_ignore_meeting_sessions() {
+        let conn = setup_conn();
+        insert_entry_with_source(&conn, 100, "old dictation", None, false, "dictation");
+        insert_entry_with_source(
+            &conn,
+            90,
+            "old meeting",
+            Some("old meeting summary"),
+            false,
+            "full_system_audio",
+        );
+        insert_entry_with_source(&conn, 300, "new dictation", None, false, "dictation");
+
+        let entries_to_delete =
+            HistoryManager::time_cleanup_candidates(&conn, 200).expect("fetch cleanup candidates");
+
+        assert_eq!(entries_to_delete.len(), 1);
+        assert_eq!(entries_to_delete[0].1, "uttr-100.wav");
     }
 }

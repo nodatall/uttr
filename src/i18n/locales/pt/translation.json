@@ -503,7 +503,7 @@
         "description": "Microfone a usar quando a tampa do laptop está fechada"
       },
       "postProcessingToggle": {
-        "label": "AI Cleanup",
+        "label": "Post Processing",
         "description": "Use AI for context-aware text refinement after transcription"
       },
       "muteWhileRecording": {

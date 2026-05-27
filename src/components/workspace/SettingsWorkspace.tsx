@@ -38,9 +38,7 @@ export const SettingsWorkspace: React.FC = () => {
       });
       visibleTabs.push({
         id: "providers",
-        label: t("workspace.settings.providers", {
-          defaultValue: "Providers",
-        }),
+        label: t("sidebar.apiKeys"),
       });
     }
 

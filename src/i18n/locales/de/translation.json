@@ -503,7 +503,7 @@
         "description": "Mikrofon bei geschlossenem Laptop-Deckel"
       },
       "postProcessingToggle": {
-        "label": "AI Cleanup",
+        "label": "Post Processing",
         "description": "Use AI for context-aware text refinement after transcription"
       },
       "muteWhileRecording": {

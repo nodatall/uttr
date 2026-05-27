@@ -503,7 +503,7 @@
         "description": "Micrô sử dụng khi nắp laptop được đóng"
       },
       "postProcessingToggle": {
-        "label": "AI Cleanup",
+        "label": "Post Processing",
         "description": "Use AI for context-aware text refinement after transcription"
       },
       "muteWhileRecording": {

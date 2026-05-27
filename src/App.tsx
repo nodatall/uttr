@@ -101,6 +101,7 @@ function App() {
     useState<HistoryFocusRequest | null>(null);
   const [sessionWindowState, setSessionWindowState] =
     useState<SessionWindowState>(getInitialSessionWindowState);
+  const sessionStageRef = useRef(sessionWindowState.stage);
   const { settings, updateSetting } = useSettings();
   const direction = getLanguageDirection(i18n.language);
   const refreshAudioDevices = useSettingsStore(
@@ -238,8 +239,29 @@ function App() {
   useEffect(() => {
     let unlistenFn: (() => void) | undefined;
     listen<SessionWindowState>("session-window-state", (event) => {
-      setSessionWindowState(event.payload);
-      setCurrentSection("home");
+      const nextState = event.payload;
+      const previousStage = sessionStageRef.current;
+      sessionStageRef.current = nextState.stage;
+
+      setSessionWindowState(nextState);
+
+      if (
+        nextState.historyEntryId !== null &&
+        nextState.historyEntryId !== undefined
+      ) {
+        setHistoryFocusRequest({
+          entryId: nextState.historyEntryId,
+          token: Date.now(),
+        });
+      }
+
+      if (
+        previousStage === "idle" &&
+        nextState.stage !== "idle" &&
+        nextState.stage !== "complete"
+      ) {
+        setCurrentSection("home");
+      }
     }).then((unlisten) => {
       unlistenFn = unlisten;
     });
