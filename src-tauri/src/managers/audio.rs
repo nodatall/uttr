@@ -248,7 +248,10 @@ impl AudioRecordingManager {
         let settings = get_settings(&self.app_handle);
         let mut did_mute_guard = self.did_mute.lock().unwrap();
 
-        if settings.mute_while_recording && *self.is_open.lock().unwrap() {
+        if settings.mute_while_recording
+            && *self.is_open.lock().unwrap()
+            && *self.is_recording.lock().unwrap()
+        {
             set_mute(true);
             *did_mute_guard = true;
             debug!("Mute applied");
@@ -413,7 +416,6 @@ impl AudioRecordingManager {
 
     pub fn try_start_recording(&self, binding_id: &str) -> bool {
         let start_time = Instant::now();
-        info!("[latency] audio start requested binding={}", binding_id);
 
         if !matches!(*self.state.lock().unwrap(), RecordingState::Idle) {
             info!(
@@ -425,20 +427,10 @@ impl AudioRecordingManager {
         } else {
             // Ensure microphone is open in on-demand mode
             if matches!(*self.mode.lock().unwrap(), MicrophoneMode::OnDemand) {
-                info!(
-                    "[latency] audio opening on-demand stream binding={} elapsed_ms={}",
-                    binding_id,
-                    start_time.elapsed().as_millis()
-                );
                 if let Err(e) = self.start_microphone_stream() {
                     error!("Failed to open microphone stream: {e}");
                     return false;
                 }
-                info!(
-                    "[latency] audio on-demand stream open binding={} elapsed_ms={}",
-                    binding_id,
-                    start_time.elapsed().as_millis()
-                );
             }
 
             FIRST_AUDIO_LEVEL_LOGGED.store(false, Ordering::Relaxed);
@@ -573,6 +565,23 @@ impl AudioRecordingManager {
             .unwrap()
             .as_ref()
             .map(Instant::elapsed)
+    }
+
+    pub fn current_recording_started_at(&self, binding_id: &str) -> Option<Instant> {
+        let state = self.state.lock().unwrap();
+        let matches_binding = matches!(
+            *state,
+            RecordingState::Recording {
+                binding_id: ref active
+            } if active == binding_id
+        );
+        drop(state);
+
+        if !matches_binding {
+            return None;
+        }
+
+        *self.recording_started_at.lock().unwrap()
     }
 
     pub fn is_recording_binding(&self, binding_id: &str) -> bool {

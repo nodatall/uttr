@@ -99,15 +99,6 @@ pub fn shortcut_refresh_blocked_by_active_session(app: &AppHandle) -> bool {
     transcription_session_is_active(audio_recording_active, full_system_active)
 }
 
-pub fn shortcut_refresh_blocked_by_warm_on_demand_microphone(app: &AppHandle) -> bool {
-    if get_settings(app).always_on_microphone {
-        return false;
-    }
-
-    app.try_state::<Arc<AudioRecordingManager>>()
-        .is_some_and(|manager| manager.is_microphone_open())
-}
-
 /// Register the cancel shortcut (called when recording starts)
 pub fn register_cancel_shortcut(app: &AppHandle) {
     let settings = get_settings(app);

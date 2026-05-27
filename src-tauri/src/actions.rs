@@ -2540,11 +2540,6 @@ fn handle_transcription_stop(
 impl ShortcutAction for TranscribeAction {
     fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
         let start_time = Instant::now();
-        log::info!(
-            "[latency] transcribe action start begin binding={}",
-            binding_id
-        );
-        debug!("TranscribeAction::start called for binding: {}", binding_id);
         utils::cancel_pending_overlay_transitions();
 
         let access = get_install_access_snapshot(app);
@@ -2783,14 +2778,6 @@ impl ShortcutAction for FullSystemTranscribeAction {
         }
 
         let start_time = Instant::now();
-        log::info!(
-            "[latency] full-system action start begin binding={}",
-            binding_id
-        );
-        debug!(
-            "FullSystemTranscribeAction::start called for binding: {}",
-            binding_id
-        );
 
         let tm = app.state::<Arc<TranscriptionManager>>();
         tm.clear_cancel_request();

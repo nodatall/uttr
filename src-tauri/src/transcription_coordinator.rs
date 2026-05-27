@@ -1,6 +1,8 @@
 use crate::actions::ACTION_MAP;
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::full_system_audio::FullSystemAudioSessionManager;
+use crate::managers::transcription::TranscriptionManager;
+use crate::{shortcut, utils};
 use log::{debug, error, info, warn};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -11,6 +13,7 @@ use tauri::{AppHandle, Manager};
 const DEBOUNCE: Duration = Duration::from_millis(30);
 const PROCESSING_WATCHDOG: Duration = Duration::from_secs(20);
 const SUPPRESS_AFTER_IGNORED_PUSH_TO_TALK_RELEASE: Duration = Duration::from_millis(1500);
+const SLOW_START_LOG_THRESHOLD: Duration = Duration::from_millis(500);
 
 /// Commands processed sequentially by the coordinator thread.
 #[derive(Clone)]
@@ -20,6 +23,7 @@ enum Command {
         hotkey_string: String,
         is_pressed: bool,
         push_to_talk: bool,
+        received_at: Instant,
     },
     Cancel {
         recording_was_active: bool,
@@ -130,23 +134,19 @@ impl TranscriptionCoordinator {
                         hotkey_string,
                         is_pressed,
                         push_to_talk,
+                        received_at,
                     } => {
-                        if is_transcribe_binding(&binding_id) {
-                            info!(
-                                "[latency] coordinator dequeued input binding={} pressed={} push_to_talk={}",
-                                binding_id, is_pressed, push_to_talk
-                            );
-                        }
-
                         // Debounce rapid-fire press events (key repeat / double-tap).
                         // Releases always pass through for push-to-talk.
                         if is_pressed {
-                            let now = Instant::now();
-                            if last_press.map_or(false, |t| now.duration_since(t) < DEBOUNCE) {
+                            if last_press
+                                .map(|t| received_at.saturating_duration_since(t) < DEBOUNCE)
+                                .unwrap_or(false)
+                            {
                                 debug!("Debounced press for '{binding_id}'");
                                 continue;
                             }
-                            last_press = Some(now);
+                            last_press = Some(received_at);
 
                             if matches!(stage, Stage::Processing)
                                 && processing_started_at
@@ -185,8 +185,18 @@ impl TranscriptionCoordinator {
                             } else if !is_pressed
                                 && matches!(&stage, Stage::Recording(id) if id == &binding_id)
                             {
-                                stop(&app, &mut stage, &binding_id, &hotkey_string);
-                                processing_started_at = Some(Instant::now());
+                                if release_predates_recording_start(&app, &binding_id, received_at)
+                                {
+                                    cancel_stale_push_to_talk_recording(
+                                        &app,
+                                        &mut stage,
+                                        &binding_id,
+                                    );
+                                    processing_started_at = None;
+                                } else {
+                                    stop(&app, &mut stage, &binding_id, &hotkey_string);
+                                    processing_started_at = Some(Instant::now());
+                                }
                             } else if is_pressed && matches!(stage, Stage::Processing) {
                                 debug!(
                                     "Ignoring push-to-talk press for '{}' while transcription is processing",
@@ -269,18 +279,12 @@ impl TranscriptionCoordinator {
         is_pressed: bool,
         push_to_talk: bool,
     ) {
-        if is_transcribe_binding(binding_id) {
-            info!(
-                "[latency] hotkey input received binding={} pressed={} push_to_talk={}",
-                binding_id, is_pressed, push_to_talk
-            );
-        }
-
         self.send_with_recovery(Command::Input {
             binding_id: binding_id.to_string(),
             hotkey_string: hotkey_string.to_string(),
             is_pressed,
             push_to_talk,
+            received_at: Instant::now(),
         });
     }
 
@@ -297,7 +301,6 @@ impl TranscriptionCoordinator {
 
 fn start(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &str) {
     let start_time = Instant::now();
-    info!("[latency] coordinator start begin binding={}", binding_id);
 
     let Some(action) = ACTION_MAP.get(binding_id) else {
         warn!("No action in ACTION_MAP for '{binding_id}'");
@@ -320,12 +323,55 @@ fn start(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &s
         );
     } else {
         debug!("Start for '{binding_id}' did not begin recording; staying idle");
-        info!(
-            "[latency] coordinator start inactive binding={} elapsed_ms={}",
-            binding_id,
-            start_time.elapsed().as_millis()
-        );
+        if start_time.elapsed() >= SLOW_START_LOG_THRESHOLD {
+            warn!(
+                "[latency] coordinator slow inactive start binding={} elapsed_ms={}",
+                binding_id,
+                start_time.elapsed().as_millis()
+            );
+        }
     }
+}
+
+fn release_predates_recording_start(
+    app: &AppHandle,
+    binding_id: &str,
+    release_received_at: Instant,
+) -> bool {
+    release_received_before_recording_started(
+        release_received_at,
+        app.try_state::<Arc<AudioRecordingManager>>()
+            .and_then(|manager| manager.current_recording_started_at(binding_id)),
+    )
+}
+
+fn release_received_before_recording_started(
+    release_received_at: Instant,
+    recording_started_at: Option<Instant>,
+) -> bool {
+    recording_started_at
+        .map(|started_at| release_received_at < started_at)
+        .unwrap_or(false)
+}
+
+fn cancel_stale_push_to_talk_recording(app: &AppHandle, stage: &mut Stage, binding_id: &str) {
+    warn!(
+        "Discarding stale push-to-talk recording for '{}' because release arrived before audio became active",
+        binding_id
+    );
+
+    shortcut::unregister_cancel_shortcut(app);
+
+    if let Some(audio_manager) = app.try_state::<Arc<AudioRecordingManager>>() {
+        audio_manager.cancel_recording();
+    }
+    if let Some(tm) = app.try_state::<Arc<TranscriptionManager>>() {
+        tm.cancel_incremental_session();
+    }
+
+    utils::change_tray_icon(app, crate::tray::TrayIconState::Idle);
+    utils::hide_recording_overlay(app);
+    *stage = Stage::Idle;
 }
 
 fn stop(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &str) {
@@ -348,8 +394,9 @@ fn stop(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &st
 #[cfg(test)]
 mod tests {
     use super::{
-        is_transcribe_binding, transcribe_binding_push_to_talk, transcription_session_is_active,
-        PushToTalkSuppression, SUPPRESS_AFTER_IGNORED_PUSH_TO_TALK_RELEASE,
+        is_transcribe_binding, release_received_before_recording_started,
+        transcribe_binding_push_to_talk, transcription_session_is_active, PushToTalkSuppression,
+        SUPPRESS_AFTER_IGNORED_PUSH_TO_TALK_RELEASE,
     };
     use std::time::{Duration, Instant};
 
@@ -426,5 +473,35 @@ mod tests {
             !suppression.consume_release_after_ignored_press("transcribe_full_system_audio", now)
         );
         assert!(!suppression.suppresses_press("transcribe", now));
+    }
+
+    #[test]
+    fn release_before_recording_start_is_stale_push_to_talk() {
+        let release_received_at = Instant::now();
+        let recording_started_at = release_received_at + Duration::from_millis(250);
+
+        assert!(release_received_before_recording_started(
+            release_received_at,
+            Some(recording_started_at)
+        ));
+    }
+
+    #[test]
+    fn release_after_recording_start_is_normal_push_to_talk_stop() {
+        let recording_started_at = Instant::now();
+        let release_received_at = recording_started_at + Duration::from_millis(250);
+
+        assert!(!release_received_before_recording_started(
+            release_received_at,
+            Some(recording_started_at)
+        ));
+    }
+
+    #[test]
+    fn missing_recording_start_is_not_stale_push_to_talk() {
+        assert!(!release_received_before_recording_started(
+            Instant::now(),
+            None
+        ));
     }
 }
