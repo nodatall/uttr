@@ -613,12 +613,9 @@ test.describe("full-system audio settings", () => {
     await page.goto("/");
 
     const workspace = page.getByTestId("home-workspace");
-    await expect(
-      workspace
-        .locator("span")
-        .filter({ hasText: /^0:0[1-9]$/ })
-        .first(),
-    ).toBeVisible({ timeout: 2500 });
+    await expect(workspace.getByText(/^0:0[1-9]$/).first()).toBeVisible({
+      timeout: 2500,
+    });
 
     await page.getByRole("button", { name: /Settings/i }).click();
     await page.getByRole("button", { name: /^Meetings$/i }).click();
@@ -626,10 +623,7 @@ test.describe("full-system audio settings", () => {
     const returnedWorkspace = page.getByTestId("home-workspace");
     await expect(returnedWorkspace.getByText(/^0:00$/)).toHaveCount(0);
     await expect(
-      returnedWorkspace
-        .locator("span")
-        .filter({ hasText: /^0:0[1-9]$/ })
-        .first(),
+      returnedWorkspace.getByText(/^0:0[1-9]$/).first(),
     ).toBeVisible();
   });
 
