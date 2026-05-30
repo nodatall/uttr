@@ -278,7 +278,7 @@ const installInitialNavigation = () => {
 
     switch (cmd) {
       case "plugin:app|version":
-        return "0.1.10-ux-review";
+        return `${__UTTR_APP_VERSION__}-ux-review`;
       case "plugin:macos-permissions|check_accessibility_permission":
       case "plugin:macos-permissions|check_microphone_permission":
         return true;

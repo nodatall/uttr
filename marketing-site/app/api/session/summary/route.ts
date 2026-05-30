@@ -73,6 +73,16 @@ function requestBodyIsClearlyTooLarge(request: Request) {
   return Number.isFinite(parsed) && parsed > SUMMARY_REQUEST_BODY_LIMIT_BYTES;
 }
 
+function requestBodyHasKnownLength(request: Request) {
+  const contentLength = request.headers.get("content-length");
+  if (!contentLength || !/^\d+$/.test(contentLength)) {
+    return false;
+  }
+
+  const parsed = Number.parseInt(contentLength, 10);
+  return Number.isFinite(parsed) && parsed > 0;
+}
+
 async function readJsonPayload(request: Request) {
   try {
     return (await request.json()) as SummaryRequestBody;
@@ -119,6 +129,13 @@ export async function POST(request: Request) {
     });
     if (!rateLimit.allowed) {
       return respondToRateLimit(rateLimit, "Too many summary requests.");
+    }
+
+    if (!requestBodyHasKnownLength(request)) {
+      return NextResponse.json(
+        { error: "Summary request requires a Content-Length header." },
+        { status: 411 },
+      );
     }
 
     if (requestBodyIsClearlyTooLarge(request)) {
