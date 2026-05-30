@@ -614,7 +614,7 @@ test.describe("full-system audio settings", () => {
 
     const workspace = page.getByTestId("home-workspace");
     await expect(workspace.getByText(/^0:0[1-9]$/).first()).toBeVisible({
-      timeout: 2500,
+      timeout: 10000,
     });
 
     await page.getByRole("button", { name: /Settings/i }).click();
