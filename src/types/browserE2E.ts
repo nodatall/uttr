@@ -5,6 +5,7 @@ import type {
   FullSystemAudioSupportStatus,
   InstallAccessSnapshot,
 } from "@/bindings";
+import type { SessionWindowState } from "@/components/workspace/HomeWorkspace";
 
 export type BrowserE2ETestState = {
   settings?: Partial<Settings>;
@@ -17,6 +18,7 @@ export type BrowserE2ETestState = {
     supportStatus?: FullSystemAudioSupportStatus | null;
     readinessStatus?: FullSystemAudioReadinessStatus | null;
   };
+  sessionWindowState?: Partial<SessionWindowState>;
 };
 
 declare global {

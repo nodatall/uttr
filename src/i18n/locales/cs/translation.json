@@ -32,7 +32,10 @@
     "upgradeStatusLinkedAccount": "Linked account",
     "upgradeCaption": "{{status}} - $5/month",
     "upgradeOpenFailed": "Could not start checkout. Try again from Uttr in a moment.",
-    "fileTranscription": "File Transcription"
+    "fileTranscription": "File Transcription",
+    "home": "Home",
+    "files": "Files",
+    "settings": "Settings"
   },
   "onboarding": {
     "subtitle": "Pro začátek vyberte model pro přepis",
@@ -196,6 +199,10 @@
             "name": "Zkratka přepisu",
             "description": "Klávesová zkratka pro nahrávání a přepis vašeho hlasu."
           },
+          "edit_mode": {
+            "name": "Edit Mode Shortcut",
+            "description": "Transforms selected text using a spoken instruction."
+          },
           "cancel": {
             "name": "Zkratka zrušení",
             "description": "Klávesová zkratka pro zrušení aktuálního nahrávání."
@@ -205,8 +212,8 @@
             "description": "Volitelné: Vyhrazená klávesová zkratka, která zapíná nebo vypíná následné zpracování pomocí AI."
           },
           "transcribe_full_system_audio": {
-            "name": "Full-System Recording Shortcut",
-            "description": "A dedicated toggle shortcut that starts and stops system audio plus microphone capture."
+            "name": "Meeting Recording Shortcut",
+            "description": "A dedicated shortcut that starts and stops meeting recording."
           }
         },
         "errors": {
@@ -255,14 +262,14 @@
         "description": "Upravte hlasitost zvukové odezvy"
       },
       "fullSystemAudio": {
-        "title": "Record full system audio",
-        "description": "Capture system audio and microphone together for calls and meetings.",
-        "loading": "Checking support and Screen Recording readiness...",
-        "statusCheckFailed": "Uttr could not check full-system audio support right now.",
+        "title": "Enable Meetings",
+        "description": "Record meetings with system audio and microphone together.",
+        "loading": "Checking Meetings support and Screen Recording readiness...",
+        "statusCheckFailed": "Uttr could not check Meetings support right now.",
         "unsupportedDescription": "This feature is available only on macOS 13 or later.",
-        "permissionRequired": "Screen Recording access is required before this can be enabled. Microphone access alone is not enough.",
+        "permissionRequired": "Screen Recording access is required before Meetings can be enabled. Microphone access alone is not enough.",
         "pendingDescription": "{{reason}} Microphone access is handled separately. Uttr will retry automatically when this window regains focus.",
-        "shortcutLabel": "Shortcut"
+        "shortcutLabel": "Meeting Recording Shortcut"
       }
     },
     "advanced": {
@@ -443,7 +450,12 @@
       "delete": "Smazat záznam",
       "deleteError": "Nepodařilo se smazat záznam. Zkuste to prosím znovu.",
       "eyebrow": "Archiv",
-      "showingLatest": "Zobrazuje se posledních {{count}} položek (starší položky jsou stále uložené)."
+      "showingLatest": "Zobrazuje se posledních {{count}} položek (starší položky jsou stále uložené).",
+      "dictations": "Dictations",
+      "sessions": "Meetings",
+      "openSession": "Open meeting",
+      "emptySessions": "No meetings yet.",
+      "emptyDictations": "No transcriptions yet."
     },
     "debug": {
       "title": "Ladění",
@@ -491,8 +503,8 @@
         "description": "Mikrofon, který se použije při zavřeném víku notebooku"
       },
       "postProcessingToggle": {
-        "label": "Následné zpracování",
-        "description": "Povolit AI vylepšení textu po přepisu"
+        "label": "Post Processing",
+        "description": "Use AI for context-aware text refinement after transcription"
       },
       "muteWhileRecording": {
         "label": "Ztlumit při nahrávání",
@@ -686,11 +698,33 @@
     "transcribing": "Přepisuji...",
     "processing": "Zpracovávám...",
     "noInputTitle": "No input detected",
-    "noInputDescription": "Check your microphone settings.",
-    "fullSystemProgress": {
-      "copy": "Copy",
-      "view": "View",
-      "exit": "Exit"
+    "noInputDescription": "Check your microphone settings."
+  },
+  "workspace": {
+    "home": {
+      "eyebrow": "Workspace",
+      "title": "Open Uttr",
+      "description": "Start a full-system recording with live session summarization.",
+      "start": "Start",
+      "starting": "Starting",
+      "startFailed": "Could not start the session",
+      "liveSession": "Live session",
+      "sessionComplete": "Session complete",
+      "sources": "System audio + microphone",
+      "recording": "Recording",
+      "summary": "Summary",
+      "liveSummary": "Live summary",
+      "completeBody": "The meeting transcript is saved in Meetings.",
+      "liveBody": "Uttr is recording system audio and microphone audio. The summary appears here as the session is processed.",
+      "readyTitle": "Ready to start",
+      "readyDescription": "Use Start for full-system audio recording and session summarization.",
+      "stop": "Stop",
+      "stopping": "Stopping",
+      "stopFailed": "Could not stop the session"
+    },
+    "settings": {
+      "eyebrow": "Configuration",
+      "providers": "Providers"
     }
   }
 }

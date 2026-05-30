@@ -1,6 +1,6 @@
 {
   "tray": {
-    "settings": "Settings...",
+    "settings": "Open Uttr",
     "checkUpdates": "Check for Updates...",
     "copyLastTranscript": "Copy Last Transcript",
     "unloadModel": "Unload Model",
@@ -9,12 +9,12 @@
   },
   "sidebar": {
     "general": "General",
-    "fileTranscription": "File Transcription",
+    "fileTranscription": "Files",
     "models": "Models",
     "apiKeys": "API Keys",
     "advanced": "Advanced",
     "postProcessing": "Post Process",
-    "history": "History",
+    "history": "Transcriptions",
     "debug": "Debug",
     "about": "About",
     "manageSubscription": "Manage subscription",
@@ -32,7 +32,10 @@
     "upgradeStatusAccessExpired": "Access expired",
     "upgradeStatusLinkedAccount": "Linked account",
     "upgradeCaption": "{{status}} - $5/month",
-    "upgradeOpenFailed": "Could not start checkout. Try again from Uttr in a moment."
+    "upgradeOpenFailed": "Could not start checkout. Try again from Uttr in a moment.",
+    "home": "Meetings",
+    "files": "Files",
+    "settings": "Settings"
   },
   "onboarding": {
     "subtitle": "To get started, choose a transcription model",
@@ -173,8 +176,12 @@
             "description": "The keyboard shortcut to record and transcribe your voice."
           },
           "transcribe_full_system_audio": {
-            "name": "Full-System Recording Shortcut",
-            "description": "A dedicated toggle shortcut that starts and stops system audio plus microphone capture."
+            "name": "Meeting Recording Shortcut",
+            "description": "A dedicated shortcut that starts and stops meeting recording."
+          },
+          "edit_mode": {
+            "name": "Edit Mode Shortcut",
+            "description": "Transforms selected text using a spoken instruction."
           },
           "cancel": {
             "name": "Cancel Shortcut",
@@ -320,13 +327,13 @@
         "description": "Keep the microphone open between recordings so transcription starts faster. Turn this off to open it only while recording."
       },
       "fullSystemAudio": {
-        "title": "Enable system audio recording",
-        "shortcutLabel": "Shortcut",
-        "description": "Capture system audio and microphone together for calls and meetings.",
-        "loading": "Checking support and Screen Recording readiness...",
-        "statusCheckFailed": "Uttr could not check full-system audio support right now.",
+        "title": "Enable Meetings",
+        "shortcutLabel": "Meeting Recording Shortcut",
+        "description": "Record meetings with system audio and microphone together.",
+        "loading": "Checking Meetings support and Screen Recording readiness...",
+        "statusCheckFailed": "Uttr could not check Meetings support right now.",
         "unsupportedDescription": "This feature is available only on macOS 13 or later.",
-        "permissionRequired": "Screen Recording access is required before this can be enabled. Microphone access alone is not enough.",
+        "permissionRequired": "Screen Recording access is required before Meetings can be enabled. Microphone access alone is not enough.",
         "pendingDescription": "{{reason}} Microphone access is handled separately. Uttr will retry automatically when this window regains focus."
       },
       "audioFeedback": {
@@ -350,7 +357,7 @@
         "app": "App",
         "output": "Output",
         "transcription": "Transcription",
-        "history": "History",
+        "history": "Transcriptions",
         "experimental": "Experimental"
       },
       "experimentalToggle": {
@@ -513,16 +520,21 @@
     },
     "history": {
       "eyebrow": "Archive",
-      "title": "History",
+      "title": "Transcriptions",
       "openFolder": "Open Recordings Folder",
       "loading": "Loading history...",
-      "empty": "No transcriptions yet. Start recording to build your history!",
+      "empty": "No transcriptions yet.",
       "copyToClipboard": "Copy transcription to clipboard",
       "showingLatest": "Showing latest {{count}} entries (older entries are still stored).",
       "save": "Save transcription",
       "unsave": "Remove from saved",
       "delete": "Delete entry",
-      "deleteError": "Failed to delete entry. Please try again."
+      "deleteError": "Failed to delete entry. Please try again.",
+      "dictations": "Dictations",
+      "sessions": "Meetings",
+      "openSession": "Open meeting",
+      "emptySessions": "No meetings yet.",
+      "emptyDictations": "No transcriptions yet."
     },
     "debug": {
       "title": "Debug",
@@ -547,15 +559,15 @@
         "description": "Sensitivity for custom word corrections"
       },
       "historyLimit": {
-        "title": "History Limit",
-        "description": "Maximum number of history entries to keep",
-        "entries": "entries"
+        "title": "Normal Transcription Limit",
+        "description": "Maximum number of normal transcriptions to keep. Meetings are not capped.",
+        "entries": "normal transcriptions"
       },
       "recordingRetention": {
         "title": "Auto-Delete Recordings",
         "description": "Automatically delete old recordings to save space",
         "never": "Never",
-        "preserveLimit": "Keep latest {{count}}",
+        "preserveLimit": "Keep latest {{count}} normal transcriptions",
         "days3": "After 3 days",
         "weeks2": "After 2 weeks",
         "months3": "After 3 months",
@@ -576,7 +588,7 @@
       },
       "postProcessingToggle": {
         "label": "Post Processing",
-        "description": "Enable AI-powered text refinement after transcription"
+        "description": "Use AI for context-aware text refinement after transcription"
       },
       "muteWhileRecording": {
         "label": "Mute speakers during recording",
@@ -686,11 +698,33 @@
     "noInputTitle": "No input detected",
     "noInputDescription": "Check your microphone settings.",
     "transcribing": "Transcribing...",
-    "processing": "Processing...",
-    "fullSystemProgress": {
-      "copy": "Copy",
-      "view": "View",
-      "exit": "Exit"
+    "processing": "Processing..."
+  },
+  "workspace": {
+    "home": {
+      "eyebrow": "Workspace",
+      "title": "Open Uttr",
+      "description": "Start a full-system recording with live session summarization.",
+      "start": "Start",
+      "starting": "Starting",
+      "startFailed": "Could not start the session",
+      "liveSession": "Live session",
+      "sessionComplete": "Session complete",
+      "sources": "System audio + microphone",
+      "recording": "Recording",
+      "summary": "Summary",
+      "liveSummary": "Live summary",
+      "completeBody": "The meeting transcript is saved in Meetings.",
+      "liveBody": "Uttr is recording system audio and microphone audio. The summary appears here as the session is processed.",
+      "readyTitle": "Ready to start",
+      "readyDescription": "Use Start for full-system audio recording and session summarization.",
+      "stop": "Stop",
+      "stopping": "Stopping",
+      "stopFailed": "Could not stop the session"
+    },
+    "settings": {
+      "eyebrow": "Configuration",
+      "providers": "Providers"
     }
   }
 }

@@ -467,6 +467,7 @@ pub async fn transcribe_audio_file(
         &settings,
         &stitched_transcription,
         settings.post_process_enabled,
+        None,
     )
     .await;
     emit_file_transcription_progress(

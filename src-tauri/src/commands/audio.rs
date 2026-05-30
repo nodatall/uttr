@@ -7,6 +7,7 @@ use crate::audio_toolkit::audio::{list_input_devices, list_output_devices};
 use crate::full_system_audio_bridge::{self, FullSystemAudioPermissionState};
 use crate::managers::audio::{AudioRecordingManager, MicrophoneMode};
 use crate::settings::{get_settings, write_settings};
+use crate::TranscriptionCoordinator;
 use log::warn;
 use serde::{Deserialize, Serialize};
 use specta::Type;
@@ -454,6 +455,44 @@ pub async fn set_record_full_system_audio_enabled(
     write_settings(&app, settings);
 
     toggle
+}
+
+#[tauri::command]
+#[specta::specta]
+pub async fn start_full_system_audio_session(app: AppHandle) -> Result<(), String> {
+    let access = refresh_entitlement_state(&app)
+        .await
+        .unwrap_or_else(|_| get_install_access_snapshot(&app));
+    if !install_access_allows_premium_features(&access) {
+        return Err(premium_feature_access_message().to_string());
+    }
+
+    let readiness = full_system_audio_readiness_status().await;
+    if !readiness.ready {
+        return Err(readiness
+            .reason
+            .unwrap_or_else(|| "Full-system audio recording is not ready.".to_string()));
+    }
+
+    let coordinator = app
+        .try_state::<TranscriptionCoordinator>()
+        .ok_or_else(|| "Transcription coordinator is not initialized.".to_string())?;
+    coordinator.send_input("transcribe_full_system_audio", "Home Start", true, false);
+
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn stop_full_system_audio_session(app: AppHandle) -> Result<(), String> {
+    crate::utils::hide_recording_overlay(&app);
+
+    let coordinator = app
+        .try_state::<TranscriptionCoordinator>()
+        .ok_or_else(|| "Transcription coordinator is not initialized.".to_string())?;
+    coordinator.send_input("transcribe_full_system_audio", "Home Stop", true, false);
+
+    Ok(())
 }
 
 #[cfg(test)]

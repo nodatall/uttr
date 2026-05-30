@@ -31,6 +31,9 @@ static MIGRATIONS: &[M] = &[
     ),
     M::up("ALTER TABLE transcription_history ADD COLUMN post_processed_text TEXT;"),
     M::up("ALTER TABLE transcription_history ADD COLUMN post_process_prompt TEXT;"),
+    M::up(
+        "ALTER TABLE transcription_history ADD COLUMN recording_source TEXT NOT NULL DEFAULT 'dictation';",
+    ),
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize, Type)]
@@ -43,6 +46,7 @@ pub struct HistoryEntry {
     pub transcription_text: String,
     pub post_processed_text: Option<String>,
     pub post_process_prompt: Option<String>,
+    pub recording_source: String,
 }
 
 pub struct HistoryManager {
@@ -183,6 +187,7 @@ impl HistoryManager {
         transcription_text: String,
         post_processed_text: Option<String>,
         post_process_prompt: Option<String>,
+        recording_source: &str,
     ) -> Result<i64> {
         let timestamp = Utc::now().timestamp();
         let file_name = format!("uttr-{}.wav", timestamp);
@@ -200,6 +205,7 @@ impl HistoryManager {
             transcription_text,
             post_processed_text,
             post_process_prompt,
+            recording_source.to_string(),
         )?;
 
         // Clean up old entries
@@ -221,11 +227,12 @@ impl HistoryManager {
         transcription_text: String,
         post_processed_text: Option<String>,
         post_process_prompt: Option<String>,
+        recording_source: String,
     ) -> Result<i64> {
         let conn = self.get_connection()?;
         conn.execute(
-            "INSERT INTO transcription_history (file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![file_name, timestamp, false, title, transcription_text, post_processed_text, post_process_prompt],
+            "INSERT INTO transcription_history (file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, recording_source) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![file_name, timestamp, false, title, transcription_text, post_processed_text, post_process_prompt, recording_source],
         )?;
 
         debug!("Saved transcription to database");
@@ -282,12 +289,11 @@ impl HistoryManager {
         Ok(deleted_count)
     }
 
-    fn cleanup_by_count(&self, limit: usize) -> Result<()> {
-        let conn = self.get_connection()?;
-
-        // Get all entries that are not saved, ordered by timestamp desc
+    fn count_cleanup_candidates(conn: &Connection, limit: usize) -> Result<Vec<(i64, String)>> {
+        // Count-based history retention applies only to normal dictations.
+        // Meeting sessions are intentionally unbounded unless manually deleted.
         let mut stmt = conn.prepare(
-            "SELECT id, file_name FROM transcription_history WHERE saved = 0 ORDER BY timestamp DESC"
+            "SELECT id, file_name FROM transcription_history WHERE saved = 0 AND recording_source != 'full_system_audio' ORDER BY timestamp DESC"
         )?;
 
         let rows = stmt.query_map([], |row| {
@@ -299,9 +305,19 @@ impl HistoryManager {
             entries.push(row?);
         }
 
-        if entries.len() > limit {
-            let entries_to_delete = &entries[limit..];
-            let deleted_count = self.delete_entries_and_files(entries_to_delete)?;
+        Ok(if entries.len() > limit {
+            entries[limit..].to_vec()
+        } else {
+            Vec::new()
+        })
+    }
+
+    fn cleanup_by_count(&self, limit: usize) -> Result<()> {
+        let conn = self.get_connection()?;
+        let entries_to_delete = Self::count_cleanup_candidates(&conn, limit)?;
+
+        if !entries_to_delete.is_empty() {
+            let deleted_count = self.delete_entries_and_files(&entries_to_delete)?;
 
             if deleted_count > 0 {
                 debug!("Cleaned up {} old history entries by count", deleted_count);
@@ -309,6 +325,28 @@ impl HistoryManager {
         }
 
         Ok(())
+    }
+
+    fn time_cleanup_candidates(
+        conn: &Connection,
+        cutoff_timestamp: i64,
+    ) -> Result<Vec<(i64, String)>> {
+        // Time-based history retention applies only to normal dictations.
+        // Meeting sessions are intentionally unbounded unless manually deleted.
+        let mut stmt = conn.prepare(
+            "SELECT id, file_name FROM transcription_history WHERE saved = 0 AND timestamp < ?1 AND recording_source != 'full_system_audio'",
+        )?;
+
+        let rows = stmt.query_map(params![cutoff_timestamp], |row| {
+            Ok((row.get::<_, i64>("id")?, row.get::<_, String>("file_name")?))
+        })?;
+
+        let mut entries_to_delete: Vec<(i64, String)> = Vec::new();
+        for row in rows {
+            entries_to_delete.push(row?);
+        }
+
+        Ok(entries_to_delete)
     }
 
     fn cleanup_by_time(
@@ -326,19 +364,7 @@ impl HistoryManager {
             _ => unreachable!("Should not reach here"),
         };
 
-        // Get all unsaved entries older than the cutoff timestamp
-        let mut stmt = conn.prepare(
-            "SELECT id, file_name FROM transcription_history WHERE saved = 0 AND timestamp < ?1",
-        )?;
-
-        let rows = stmt.query_map(params![cutoff_timestamp], |row| {
-            Ok((row.get::<_, i64>("id")?, row.get::<_, String>("file_name")?))
-        })?;
-
-        let mut entries_to_delete: Vec<(i64, String)> = Vec::new();
-        for row in rows {
-            entries_to_delete.push(row?);
-        }
+        let entries_to_delete = Self::time_cleanup_candidates(&conn, cutoff_timestamp)?;
 
         let deleted_count = self.delete_entries_and_files(&entries_to_delete)?;
 
@@ -355,7 +381,7 @@ impl HistoryManager {
     pub async fn get_history_entries(&self) -> Result<Vec<HistoryEntry>> {
         let conn = self.get_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt FROM transcription_history ORDER BY timestamp DESC"
+            "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, recording_source FROM transcription_history ORDER BY timestamp DESC"
         )?;
 
         let rows = stmt.query_map([], |row| {
@@ -368,6 +394,7 @@ impl HistoryManager {
                 transcription_text: row.get("transcription_text")?,
                 post_processed_text: row.get("post_processed_text")?,
                 post_process_prompt: row.get("post_process_prompt")?,
+                recording_source: row.get("recording_source")?,
             })
         })?;
 
@@ -386,7 +413,7 @@ impl HistoryManager {
 
     fn get_latest_entry_with_conn(conn: &Connection) -> Result<Option<HistoryEntry>> {
         let mut stmt = conn.prepare(
-            "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt
+            "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, recording_source
              FROM transcription_history
              ORDER BY timestamp DESC
              LIMIT 1",
@@ -403,6 +430,7 @@ impl HistoryManager {
                     transcription_text: row.get("transcription_text")?,
                     post_processed_text: row.get("post_processed_text")?,
                     post_process_prompt: row.get("post_process_prompt")?,
+                    recording_source: row.get("recording_source")?,
                 })
             })
             .optional()?;
@@ -444,7 +472,7 @@ impl HistoryManager {
     pub async fn get_entry_by_id(&self, id: i64) -> Result<Option<HistoryEntry>> {
         let conn = self.get_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt
+            "SELECT id, file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, recording_source
              FROM transcription_history WHERE id = ?1",
         )?;
 
@@ -459,6 +487,7 @@ impl HistoryManager {
                     transcription_text: row.get("transcription_text")?,
                     post_processed_text: row.get("post_processed_text")?,
                     post_process_prompt: row.get("post_process_prompt")?,
+                    recording_source: row.get("recording_source")?,
                 })
             })
             .optional()?;
@@ -524,7 +553,8 @@ mod tests {
                 title TEXT NOT NULL,
                 transcription_text TEXT NOT NULL,
                 post_processed_text TEXT,
-                post_process_prompt TEXT
+                post_process_prompt TEXT,
+                recording_source TEXT NOT NULL DEFAULT 'dictation'
             );",
         )
         .expect("create transcription_history table");
@@ -532,17 +562,29 @@ mod tests {
     }
 
     fn insert_entry(conn: &Connection, timestamp: i64, text: &str, post_processed: Option<&str>) {
+        insert_entry_with_source(conn, timestamp, text, post_processed, false, "dictation");
+    }
+
+    fn insert_entry_with_source(
+        conn: &Connection,
+        timestamp: i64,
+        text: &str,
+        post_processed: Option<&str>,
+        saved: bool,
+        recording_source: &str,
+    ) {
         conn.execute(
-            "INSERT INTO transcription_history (file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            "INSERT INTO transcription_history (file_name, timestamp, saved, title, transcription_text, post_processed_text, post_process_prompt, recording_source)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
             params![
                 format!("uttr-{}.wav", timestamp),
                 timestamp,
-                false,
+                saved,
                 format!("Recording {}", timestamp),
                 text,
                 post_processed,
-                Option::<String>::None
+                Option::<String>::None,
+                recording_source
             ],
         )
         .expect("insert history entry");
@@ -568,5 +610,49 @@ mod tests {
         assert_eq!(entry.timestamp, 200);
         assert_eq!(entry.transcription_text, "second");
         assert_eq!(entry.post_processed_text.as_deref(), Some("processed"));
+        assert_eq!(entry.recording_source, "dictation");
+    }
+
+    #[test]
+    fn count_cleanup_candidates_ignore_meeting_sessions() {
+        let conn = setup_conn();
+        insert_entry_with_source(&conn, 100, "old dictation", None, false, "dictation");
+        insert_entry_with_source(&conn, 200, "new dictation", None, false, "dictation");
+        insert_entry_with_source(
+            &conn,
+            50,
+            "old meeting",
+            Some("old meeting summary"),
+            false,
+            "full_system_audio",
+        );
+        insert_entry_with_source(&conn, 25, "saved old dictation", None, true, "dictation");
+
+        let entries_to_delete =
+            HistoryManager::count_cleanup_candidates(&conn, 1).expect("fetch cleanup candidates");
+
+        assert_eq!(entries_to_delete.len(), 1);
+        assert_eq!(entries_to_delete[0].1, "uttr-100.wav");
+    }
+
+    #[test]
+    fn time_cleanup_candidates_ignore_meeting_sessions() {
+        let conn = setup_conn();
+        insert_entry_with_source(&conn, 100, "old dictation", None, false, "dictation");
+        insert_entry_with_source(
+            &conn,
+            90,
+            "old meeting",
+            Some("old meeting summary"),
+            false,
+            "full_system_audio",
+        );
+        insert_entry_with_source(&conn, 300, "new dictation", None, false, "dictation");
+
+        let entries_to_delete =
+            HistoryManager::time_cleanup_candidates(&conn, 200).expect("fetch cleanup candidates");
+
+        assert_eq!(entries_to_delete.len(), 1);
+        assert_eq!(entries_to_delete[0].1, "uttr-100.wav");
     }
 }

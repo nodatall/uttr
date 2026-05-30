@@ -1,5 +1,6 @@
 mod access;
 mod actions;
+mod app_context;
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 mod apple_intelligence;
 mod audio_feedback;
@@ -17,6 +18,7 @@ mod overlay;
 mod settings;
 mod shortcut;
 mod signal_handle;
+mod summary_client;
 mod transcription_coordinator;
 mod tray;
 mod tray_i18n;
@@ -36,7 +38,6 @@ use signal_hook::consts::SIGUSR2;
 use signal_hook::iterator::Signals;
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
-use std::time::Duration;
 use tauri::image::Image;
 pub use transcription_coordinator::TranscriptionCoordinator;
 
@@ -50,7 +51,6 @@ use crate::settings::get_settings;
 // Global atomic to store the file log level filter
 // We use u8 to store the log::LevelFilter as a number
 pub static FILE_LOG_LEVEL: AtomicU8 = AtomicU8::new(log::LevelFilter::Debug as u8);
-const BACKEND_SHORTCUT_REFRESH_INTERVAL: Duration = Duration::from_secs(3 * 60);
 
 fn level_filter_from_u8(value: u8) -> log::LevelFilter {
     match value {
@@ -303,34 +303,6 @@ fn initialize_release_smoke_input(app_handle: &AppHandle) {
     }
 }
 
-fn spawn_shortcut_refresh_heartbeat(app_handle: AppHandle) {
-    tauri::async_runtime::spawn(async move {
-        loop {
-            tokio::time::sleep(BACKEND_SHORTCUT_REFRESH_INTERVAL).await;
-
-            if app_handle
-                .try_state::<crate::commands::ShortcutsInitialized>()
-                .is_none()
-            {
-                continue;
-            }
-
-            if shortcut::shortcut_refresh_blocked_by_active_session(&app_handle)
-                || shortcut::shortcut_refresh_blocked_by_warm_on_demand_microphone(&app_handle)
-            {
-                continue;
-            }
-
-            if let Err(err) = shortcut::refresh_shortcuts(&app_handle) {
-                log::warn!(
-                    "Failed to refresh shortcuts from backend heartbeat: {}",
-                    err
-                );
-            }
-        }
-    });
-}
-
 #[tauri::command]
 #[specta::specta]
 fn trigger_update_check(app: AppHandle) -> Result<(), String> {
@@ -377,6 +349,8 @@ pub fn run() {
         shortcut::fetch_post_process_models,
         shortcut::change_post_process_cleaning_prompt_preset,
         shortcut::update_custom_words,
+        shortcut::update_custom_vocabulary_terms,
+        shortcut::change_edit_mode_enabled_setting,
         shortcut::suspend_binding,
         shortcut::resume_binding,
         shortcut::change_post_process_timeout_setting,
@@ -439,6 +413,8 @@ pub fn run() {
         commands::audio::get_full_system_audio_support_status,
         commands::audio::get_full_system_audio_readiness_status,
         commands::audio::set_record_full_system_audio_enabled,
+        commands::audio::start_full_system_audio_session,
+        commands::audio::stop_full_system_audio_session,
         commands::audio::set_clamshell_microphone,
         commands::audio::get_clamshell_microphone,
         commands::audio::is_recording,
@@ -520,7 +496,6 @@ pub fn run() {
 
             initialize_core_logic(&app_handle);
             initialize_release_smoke_input(&app_handle);
-            spawn_shortcut_refresh_heartbeat(app_handle.clone());
 
             // Show main window only if not starting hidden
             if !settings.start_hidden {

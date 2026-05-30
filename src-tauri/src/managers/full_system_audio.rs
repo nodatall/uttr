@@ -1,5 +1,6 @@
 use crate::audio_toolkit::{
     constants::WHISPER_SAMPLE_RATE, mix_transcription_pcm_sources, normalize_transcription_pcm,
+    DrainResult,
 };
 use crate::full_system_audio_bridge::{
     self, FullSystemAudioCaptureConfig, FullSystemAudioCapturedPcm, FullSystemAudioPermissionState,
@@ -113,6 +114,7 @@ impl FullSystemSessionState {
 
 pub trait MicrophoneCapture: Send + Sync {
     fn start_microphone_capture(&self, binding_id: &str) -> Result<(), anyhow::Error>;
+    fn drain_microphone_capture(&self, binding_id: &str) -> Option<DrainResult>;
     fn stop_microphone_capture(&self, binding_id: &str) -> Option<Vec<f32>>;
     fn cancel_microphone_capture(&self);
 }
@@ -124,6 +126,10 @@ impl MicrophoneCapture for AudioRecordingManager {
         } else {
             Err(anyhow!("Microphone capture could not start."))
         }
+    }
+
+    fn drain_microphone_capture(&self, binding_id: &str) -> Option<DrainResult> {
+        self.drain_recording_delta(binding_id)
     }
 
     fn stop_microphone_capture(&self, binding_id: &str) -> Option<Vec<f32>> {
@@ -138,6 +144,7 @@ impl MicrophoneCapture for AudioRecordingManager {
 pub trait FullSystemAudioBackend: Send + Sync {
     fn is_supported(&self) -> bool;
     fn start_capture(&self, config: &FullSystemAudioCaptureConfig) -> FullSystemAudioStartResult;
+    fn drain_capture(&self) -> FullSystemAudioStopResult;
     fn stop_capture(&self) -> FullSystemAudioStopResult;
     fn cancel_capture(&self);
     fn cleanup_last_session(&self);
@@ -153,6 +160,10 @@ impl FullSystemAudioBackend for BridgeBackend {
 
     fn start_capture(&self, config: &FullSystemAudioCaptureConfig) -> FullSystemAudioStartResult {
         full_system_audio_bridge::start_capture(config)
+    }
+
+    fn drain_capture(&self) -> FullSystemAudioStopResult {
+        full_system_audio_bridge::drain_capture()
     }
 
     fn stop_capture(&self) -> FullSystemAudioStopResult {
@@ -404,6 +415,39 @@ where
         }
     }
 
+    pub fn drain_session_delta(&self, binding_id: &str) -> Option<Vec<f32>> {
+        let snapshot = {
+            let state = self.state.lock().unwrap();
+            match state.clone() {
+                FullSystemSessionState::Active(snapshot) if snapshot.binding_id == binding_id => {
+                    snapshot
+                }
+                _ => return None,
+            }
+        };
+
+        let microphone_samples = if snapshot.microphone.is_active() {
+            self.microphone
+                .drain_microphone_capture(&snapshot.binding_id)
+                .map(|delta| delta.samples)
+        } else {
+            None
+        };
+
+        let mut bridge_result = if snapshot.system_audio.is_active() {
+            Some(self.bridge.drain_capture())
+        } else {
+            None
+        };
+
+        mix_session_audio(
+            microphone_samples,
+            bridge_result
+                .as_mut()
+                .and_then(|result| result.pcm.take_samples()),
+        )
+    }
+
     pub fn cancel_session(&self) -> FullSystemSessionStopResult {
         let snapshot = {
             let mut state = self.state.lock().unwrap();
@@ -563,6 +607,10 @@ mod tests {
             self.stop_result.lock().unwrap().take()
         }
 
+        fn drain_microphone_capture(&self, _binding_id: &str) -> Option<DrainResult> {
+            None
+        }
+
         fn cancel_microphone_capture(&self) {
             self.cancel_calls.fetch_add(1, Ordering::SeqCst);
         }
@@ -634,6 +682,10 @@ mod tests {
         fn stop_capture(&self) -> FullSystemAudioStopResult {
             self.stop_calls.fetch_add(1, Ordering::SeqCst);
             self.stop_result.lock().unwrap().take().unwrap_or_default()
+        }
+
+        fn drain_capture(&self) -> FullSystemAudioStopResult {
+            FullSystemAudioStopResult::default()
         }
 
         fn cancel_capture(&self) {

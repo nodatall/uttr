@@ -195,14 +195,17 @@ private final class FullSystemAudioCaptureSession: NSObject, SCStreamOutput, SCS
 
     func stop() -> UttrFullSystemAudioStopResult {
         stopStream()
+        return drain(stopped: 1)
+    }
 
+    func drain(stopped: Int32 = 0) -> UttrFullSystemAudioStopResult {
         let snapshot = takeSnapshot()
         let frameCount = snapshot.channelCount > 0
             ? Int64(snapshot.samples.count / Int(snapshot.channelCount))
             : 0
 
         return makeStopResult(
-            stopped: 1,
+            stopped: stopped,
             sampleRate: snapshot.sampleRate,
             channelCount: snapshot.channelCount,
             frameCount: frameCount,
@@ -213,6 +216,7 @@ private final class FullSystemAudioCaptureSession: NSObject, SCStreamOutput, SCS
             )
         )
     }
+
 
     func cancel() {
         stopStream()
@@ -574,6 +578,35 @@ public func uttrFullSystemAudioStopCapture() -> UttrFullSystemAudioStopResult {
     }
 
     return session.stop()
+}
+
+@_cdecl("uttr_full_system_audio_drain_capture")
+public func uttrFullSystemAudioDrainCapture() -> UttrFullSystemAudioStopResult {
+    guard #available(macOS 13.0, *) else {
+        return makeStopResult(
+            stopped: 0,
+            sampleRate: 0,
+            channelCount: 0,
+            frameCount: 0,
+            pcm: makeEmptyPcmBuffer()
+        )
+    }
+
+    activeSessionLock.lock()
+    let session = activeSession as? FullSystemAudioCaptureSession
+    activeSessionLock.unlock()
+
+    guard let session else {
+        return makeStopResult(
+            stopped: 0,
+            sampleRate: 0,
+            channelCount: 0,
+            frameCount: 0,
+            pcm: makeEmptyPcmBuffer()
+        )
+    }
+
+    return session.drain()
 }
 
 @_cdecl("uttr_full_system_audio_cancel_capture")

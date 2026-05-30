@@ -83,9 +83,7 @@ pub fn update_tray_menu(app: &AppHandle, state: &TrayIconState, locale: Option<&
 
     let locale = locale.unwrap_or(&settings.app_language);
     let strings = get_tray_translations(Some(locale.to_string()));
-    let settings_label = strings
-        .settings
-        .trim_matches(|c: char| c == '.' || c == '…' || c.is_whitespace());
+    let settings_label = "Open Uttr";
 
     // Platform-specific accelerators
     #[cfg(target_os = "macos")]
@@ -319,6 +317,7 @@ mod tests {
             transcription_text: transcription.to_string(),
             post_processed_text: post_processed.map(|text| text.to_string()),
             post_process_prompt: None,
+            recording_source: "dictation".to_string(),
         }
     }
 

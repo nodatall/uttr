@@ -25,8 +25,10 @@ const isCloudModel = (modelId: string): boolean =>
 
 export const ModelsSettings: React.FC = () => {
   const { t, i18n } = useTranslation();
-  const { installAccess } = useSettings();
-  const showModelControls = shouldShowModelControls(installAccess);
+  const { installAccess, settings } = useSettings();
+  const showModelControls =
+    shouldShowModelControls(installAccess) ||
+    Boolean(settings?.byok_enabled || settings?.debug_mode);
   const [switchingModelId, setSwitchingModelId] = useState<string | null>(null);
   const [languageFilter, setLanguageFilter] = useState("all");
   const [languageDropdownOpen, setLanguageDropdownOpen] = useState(false);
@@ -261,9 +263,6 @@ export const ModelsSettings: React.FC = () => {
     <div className="mx-auto w-full max-w-3xl space-y-6">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="space-y-2">
-          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-text/34">
-            {t("settings.models.eyebrow", { defaultValue: "Model library" })}
-          </p>
           <h1 className="text-[28px] font-semibold tracking-tight text-text">
             {t("settings.models.title")}
           </h1>

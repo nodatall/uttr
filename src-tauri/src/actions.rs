@@ -1,11 +1,12 @@
 use crate::access::{
-    get_install_access_snapshot, install_access_allows_premium_features,
-    install_access_allows_transcription, premium_feature_access_message,
+    bootstrap_install_state, get_install_access_snapshot, install_access_allows_premium_features,
+    install_access_allows_transcription, premium_feature_access_message, refresh_entitlement_state,
 };
+use crate::app_context::{collect_text_context, AppContextSnapshot};
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use crate::apple_intelligence;
 use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, SoundType};
-use crate::audio_toolkit::{normalize_spoken_lists, normalize_spoken_punctuation};
+use crate::byok_secrets;
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::full_system_audio::{
     FullSystemAudioSessionManager, FullSystemSessionStopResult,
@@ -14,10 +15,12 @@ use crate::managers::history::HistoryManager;
 use crate::managers::model::is_cloud_model_id;
 use crate::managers::transcription::TranscriptionManager;
 use crate::settings::{
-    get_settings, write_settings, AppSettings, CleaningPromptPreset, PostProcessProvider,
-    APPLE_INTELLIGENCE_PROVIDER_ID, NUANCED_CLEANING_PROMPT, STRICT_CLEANING_PROMPT,
+    get_settings, normalize_custom_vocabulary_terms, write_settings, AppSettings,
+    CleaningPromptPreset, PostProcessProvider, APPLE_INTELLIGENCE_PROVIDER_ID,
+    STRICT_CLEANING_PROMPT,
 };
 use crate::shortcut;
+use crate::summary_client;
 use crate::tray::{change_tray_icon, TrayIconState};
 use crate::utils::{
     self, show_processing_overlay, show_recording_overlay, show_transcribing_overlay,
@@ -27,21 +30,31 @@ use crate::TranscriptionCoordinator;
 use ferrous_opencc::{config::BuiltinConfig, OpenCC};
 use log::{debug, error, warn};
 use once_cell::sync::Lazy;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
+    atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
 };
 use std::time::{Duration, Instant};
+use tauri::async_runtime::JoinHandle;
 use tauri::AppHandle;
 use tauri::Emitter;
 use tauri::Manager;
 use tauri_plugin_clipboard_manager::ClipboardExt;
-use tokio::time::timeout;
+use tokio::time::{sleep, timeout};
 
 const NO_INPUT_OVERLAY_MIN_DURATION: Duration = Duration::from_secs(4);
 const PROCESSING_OVERLAY_DELAY: Duration = Duration::from_millis(500);
 const RELEASE_SMOKE_TRANSCRIBING_HOLD_MS_DEFAULT: u64 = 1_500;
+const FULL_SYSTEM_LIVE_CHUNK_SECONDS: usize = 10;
+const FULL_SYSTEM_LIVE_CHUNK_SAMPLES: usize = 16_000 * FULL_SYSTEM_LIVE_CHUNK_SECONDS;
+const FULL_SYSTEM_LIVE_CHUNK_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const FULL_SYSTEM_LIVE_SUMMARY_SECONDS: usize = 60;
+const FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL: u64 =
+    (FULL_SYSTEM_LIVE_SUMMARY_SECONDS / FULL_SYSTEM_LIVE_CHUNK_SECONDS) as u64;
+const FULL_SYSTEM_SUMMARY_MODEL_FALLBACK: &str = "gpt-4o-mini";
+const FULL_SYSTEM_SUMMARY_SYSTEM_PROMPT: &str = "You are the live meeting summarizer inside Uttr, a macOS transcription app. Update meeting notes from transcript text only. Return valid JSON only with current_gist and expanded key_points.";
 
 #[derive(Clone, Copy)]
 enum DeferredOverlayState {
@@ -52,6 +65,7 @@ enum DeferredOverlayState {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum TranscriptionCompletionMode {
     Standard,
+    EditMode,
     FullSystemOverlay,
 }
 
@@ -62,6 +76,70 @@ enum FullSystemProgressStage {
     Processing,
     Complete,
 }
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionWindowStatePayload {
+    stage: String,
+    title: String,
+    subtitle: String,
+    progress_label: String,
+    progress_value: f32,
+    summary_text: Option<String>,
+    raw_transcript_text: Option<String>,
+    history_entry_id: Option<i64>,
+}
+
+#[derive(Debug)]
+struct FullSystemLiveRuntime {
+    stop_requested: AtomicBool,
+    chunk_count: AtomicU64,
+    transcript_text: Mutex<String>,
+    summary_text: Mutex<Option<String>>,
+    summary_provider: Mutex<Option<String>>,
+    summary_error: Mutex<Option<String>>,
+    summary_disabled: AtomicBool,
+    recorded_samples: Mutex<Vec<f32>>,
+    pending_samples: Mutex<Vec<f32>>,
+}
+
+impl FullSystemLiveRuntime {
+    fn new() -> Self {
+        Self {
+            stop_requested: AtomicBool::new(false),
+            chunk_count: AtomicU64::new(0),
+            transcript_text: Mutex::new(String::new()),
+            summary_text: Mutex::new(None),
+            summary_provider: Mutex::new(None),
+            summary_error: Mutex::new(None),
+            summary_disabled: AtomicBool::new(false),
+            recorded_samples: Mutex::new(Vec::new()),
+            pending_samples: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+struct FullSystemLiveSession {
+    binding_id: String,
+    runtime: Arc<FullSystemLiveRuntime>,
+    worker_handle: JoinHandle<()>,
+}
+
+struct FullSystemLiveFinal {
+    transcript_text: String,
+    summary_text: Option<String>,
+    summary_provider: Option<String>,
+    recorded_samples: Vec<f32>,
+    chunk_count: u64,
+}
+
+static FULL_SYSTEM_LIVE_SESSION: Lazy<Mutex<Option<FullSystemLiveSession>>> =
+    Lazy::new(|| Mutex::new(None));
+static ACTIVE_APP_CONTEXT: Lazy<Mutex<HashMap<String, AppContextSnapshot>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+static ACTIVE_APP_CONTEXT_REQUESTS: Lazy<Mutex<HashMap<String, u64>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+static APP_CONTEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 
 /// Drop guard that notifies the [`TranscriptionCoordinator`] when the
 /// transcription pipeline finishes — whether it completes normally or panics.
@@ -117,6 +195,7 @@ pub trait ShortcutAction: Send + Sync {
 // Transcribe Action
 struct TranscribeAction {
     post_process: bool,
+    completion_mode: TranscriptionCompletionMode,
 }
 
 struct FullSystemTranscribeAction {
@@ -141,7 +220,7 @@ const GROQ_MODEL_PREFERENCES: &[&str] = &[
 const FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT: Duration = Duration::from_secs(45);
 const FULL_PASS_TRANSCRIPTION_TIMEOUT_PER_TEN_MINUTES: Duration = Duration::from_secs(60);
 const FULL_PASS_TRANSCRIPTION_WATCHDOG_GRACE: Duration = Duration::from_secs(15);
-const POST_PROCESS_TIMEOUT_DEFAULT: Duration = Duration::from_secs(60);
+const POST_PROCESS_TIMEOUT_DEFAULT: Duration = Duration::from_secs(20);
 const SHORT_UTTERANCE_SAMPLES: usize = 16_000 * 10;
 
 static AUTO_SELECTED_MODEL_CACHE: Lazy<Mutex<HashMap<String, String>>> =
@@ -257,6 +336,7 @@ async fn post_process_transcription(
     app_handle: &AppHandle,
     settings: &AppSettings,
     transcription: &str,
+    context: Option<&AppContextSnapshot>,
 ) -> Option<String> {
     let provider = match settings.active_post_process_provider().cloned() {
         Some(provider) => provider,
@@ -333,18 +413,8 @@ async fn post_process_transcription(
         }
     }
 
-    // Resolve system prompt from the selected preset
-    let resolved_system_prompt = match settings.post_process_cleaning_prompt_preset {
-        CleaningPromptPreset::Strict => Some(STRICT_CLEANING_PROMPT),
-        CleaningPromptPreset::Nuanced => Some(NUANCED_CLEANING_PROMPT),
-        CleaningPromptPreset::Custom => {
-            if settings.post_process_system_prompt.trim().is_empty() {
-                None
-            } else {
-                Some(settings.post_process_system_prompt.as_str())
-            }
-        }
-    };
+    let resolved_system_prompt = resolved_post_process_system_prompt(settings, context);
+    let resolved_system_prompt = resolved_system_prompt.as_deref();
 
     // Send the chat completion request
     match crate::llm_client::send_chat_completion(
@@ -497,6 +567,147 @@ fn clean_post_process_response(content: &str) -> String {
     strip_wrapping_code_fence(&cleaned)
 }
 
+fn take_active_context(binding_id: &str, wait_for_capture: bool) -> AppContextSnapshot {
+    const CONTEXT_CAPTURE_WAIT_ATTEMPTS: usize = 15;
+    const CONTEXT_CAPTURE_WAIT_STEP: Duration = Duration::from_millis(100);
+
+    if wait_for_capture {
+        for _ in 0..CONTEXT_CAPTURE_WAIT_ATTEMPTS {
+            if ACTIVE_APP_CONTEXT.lock().unwrap().contains_key(binding_id) {
+                break;
+            }
+            if !ACTIVE_APP_CONTEXT_REQUESTS
+                .lock()
+                .unwrap()
+                .contains_key(binding_id)
+            {
+                break;
+            }
+            std::thread::sleep(CONTEXT_CAPTURE_WAIT_STEP);
+        }
+    }
+
+    ACTIVE_APP_CONTEXT_REQUESTS
+        .lock()
+        .unwrap()
+        .remove(binding_id);
+    ACTIVE_APP_CONTEXT
+        .lock()
+        .unwrap()
+        .remove(binding_id)
+        .unwrap_or_default()
+}
+
+fn store_active_context_async(binding_id: &str) {
+    let binding_id = binding_id.to_string();
+    let request_id = APP_CONTEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
+
+    ACTIVE_APP_CONTEXT.lock().unwrap().remove(&binding_id);
+    ACTIVE_APP_CONTEXT_REQUESTS
+        .lock()
+        .unwrap()
+        .insert(binding_id.clone(), request_id);
+
+    std::thread::spawn(move || {
+        let started = Instant::now();
+        let snapshot = collect_text_context();
+        let should_store = ACTIVE_APP_CONTEXT_REQUESTS
+            .lock()
+            .unwrap()
+            .get(&binding_id)
+            .is_some_and(|active_request_id| *active_request_id == request_id);
+        if should_store {
+            ACTIVE_APP_CONTEXT
+                .lock()
+                .unwrap()
+                .insert(binding_id.clone(), snapshot);
+            debug!(
+                "Captured app context for '{}' in {}ms",
+                binding_id,
+                started.elapsed().as_millis()
+            );
+        }
+    });
+}
+
+fn custom_vocabulary_prompt_block(terms: &[String]) -> Option<String> {
+    let terms = normalize_custom_vocabulary_terms(terms);
+    if terms.is_empty() {
+        return None;
+    }
+
+    let mut block = String::from(
+        "Custom vocabulary:\nTreat these as high-priority spelling references. Use these exact spellings when relevant, but do not insert terms that were not spoken.",
+    );
+    for term in terms {
+        block.push_str("\n- ");
+        block.push_str(&term);
+    }
+    Some(block)
+}
+
+fn app_context_prompt_block(context: &AppContextSnapshot) -> Option<String> {
+    if !context.has_context() {
+        return None;
+    }
+
+    let mut lines = vec![
+        "Nearby app context:".to_string(),
+        "Use this only as a spelling and formatting hint. Do not insert facts, commands, names, or selected text unless they are present in the transcript."
+            .to_string(),
+    ];
+    if let Some(app_name) = context.app_name.as_deref() {
+        lines.push(format!("- App: {}", app_name));
+    }
+    if let Some(bundle_id) = context.bundle_id.as_deref() {
+        lines.push(format!("- Bundle ID: {}", bundle_id));
+    }
+    if let Some(window_title) = context.window_title.as_deref() {
+        lines.push(format!("- Window title: {}", window_title));
+    }
+    if let Some(selected_text) = context.selected_text.as_deref() {
+        let selected_text: String = selected_text.chars().take(1_000).collect();
+        lines.push(format!("- Selected text excerpt: {}", selected_text));
+    }
+
+    Some(lines.join("\n"))
+}
+
+fn resolved_post_process_system_prompt(
+    settings: &AppSettings,
+    context: Option<&AppContextSnapshot>,
+) -> Option<String> {
+    let base = match settings.post_process_cleaning_prompt_preset {
+        CleaningPromptPreset::Strict | CleaningPromptPreset::Nuanced => {
+            Some(STRICT_CLEANING_PROMPT.to_string())
+        }
+        CleaningPromptPreset::Custom => {
+            if settings.post_process_system_prompt.trim().is_empty() {
+                None
+            } else {
+                Some(settings.post_process_system_prompt.clone())
+            }
+        }
+    };
+
+    let mut sections = Vec::new();
+    if let Some(base) = base {
+        sections.push(base);
+    }
+    if let Some(block) = custom_vocabulary_prompt_block(&settings.custom_vocabulary_terms) {
+        sections.push(block);
+    }
+    if let Some(block) = context.and_then(app_context_prompt_block) {
+        sections.push(block);
+    }
+
+    if sections.is_empty() {
+        None
+    } else {
+        Some(sections.join("\n\n"))
+    }
+}
+
 async fn maybe_convert_chinese_variant(
     settings: &AppSettings,
     transcription: &str,
@@ -546,6 +757,7 @@ pub async fn finalize_transcription_output(
     settings: &AppSettings,
     transcription: &str,
     post_process: bool,
+    context: Option<&AppContextSnapshot>,
 ) -> FinalizedTranscriptionOutput {
     let mut final_text = transcription.to_string();
     let mut post_processed_text: Option<String> = None;
@@ -563,7 +775,7 @@ pub async fn finalize_transcription_output(
     let processed = if post_process {
         match timeout(
             post_process_timeout,
-            post_process_transcription(app_handle, settings, &final_text),
+            post_process_transcription(app_handle, settings, &final_text, context),
         )
         .await
         {
@@ -583,22 +795,9 @@ pub async fn finalize_transcription_output(
     if let Some(processed_text) = processed.and_then(usable_post_processed_text) {
         post_processed_text = Some(processed_text.clone());
         final_text = processed_text;
-        post_process_prompt = Some(match settings.post_process_cleaning_prompt_preset {
-            CleaningPromptPreset::Strict => STRICT_CLEANING_PROMPT.to_string(),
-            CleaningPromptPreset::Nuanced => NUANCED_CLEANING_PROMPT.to_string(),
-            CleaningPromptPreset::Custom => settings.post_process_system_prompt.clone(),
-        });
+        post_process_prompt = resolved_post_process_system_prompt(settings, context);
     } else if final_text != transcription {
         post_processed_text = Some(final_text.clone());
-    }
-
-    if post_process {
-        let normalized_punctuation = normalize_spoken_punctuation(&final_text);
-        let normalized_lists = normalize_spoken_lists(&normalized_punctuation);
-        if normalized_lists != final_text {
-            final_text = normalized_lists;
-            post_processed_text = Some(final_text.clone());
-        }
     }
 
     FinalizedTranscriptionOutput {
@@ -830,53 +1029,946 @@ fn start_transcription_session(app: &AppHandle, binding_id: &str, started: bool)
     );
 }
 
-fn full_system_progress_payload(
+fn focus_workspace_window(app: &AppHandle) {
+    if let Some(main_window) = app.get_webview_window("main") {
+        if let Err(e) = main_window.show() {
+            error!("Failed to show main window: {}", e);
+        }
+        if let Err(e) = main_window.set_focus() {
+            error!("Failed to focus main window: {}", e);
+        }
+        #[cfg(target_os = "macos")]
+        {
+            if let Err(e) = app.set_activation_policy(tauri::ActivationPolicy::Regular) {
+                error!("Failed to set activation policy to Regular: {}", e);
+            }
+        }
+    }
+}
+
+fn emit_session_window_state(app: &AppHandle, payload: SessionWindowStatePayload) {
+    if let Err(e) = app.emit("session-window-state", payload) {
+        warn!("Failed to emit session-window-state: {}", e);
+    }
+}
+
+fn session_window_state_payload(
     stage: FullSystemProgressStage,
-    transcript_text: Option<String>,
+    summary_text: Option<String>,
+    raw_transcript_text: Option<String>,
     history_entry_id: Option<i64>,
-) -> crate::overlay::FullSystemProgressPayload {
+) -> SessionWindowStatePayload {
     match stage {
-        FullSystemProgressStage::Preparing => crate::overlay::FullSystemProgressPayload {
+        FullSystemProgressStage::Preparing => SessionWindowStatePayload {
             stage: "preparing".to_string(),
-            title: "Preparing capture".to_string(),
-            subtitle: "Getting the system and microphone audio ready.".to_string(),
+            title: "Preparing session".to_string(),
+            subtitle: "System audio and microphone capture are being prepared.".to_string(),
             progress_label: "Preparing audio".to_string(),
             progress_value: 0.18,
-            footer_note: "Large recordings can take a little longer.".to_string(),
-            transcript_text: None,
+            summary_text: None,
+            raw_transcript_text: None,
             history_entry_id: None,
         },
-        FullSystemProgressStage::Transcribing => crate::overlay::FullSystemProgressPayload {
+        FullSystemProgressStage::Transcribing => SessionWindowStatePayload {
             stage: "transcribing".to_string(),
-            title: "Transcribing system audio".to_string(),
-            subtitle: "Working through the captured audio now.".to_string(),
+            title: "Transcribing session".to_string(),
+            subtitle: "Working through the captured system and microphone audio.".to_string(),
             progress_label: "Transcribing".to_string(),
             progress_value: 0.66,
-            footer_note: "Uttr will save the finished transcript to History.".to_string(),
-            transcript_text: None,
+            summary_text: None,
+            raw_transcript_text: None,
             history_entry_id: None,
         },
-        FullSystemProgressStage::Processing => crate::overlay::FullSystemProgressPayload {
+        FullSystemProgressStage::Processing => SessionWindowStatePayload {
             stage: "processing".to_string(),
-            title: "Polishing transcript".to_string(),
-            subtitle: "Applying post-processing before saving.".to_string(),
+            title: "Preparing summary".to_string(),
+            subtitle: "Cleaning up the transcript before saving the session.".to_string(),
             progress_label: "Post-processing".to_string(),
             progress_value: 0.88,
-            footer_note: "Cleaning up punctuation and formatting.".to_string(),
-            transcript_text: None,
+            summary_text: None,
+            raw_transcript_text: None,
             history_entry_id: None,
         },
-        FullSystemProgressStage::Complete => crate::overlay::FullSystemProgressPayload {
+        FullSystemProgressStage::Complete => SessionWindowStatePayload {
             stage: "complete".to_string(),
-            title: "Transcript ready".to_string(),
-            subtitle: "Saved to History. Copy it now or open the full entry.".to_string(),
+            title: "Session saved".to_string(),
+            subtitle: "The transcript is ready under Meetings.".to_string(),
             progress_label: "Complete".to_string(),
             progress_value: 1.0,
-            footer_note: "Ready for review.".to_string(),
-            transcript_text,
+            summary_text,
+            raw_transcript_text,
             history_entry_id,
         },
     }
+}
+
+fn emit_active_session_window_state(app: &AppHandle) {
+    emit_session_window_state(
+        app,
+        SessionWindowStatePayload {
+            stage: "active".to_string(),
+            title: "Live session".to_string(),
+            subtitle: "Capturing system audio and microphone audio.".to_string(),
+            progress_label: "Recording".to_string(),
+            progress_value: 0.0,
+            summary_text: None,
+            raw_transcript_text: None,
+            history_entry_id: None,
+        },
+    );
+}
+
+fn emit_idle_session_window_state(app: &AppHandle) {
+    emit_session_window_state(
+        app,
+        SessionWindowStatePayload {
+            stage: "idle".to_string(),
+            title: "Open Uttr".to_string(),
+            subtitle: String::new(),
+            progress_label: String::new(),
+            progress_value: 0.0,
+            summary_text: None,
+            raw_transcript_text: None,
+            history_entry_id: None,
+        },
+    );
+}
+
+fn append_live_text(existing: &mut String, incoming: &str) {
+    let incoming = incoming.trim();
+    if incoming.is_empty() {
+        return;
+    }
+    if !existing.trim().is_empty() {
+        existing.push(' ');
+    }
+    existing.push_str(incoming);
+}
+
+fn emit_live_session_summary_state(
+    app: &AppHandle,
+    chunk_count: u64,
+    summary_text: Option<String>,
+    summary_error: Option<String>,
+) {
+    let (subtitle, body) = match (summary_text, summary_error) {
+        (Some(summary), _) if !summary.trim().is_empty() => (
+            "Capturing system audio and microphone audio.".to_string(),
+            Some(summary),
+        ),
+        (_, Some(error)) => (
+            "Capturing audio. Live summary is unavailable.".to_string(),
+            Some(error),
+        ),
+        _ => (
+            "Capturing system audio and microphone audio.".to_string(),
+            None,
+        ),
+    };
+
+    emit_session_window_state(
+        app,
+        SessionWindowStatePayload {
+            stage: "active".to_string(),
+            title: "Live session".to_string(),
+            subtitle,
+            progress_label: format!("Chunk {} summarized", chunk_count),
+            progress_value: 0.0,
+            summary_text: body,
+            raw_transcript_text: None,
+            history_entry_id: None,
+        },
+    );
+}
+
+fn emit_live_session_transcribed_state(
+    app: &AppHandle,
+    chunk_count: u64,
+    summary_text: Option<String>,
+    summary_error: Option<String>,
+) {
+    let (subtitle, body) = match (summary_text, summary_error) {
+        (Some(summary), _) if !summary.trim().is_empty() => (
+            "Capturing system audio and microphone audio.".to_string(),
+            Some(summary),
+        ),
+        (_, Some(error)) => (
+            "Capturing audio. Live summary is unavailable.".to_string(),
+            Some(error),
+        ),
+        _ => (
+            "Capturing system audio and microphone audio.".to_string(),
+            None,
+        ),
+    };
+
+    emit_session_window_state(
+        app,
+        SessionWindowStatePayload {
+            stage: "active".to_string(),
+            title: "Live session".to_string(),
+            subtitle,
+            progress_label: format!("Transcribed chunk {}", chunk_count),
+            progress_value: 0.0,
+            summary_text: body,
+            raw_transcript_text: None,
+            history_entry_id: None,
+        },
+    );
+}
+
+fn should_update_live_summary(completed_chunk: u64, is_final_chunk: bool) -> bool {
+    is_final_chunk || completed_chunk % FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL == 0
+}
+
+fn openai_summary_provider(settings: &AppSettings) -> Option<PostProcessProvider> {
+    settings
+        .post_process_provider("openai")
+        .cloned()
+        .or_else(|| {
+            settings
+                .post_process_providers
+                .iter()
+                .find(|provider| provider.id == "openai")
+                .cloned()
+        })
+}
+
+#[derive(Debug)]
+struct LiveSummaryResult {
+    summary: String,
+    provider_label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct MeetingSummaryState {
+    current_gist: String,
+    #[serde(default)]
+    key_points: Vec<SummaryPoint>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct SummaryPoint {
+    #[serde(default)]
+    text: String,
+    #[serde(default)]
+    details: Vec<String>,
+}
+
+fn meeting_summary_prompt_contract() -> &'static str {
+    r#"Return valid JSON only. Do not include markdown, code fences, commentary, or extra fields.
+
+Use exactly this shape:
+{
+  "current_gist": "one to three concise sentences",
+  "key_points": [
+    {
+      "text": "short topic or important discussion point",
+      "details": [
+        "expanded supporting detail, tradeoff, rationale, or context from the transcript",
+        "another concrete detail when useful"
+      ]
+    }
+  ]
+}
+
+Rendered sections must map only to: Current gist, Key points."#
+}
+
+fn build_live_summary_prompt(transcript_text: &str, previous_summary: Option<String>) -> String {
+    let previous = previous_summary
+        .filter(|summary| !summary.trim().is_empty())
+        .unwrap_or_else(|| "No previous summary yet.".to_string());
+    format!(
+        "Update the live meeting summary incrementally.\n\nRules:\n- Use only facts supported by the transcript.\n- Do not invent decisions, tasks, names, deadlines, or speakers.\n- Preserve useful existing information.\n- Merge duplicates.\n- Use only Current gist and Key points.\n- Do not include action items, timelines, decisions, open questions, or raw transcript.\n- Make key points more expanded than terse bullets: use short topic bullets with one to three concrete supporting details when the transcript supports them.\n- Keep the gist concise and keep key point detail readable in a desktop meeting UI.\n\nPrevious rendered summary:\n{}\n\nTranscript so far:\n{}\n\n{}",
+        previous,
+        transcript_text,
+        meeting_summary_prompt_contract()
+    )
+}
+
+fn extract_json_object(text: &str) -> Option<&str> {
+    let trimmed = text.trim();
+    let without_fence = trimmed
+        .strip_prefix("```json")
+        .or_else(|| trimmed.strip_prefix("```"))
+        .and_then(|rest| rest.strip_suffix("```"))
+        .map(str::trim)
+        .unwrap_or(trimmed);
+
+    let start = without_fence.find('{')?;
+    let end = without_fence.rfind('}')?;
+    (start <= end).then_some(&without_fence[start..=end])
+}
+
+fn parse_meeting_summary_state(text: &str) -> Option<MeetingSummaryState> {
+    let json = extract_json_object(text)?;
+    let mut state: MeetingSummaryState = serde_json::from_str(json).ok()?;
+    state.current_gist = state.current_gist.trim().to_string();
+    state.key_points.iter_mut().for_each(|item| {
+        item.text = item.text.trim().to_string();
+        item.details = item
+            .details
+            .iter()
+            .map(|detail| detail.trim().to_string())
+            .filter(|detail| !detail.is_empty())
+            .collect();
+    });
+    state
+        .key_points
+        .retain(|item| !item.text.is_empty() || !item.details.is_empty());
+
+    (!state.current_gist.is_empty() || !state.key_points.is_empty()).then_some(state)
+}
+
+fn render_meeting_summary_markdown(state: &MeetingSummaryState) -> String {
+    let mut output = String::new();
+    output.push_str("## Current gist\n");
+    output.push_str(if state.current_gist.trim().is_empty() {
+        "No clear gist yet."
+    } else {
+        state.current_gist.trim()
+    });
+    output.push_str("\n\n## Key points\n");
+    if state.key_points.is_empty() {
+        output.push_str("- None yet.\n");
+    } else {
+        for point in &state.key_points {
+            let text = point.text.trim();
+            if !text.is_empty() {
+                output.push_str("- ");
+                output.push_str(text);
+                output.push('\n');
+            }
+            for detail in &point.details {
+                let detail = detail.trim();
+                if !detail.is_empty() {
+                    output.push_str("  - ");
+                    output.push_str(detail);
+                    output.push('\n');
+                }
+            }
+        }
+    }
+
+    output.trim().to_string()
+}
+
+fn normalize_live_summary_output(raw_summary: &str, previous_summary: Option<&str>) -> String {
+    if let Some(state) = parse_meeting_summary_state(raw_summary) {
+        return render_meeting_summary_markdown(&state);
+    }
+
+    previous_summary
+        .map(str::trim)
+        .filter(|summary| !summary.is_empty())
+        .unwrap_or_else(|| raw_summary.trim())
+        .to_string()
+}
+
+async fn ensure_backend_summary_install_token(app: &AppHandle) -> Result<String, String> {
+    let settings = get_settings(app);
+    if settings.install_token.trim().is_empty() {
+        bootstrap_install_state(app).await?;
+    } else {
+        refresh_entitlement_state(app).await?;
+    }
+
+    let refreshed = get_settings(app);
+    let install_token = refreshed.install_token.trim();
+    if install_token.is_empty() {
+        return Err("Install token is required for backend summaries.".to_string());
+    }
+
+    Ok(install_token.to_string())
+}
+
+async fn summarize_live_session(
+    app: &AppHandle,
+    transcript_text: &str,
+    previous_summary: Option<String>,
+    chunk_count: u64,
+) -> Result<LiveSummaryResult, String> {
+    let previous_summary_for_backend = previous_summary.clone();
+    let prompt = build_live_summary_prompt(transcript_text, previous_summary);
+
+    match summary_client::summarize_with_codex_app(
+        prompt.clone(),
+        FULL_SYSTEM_SUMMARY_SYSTEM_PROMPT.to_string(),
+    )
+    .await
+    {
+        Ok(summary) => {
+            return Ok(LiveSummaryResult {
+                summary: normalize_live_summary_output(
+                    &summary,
+                    previous_summary_for_backend.as_deref(),
+                ),
+                provider_label: "Codex".to_string(),
+            });
+        }
+        Err(error) => summary_client::summarize_codex_unavailable(&error),
+    }
+
+    let settings = get_settings(app);
+    if let Some(provider) = openai_summary_provider(&settings) {
+        if let Some(api_key) = byok_secrets::load_openai_api_key(app, &settings)? {
+            let model = settings
+                .post_process_models
+                .get("openai")
+                .map(|model| model.trim())
+                .filter(|model| !model.is_empty())
+                .unwrap_or(FULL_SYSTEM_SUMMARY_MODEL_FALLBACK);
+            let summary = summary_client::summarize_with_provider(
+                &provider,
+                api_key,
+                model,
+                prompt.clone(),
+                FULL_SYSTEM_SUMMARY_SYSTEM_PROMPT,
+            )
+            .await?;
+
+            return Ok(LiveSummaryResult {
+                summary: normalize_live_summary_output(
+                    &summary,
+                    previous_summary_for_backend.as_deref(),
+                ),
+                provider_label: "OpenAI BYOK".to_string(),
+            });
+        }
+    }
+
+    let install_token = ensure_backend_summary_install_token(app).await?;
+    let result = summary_client::summarize_with_backend(
+        &install_token,
+        transcript_text,
+        previous_summary_for_backend.as_deref(),
+        chunk_count,
+    )
+    .await?;
+
+    let mut settings = get_settings(app);
+    settings.anonymous_trial_state = result.trial_state;
+    settings.access_state = result.access_state;
+    settings.entitlement_state = result.entitlement_state;
+    write_settings(app, settings);
+
+    Ok(LiveSummaryResult {
+        summary: normalize_live_summary_output(
+            &result.summary,
+            previous_summary_for_backend.as_deref(),
+        ),
+        provider_label: "Uttr backend".to_string(),
+    })
+}
+
+const EDIT_MODE_SYSTEM_PROMPT: &str = "You transform selected text using a spoken instruction. Return only the replacement text. Preserve the user's meaning unless the instruction explicitly asks for a change. Do not explain, quote, wrap in markdown, or include labels.";
+
+fn build_edit_mode_prompt(
+    selected_text: &str,
+    spoken_instruction: &str,
+    context: &AppContextSnapshot,
+    custom_vocabulary_terms: &[String],
+) -> String {
+    let mut prompt = format!(
+        "# Task\nTransform the selected text according to the spoken instruction. Return only the replacement text inside <uttr_edit_output>...</uttr_edit_output>.\n\n# Spoken instruction\n{}\n\n# Selected text\n{}",
+        spoken_instruction.trim(),
+        selected_text
+    );
+
+    if let Some(block) = app_context_prompt_block(context) {
+        prompt.push_str("\n\n# Context\n");
+        prompt.push_str(&block);
+    }
+    if let Some(block) = custom_vocabulary_prompt_block(custom_vocabulary_terms) {
+        prompt.push_str("\n\n# Custom vocabulary\n");
+        prompt.push_str(&block);
+    }
+
+    prompt.push_str("\n\n# Output format\n<uttr_edit_output>\n...\n</uttr_edit_output>");
+    prompt
+}
+
+fn clean_edit_mode_response(content: &str) -> String {
+    if let Some(output) = extract_tagged_output(content, "uttr_edit_output") {
+        return strip_wrapping_code_fence(&trim_chat_stop_tokens(&output));
+    }
+
+    clean_post_process_response(content)
+}
+
+async fn transform_edit_mode_text(
+    app_handle: &AppHandle,
+    settings: &AppSettings,
+    selected_text: &str,
+    spoken_instruction: &str,
+    context: &AppContextSnapshot,
+) -> Result<(String, String), String> {
+    let prompt = build_edit_mode_prompt(
+        selected_text,
+        spoken_instruction,
+        context,
+        &settings.custom_vocabulary_terms,
+    );
+
+    match summary_client::transform_with_codex_app(
+        prompt.clone(),
+        EDIT_MODE_SYSTEM_PROMPT.to_string(),
+    )
+    .await
+    {
+        Ok(output) => {
+            let output = clean_edit_mode_response(&output);
+            if output.trim().is_empty() {
+                return Err("Codex returned an empty edit.".to_string());
+            }
+            return Ok((output, "Edit Mode via Codex app-server".to_string()));
+        }
+        Err(error) => summary_client::summarize_codex_unavailable(&error),
+    }
+
+    let provider = settings
+        .active_post_process_provider()
+        .cloned()
+        .ok_or_else(|| "Edit Mode fallback needs a post-processing provider.".to_string())?;
+
+    let api_key =
+        match crate::byok_secrets::load_provider_api_key(app_handle, settings, &provider.id) {
+            Ok(Some(key)) => key,
+            Ok(None) => String::new(),
+            Err(error) => {
+                warn!(
+                    "Failed to load API key for edit provider '{}': {}",
+                    provider.id, error
+                );
+                String::new()
+            }
+        };
+
+    let model = resolve_post_process_model(&provider, settings, &api_key)
+        .await
+        .ok_or_else(|| {
+            "Edit Mode fallback could not resolve a post-processing model.".to_string()
+        })?;
+
+    crate::llm_client::send_chat_completion(
+        &provider,
+        api_key,
+        &model,
+        prompt,
+        Some(EDIT_MODE_SYSTEM_PROMPT),
+    )
+    .await?
+    .map(|content| {
+        (
+            clean_edit_mode_response(&content),
+            format!("Edit Mode via {}", provider.label),
+        )
+    })
+    .filter(|(output, _)| !output.trim().is_empty())
+    .ok_or_else(|| "Edit Mode fallback returned an empty edit.".to_string())
+}
+
+fn friendly_live_summary_error(error: &str) -> String {
+    let lower = error.to_ascii_lowercase();
+
+    if lower.contains("insufficient_quota") || lower.contains("current quota") {
+        return "OpenAI quota is exhausted for the saved API key. Recording continues, but live summaries are paused for this session.".to_string();
+    }
+
+    if lower.contains("status 429") || lower.contains("too many requests") {
+        return "OpenAI is rate limiting live summaries. Recording continues, but live summaries are paused for this session.".to_string();
+    }
+
+    if lower.contains("status 401")
+        || lower.contains("invalid_api_key")
+        || lower.contains("incorrect api key")
+        || lower.contains("unauthorized")
+    {
+        return "The saved OpenAI API key was rejected. Recording continues, but live summaries are paused for this session.".to_string();
+    }
+
+    if lower.contains("status 403") || lower.contains("forbidden") {
+        return "The saved OpenAI API key does not have access to live summaries. Recording continues, but summaries are paused for this session.".to_string();
+    }
+
+    if lower.contains("api key") && lower.contains("settings") {
+        return error.to_string();
+    }
+
+    "OpenAI could not update the live summary. Recording continues.".to_string()
+}
+
+fn should_pause_live_summaries(error: &str) -> bool {
+    let lower = error.to_ascii_lowercase();
+    lower.contains("insufficient_quota")
+        || lower.contains("current quota")
+        || lower.contains("status 429")
+        || lower.contains("too many requests")
+        || lower.contains("status 401")
+        || lower.contains("invalid_api_key")
+        || lower.contains("incorrect api key")
+        || lower.contains("unauthorized")
+        || lower.contains("status 403")
+        || lower.contains("forbidden")
+        || (lower.contains("api key") && lower.contains("settings"))
+}
+
+async fn transcribe_and_summarize_live_chunk(
+    app: &AppHandle,
+    runtime: &Arc<FullSystemLiveRuntime>,
+    tm: &Arc<TranscriptionManager>,
+    chunk_samples: Vec<f32>,
+    is_final_chunk: bool,
+    record_samples: bool,
+) {
+    if chunk_samples.is_empty() {
+        return;
+    }
+
+    if record_samples {
+        runtime
+            .recorded_samples
+            .lock()
+            .unwrap()
+            .extend_from_slice(&chunk_samples);
+    }
+
+    let chunk_index = runtime.chunk_count.load(Ordering::Relaxed) + 1;
+    if is_final_chunk {
+        emit_session_window_state(
+            app,
+            SessionWindowStatePayload {
+                stage: "transcribing".to_string(),
+                title: "Preparing summary".to_string(),
+                subtitle: "Finishing the final audio chunk.".to_string(),
+                progress_label: "Transcribing final chunk".to_string(),
+                progress_value: 0.72,
+                summary_text: runtime.summary_text.lock().unwrap().clone(),
+                raw_transcript_text: None,
+                history_entry_id: None,
+            },
+        );
+    } else if !runtime.stop_requested.load(Ordering::Relaxed) {
+        emit_session_window_state(
+            app,
+            SessionWindowStatePayload {
+                stage: "active".to_string(),
+                title: "Live session".to_string(),
+                subtitle: "Capturing system audio and microphone audio.".to_string(),
+                progress_label: format!("Transcribing chunk {}", chunk_index),
+                progress_value: 0.0,
+                summary_text: runtime.summary_text.lock().unwrap().clone(),
+                raw_transcript_text: None,
+                history_entry_id: None,
+            },
+        );
+    }
+
+    let transcription = match tm
+        .transcribe_with_source(chunk_samples, Some("full_system_audio"))
+        .await
+    {
+        Ok(text) => text,
+        Err(error) => {
+            warn!(
+                "Live full-system chunk {} transcription failed: {}",
+                chunk_index, error
+            );
+            *runtime.summary_error.lock().unwrap() = Some(format!(
+                "Live transcription failed for chunk {}: {}",
+                chunk_index, error
+            ));
+            if is_final_chunk {
+                emit_session_window_state(
+                    app,
+                    SessionWindowStatePayload {
+                        stage: "processing".to_string(),
+                        title: "Preparing summary".to_string(),
+                        subtitle: "Unable to transcribe the final audio chunk.".to_string(),
+                        progress_label: "Processing".to_string(),
+                        progress_value: 0.88,
+                        summary_text: runtime.summary_error.lock().unwrap().clone(),
+                        raw_transcript_text: None,
+                        history_entry_id: None,
+                    },
+                );
+            } else if !runtime.stop_requested.load(Ordering::Relaxed) {
+                emit_live_session_summary_state(
+                    app,
+                    runtime.chunk_count.load(Ordering::Relaxed),
+                    runtime.summary_text.lock().unwrap().clone(),
+                    runtime.summary_error.lock().unwrap().clone(),
+                );
+            }
+            return;
+        }
+    };
+
+    if !transcription.trim().is_empty() {
+        let transcript_so_far = {
+            let mut transcript = runtime.transcript_text.lock().unwrap();
+            append_live_text(&mut transcript, &transcription);
+            transcript.clone()
+        };
+
+        let completed_chunk = runtime.chunk_count.fetch_add(1, Ordering::Relaxed) + 1;
+        if !should_update_live_summary(completed_chunk, is_final_chunk) {
+            if !runtime.stop_requested.load(Ordering::Relaxed) {
+                emit_live_session_transcribed_state(
+                    app,
+                    completed_chunk,
+                    runtime.summary_text.lock().unwrap().clone(),
+                    runtime.summary_error.lock().unwrap().clone(),
+                );
+            }
+            return;
+        }
+
+        if runtime.summary_disabled.load(Ordering::Relaxed) {
+            if is_final_chunk {
+                emit_session_window_state(
+                    app,
+                    SessionWindowStatePayload {
+                        stage: "processing".to_string(),
+                        title: "Preparing summary".to_string(),
+                        subtitle: "Saving the session.".to_string(),
+                        progress_label: "Processing".to_string(),
+                        progress_value: 0.88,
+                        summary_text: runtime.summary_text.lock().unwrap().clone(),
+                        raw_transcript_text: None,
+                        history_entry_id: None,
+                    },
+                );
+            } else if !runtime.stop_requested.load(Ordering::Relaxed) {
+                emit_live_session_summary_state(
+                    app,
+                    completed_chunk,
+                    runtime.summary_text.lock().unwrap().clone(),
+                    runtime.summary_error.lock().unwrap().clone(),
+                );
+            }
+            return;
+        }
+
+        if is_final_chunk {
+            emit_session_window_state(
+                app,
+                SessionWindowStatePayload {
+                    stage: "processing".to_string(),
+                    title: "Preparing summary".to_string(),
+                    subtitle: "Updating the final summary.".to_string(),
+                    progress_label: "Summarizing final chunk".to_string(),
+                    progress_value: 0.88,
+                    summary_text: runtime.summary_text.lock().unwrap().clone(),
+                    raw_transcript_text: None,
+                    history_entry_id: None,
+                },
+            );
+        } else if !runtime.stop_requested.load(Ordering::Relaxed) {
+            emit_session_window_state(
+                app,
+                SessionWindowStatePayload {
+                    stage: "active".to_string(),
+                    title: "Live session".to_string(),
+                    subtitle: "Capturing system audio and microphone audio.".to_string(),
+                    progress_label: format!("Summarizing chunk {}", completed_chunk),
+                    progress_value: 0.0,
+                    summary_text: runtime.summary_text.lock().unwrap().clone(),
+                    raw_transcript_text: None,
+                    history_entry_id: None,
+                },
+            );
+        }
+
+        let previous_summary = runtime.summary_text.lock().unwrap().clone();
+        match summarize_live_session(app, &transcript_so_far, previous_summary, completed_chunk)
+            .await
+        {
+            Ok(result) => {
+                let summary = result.summary;
+                *runtime.summary_text.lock().unwrap() = Some(summary.clone());
+                *runtime.summary_provider.lock().unwrap() = Some(result.provider_label);
+                *runtime.summary_error.lock().unwrap() = None;
+                if is_final_chunk {
+                    emit_session_window_state(
+                        app,
+                        SessionWindowStatePayload {
+                            stage: "processing".to_string(),
+                            title: "Preparing summary".to_string(),
+                            subtitle: "Saving the session.".to_string(),
+                            progress_label: "Saving".to_string(),
+                            progress_value: 0.92,
+                            summary_text: Some(summary),
+                            raw_transcript_text: None,
+                            history_entry_id: None,
+                        },
+                    );
+                } else if !runtime.stop_requested.load(Ordering::Relaxed) {
+                    emit_live_session_summary_state(app, completed_chunk, Some(summary), None);
+                }
+            }
+            Err(error) => {
+                let message = friendly_live_summary_error(&error);
+                if should_pause_live_summaries(&error) {
+                    runtime.summary_disabled.store(true, Ordering::Relaxed);
+                }
+                *runtime.summary_error.lock().unwrap() = Some(message.clone());
+                if is_final_chunk {
+                    emit_session_window_state(
+                        app,
+                        SessionWindowStatePayload {
+                            stage: "processing".to_string(),
+                            title: "Preparing summary".to_string(),
+                            subtitle: "Saving the session without a final summary update."
+                                .to_string(),
+                            progress_label: "Saving".to_string(),
+                            progress_value: 0.92,
+                            summary_text: runtime.summary_text.lock().unwrap().clone(),
+                            raw_transcript_text: None,
+                            history_entry_id: None,
+                        },
+                    );
+                } else if !runtime.stop_requested.load(Ordering::Relaxed) {
+                    emit_live_session_summary_state(
+                        app,
+                        completed_chunk,
+                        runtime.summary_text.lock().unwrap().clone(),
+                        Some(message),
+                    );
+                }
+            }
+        }
+    }
+}
+
+fn start_full_system_live_session(app: &AppHandle, binding_id: &str) {
+    let runtime = Arc::new(FullSystemLiveRuntime::new());
+    let worker_runtime = Arc::clone(&runtime);
+    let worker_app = app.clone();
+    let worker_binding = binding_id.to_string();
+    let tm = Arc::clone(&app.state::<Arc<TranscriptionManager>>());
+    let full_system_audio = Arc::clone(&app.state::<Arc<FullSystemAudioSessionManager>>());
+
+    let worker_handle = tauri::async_runtime::spawn(async move {
+        let mut buffered = Vec::<f32>::new();
+
+        while !worker_runtime.stop_requested.load(Ordering::Relaxed) {
+            if let Some(delta) = full_system_audio.drain_session_delta(&worker_binding) {
+                if !delta.is_empty() {
+                    buffered.extend_from_slice(&delta);
+                }
+            }
+
+            while buffered.len() >= FULL_SYSTEM_LIVE_CHUNK_SAMPLES
+                && !worker_runtime.stop_requested.load(Ordering::Relaxed)
+            {
+                let chunk: Vec<f32> = buffered.drain(..FULL_SYSTEM_LIVE_CHUNK_SAMPLES).collect();
+                transcribe_and_summarize_live_chunk(
+                    &worker_app,
+                    &worker_runtime,
+                    &tm,
+                    chunk,
+                    false,
+                    true,
+                )
+                .await;
+            }
+
+            sleep(FULL_SYSTEM_LIVE_CHUNK_POLL_INTERVAL).await;
+        }
+
+        if !buffered.is_empty() {
+            worker_runtime
+                .pending_samples
+                .lock()
+                .unwrap()
+                .extend_from_slice(&buffered);
+        }
+    });
+
+    let mut guard = FULL_SYSTEM_LIVE_SESSION.lock().unwrap();
+    if let Some(previous) = guard.take() {
+        previous
+            .runtime
+            .stop_requested
+            .store(true, Ordering::Relaxed);
+        previous.worker_handle.abort();
+    }
+    *guard = Some(FullSystemLiveSession {
+        binding_id: binding_id.to_string(),
+        runtime,
+        worker_handle,
+    });
+}
+
+fn signal_full_system_live_session_stop(binding_id: &str) {
+    let guard = FULL_SYSTEM_LIVE_SESSION.lock().unwrap();
+    if let Some(session) = guard.as_ref() {
+        if session.binding_id == binding_id {
+            session
+                .runtime
+                .stop_requested
+                .store(true, Ordering::Relaxed);
+        }
+    }
+}
+
+async fn finish_full_system_live_session(
+    app: &AppHandle,
+    binding_id: &str,
+    tail_samples: Option<Vec<f32>>,
+    tm: Arc<TranscriptionManager>,
+) -> Option<FullSystemLiveFinal> {
+    let session = {
+        let mut guard = FULL_SYSTEM_LIVE_SESSION.lock().unwrap();
+        let Some(session) = guard.take() else {
+            return None;
+        };
+        if session.binding_id != binding_id {
+            *guard = Some(session);
+            return None;
+        }
+        session
+    };
+
+    session
+        .runtime
+        .stop_requested
+        .store(true, Ordering::Relaxed);
+    if let Err(error) = session.worker_handle.await {
+        warn!("Live full-system worker join error: {}", error);
+    }
+
+    let mut final_samples = {
+        let mut pending = session.runtime.pending_samples.lock().unwrap();
+        std::mem::take(&mut *pending)
+    };
+    if let Some(tail_samples) = tail_samples.filter(|samples| !samples.is_empty()) {
+        final_samples.extend_from_slice(&tail_samples);
+    }
+    if !final_samples.is_empty() {
+        transcribe_and_summarize_live_chunk(app, &session.runtime, &tm, final_samples, true, true)
+            .await;
+    }
+
+    let transcript_text = session.runtime.transcript_text.lock().unwrap().clone();
+    let summary_text = session.runtime.summary_text.lock().unwrap().clone();
+    let summary_provider = session.runtime.summary_provider.lock().unwrap().clone();
+    let recorded_samples = session.runtime.recorded_samples.lock().unwrap().clone();
+    let chunk_count = session.runtime.chunk_count.load(Ordering::Relaxed);
+
+    if transcript_text.trim().is_empty() && recorded_samples.is_empty() {
+        return None;
+    }
+
+    Some(FullSystemLiveFinal {
+        transcript_text,
+        summary_text,
+        summary_provider,
+        recorded_samples,
+        chunk_count,
+    })
 }
 
 fn handle_transcription_stop(
@@ -897,6 +1989,10 @@ fn handle_transcription_stop(
         recording_duration.unwrap_or_default().as_millis()
     );
 
+    let context_snapshot = take_active_context(
+        binding_id,
+        completion_mode == TranscriptionCompletionMode::EditMode,
+    );
     let ah = app.clone();
     let binding_id = binding_id.to_string();
     let task_completed = Arc::new(AtomicBool::new(false));
@@ -979,9 +2075,14 @@ fn handle_transcription_stop(
         let has_incremental_progress =
             use_incremental && tm_for_worker.has_incremental_progress(&binding_id);
         if completion_mode == TranscriptionCompletionMode::FullSystemOverlay {
-            crate::overlay::update_full_system_progress_overlay(
+            emit_session_window_state(
                 &ah,
-                &full_system_progress_payload(FullSystemProgressStage::Transcribing, None, None),
+                session_window_state_payload(
+                    FullSystemProgressStage::Transcribing,
+                    None,
+                    None,
+                    None,
+                ),
             );
         }
 
@@ -1094,12 +2195,113 @@ fn handle_transcription_stop(
                 );
                 if !transcription.is_empty() {
                     let settings = get_settings(&ah);
+                    if completion_mode == TranscriptionCompletionMode::EditMode {
+                        let Some(selected_text) = context_snapshot
+                            .selected_text
+                            .as_deref()
+                            .map(str::trim)
+                            .filter(|text| !text.is_empty())
+                        else {
+                            let message =
+                                "Edit Mode needs selected text before you start recording.";
+                            warn!("{}", message);
+                            let _ = ah.emit("transcription-error", message.to_string());
+                            utils::hide_recording_overlay(&ah);
+                            change_tray_icon(&ah, TrayIconState::Idle);
+                            return;
+                        };
+
+                        spawn_deferred_overlay_state(&ah, DeferredOverlayState::Processing);
+                        match transform_edit_mode_text(
+                            &ah,
+                            &settings,
+                            selected_text,
+                            &transcription,
+                            &context_snapshot,
+                        )
+                        .await
+                        {
+                            Ok((replacement_text, prompt_label)) => {
+                                let hm_clone = Arc::clone(&hm);
+                                let ah_for_history = ah.clone();
+                                let transcription_for_history = transcription.clone();
+                                let replacement_for_history = replacement_text.clone();
+                                tauri::async_runtime::spawn(async move {
+                                    if let Err(e) = hm_clone
+                                        .save_transcription(
+                                            samples_clone,
+                                            transcription_for_history,
+                                            Some(replacement_for_history),
+                                            Some(prompt_label),
+                                            "dictation",
+                                        )
+                                        .await
+                                    {
+                                        error!("Failed to save edit-mode transcription: {}", e);
+                                        let _ = ah_for_history.emit(
+                                            "transcription-error",
+                                            format!(
+                                                "Edit Mode succeeded, but saving history failed: {}",
+                                                e
+                                            ),
+                                        );
+                                    }
+                                });
+
+                                let ah_clone = ah.clone();
+                                let paste_time = Instant::now();
+                                ah.run_on_main_thread(move || {
+                                    let text_for_paste = replacement_text.clone();
+                                    match utils::paste(text_for_paste.clone(), ah_clone.clone()) {
+                                        Ok(()) => debug!(
+                                            "Edit Mode replacement pasted successfully in {:?}",
+                                            paste_time.elapsed()
+                                        ),
+                                        Err(e) => {
+                                            error!("Failed to paste Edit Mode replacement: {}", e);
+                                            let _ = ah_clone.emit(
+                                                "transcription-error",
+                                                format!(
+                                                    "Edit Mode succeeded, but paste failed: {}",
+                                                    e
+                                                ),
+                                            );
+                                            if let Err(copy_err) =
+                                                ah_clone.clipboard().write_text(&text_for_paste)
+                                            {
+                                                error!(
+                                                    "Failed to copy Edit Mode replacement after paste error: {}",
+                                                    copy_err
+                                                );
+                                            }
+                                        }
+                                    }
+                                    utils::hide_recording_overlay(&ah_clone);
+                                    change_tray_icon(&ah_clone, TrayIconState::Idle);
+                                })
+                                .unwrap_or_else(|e| {
+                                    error!("Failed to run Edit Mode paste on main thread: {:?}", e);
+                                    utils::hide_recording_overlay(&ah);
+                                    change_tray_icon(&ah, TrayIconState::Idle);
+                                });
+                            }
+                            Err(error) => {
+                                error!("Edit Mode transform failed: {}", error);
+                                let _ = ah.emit("transcription-error", error);
+                                utils::hide_recording_overlay(&ah);
+                                change_tray_icon(&ah, TrayIconState::Idle);
+                            }
+                        }
+                        return;
+                    }
+
                     if post_process {
                         if completion_mode == TranscriptionCompletionMode::FullSystemOverlay {
-                            crate::overlay::update_full_system_progress_overlay(
+                            emit_session_window_state(
                                 &ah,
-                                &full_system_progress_payload(
+                                session_window_state_payload(
                                     FullSystemProgressStage::Processing,
+                                    None,
                                     None,
                                     None,
                                 ),
@@ -1108,9 +2310,14 @@ fn handle_transcription_stop(
                             spawn_deferred_overlay_state(&ah, DeferredOverlayState::Processing);
                         }
                     }
-                    let finalized =
-                        finalize_transcription_output(&ah, &settings, &transcription, post_process)
-                            .await;
+                    let finalized = finalize_transcription_output(
+                        &ah,
+                        &settings,
+                        &transcription,
+                        post_process,
+                        Some(&context_snapshot),
+                    )
+                    .await;
                     let final_text = finalized.final_text;
                     let post_processed_text = finalized.post_processed_text;
                     let post_process_prompt = finalized.post_process_prompt;
@@ -1122,15 +2329,17 @@ fn handle_transcription_stop(
                                 transcription.clone(),
                                 post_processed_text,
                                 post_process_prompt,
+                                "full_system_audio",
                             )
                             .await
                         {
                             Ok(history_entry_id) => {
-                                crate::overlay::update_full_system_progress_overlay(
+                                emit_session_window_state(
                                     &ah,
-                                    &full_system_progress_payload(
+                                    session_window_state_payload(
                                         FullSystemProgressStage::Complete,
-                                        Some(final_text),
+                                        None,
+                                        Some(transcription.clone()),
                                         Some(history_entry_id),
                                     ),
                                 );
@@ -1163,6 +2372,7 @@ fn handle_transcription_stop(
                                     transcription_for_history,
                                     post_processed_text,
                                     post_process_prompt,
+                                    "dictation",
                                 )
                                 .await
                             {
@@ -1281,11 +2491,6 @@ fn handle_transcription_stop(
 impl ShortcutAction for TranscribeAction {
     fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
         let start_time = Instant::now();
-        log::info!(
-            "[latency] transcribe action start begin binding={}",
-            binding_id
-        );
-        debug!("TranscribeAction::start called for binding: {}", binding_id);
         utils::cancel_pending_overlay_transitions();
 
         let access = get_install_access_snapshot(app);
@@ -1313,6 +2518,22 @@ impl ShortcutAction for TranscribeAction {
         let tm = app.state::<Arc<TranscriptionManager>>();
         tm.clear_cancel_request();
         let settings = get_settings(app);
+        if self.completion_mode == TranscriptionCompletionMode::EditMode
+            && !settings.edit_mode_enabled
+        {
+            let message = "Edit Mode is disabled in settings.";
+            warn!("{}", message);
+            let _ = app.emit("transcription-error", message.to_string());
+            change_tray_icon(app, TrayIconState::Idle);
+            utils::hide_recording_overlay(app);
+            return;
+        }
+        if self.completion_mode == TranscriptionCompletionMode::EditMode
+            || self.post_process
+            || settings.post_process_enabled
+        {
+            store_active_context_async(&binding_id);
+        }
         let use_incremental = should_use_incremental_transcription(&settings, &tm);
 
         let binding_id = binding_id.to_string();
@@ -1479,7 +2700,7 @@ impl ShortcutAction for TranscribeAction {
             recording_duration,
             post_process,
             use_incremental,
-            TranscriptionCompletionMode::Standard,
+            self.completion_mode,
             tm,
             hm,
         );
@@ -1508,14 +2729,6 @@ impl ShortcutAction for FullSystemTranscribeAction {
         }
 
         let start_time = Instant::now();
-        log::info!(
-            "[latency] full-system action start begin binding={}",
-            binding_id
-        );
-        debug!(
-            "FullSystemTranscribeAction::start called for binding: {}",
-            binding_id
-        );
 
         let tm = app.state::<Arc<TranscriptionManager>>();
         tm.clear_cancel_request();
@@ -1552,6 +2765,9 @@ impl ShortcutAction for FullSystemTranscribeAction {
                 start_time.elapsed().as_millis()
             );
             if recording_started {
+                focus_workspace_window(app);
+                emit_active_session_window_state(app);
+                start_full_system_live_session(app, &binding_id);
                 show_recording_overlay(app);
                 log::info!(
                     "[latency] full-system overlay requested binding={} warming=false elapsed_ms={}",
@@ -1574,6 +2790,9 @@ impl ShortcutAction for FullSystemTranscribeAction {
                 .started
             {
                 recording_started = true;
+                focus_workspace_window(app);
+                emit_active_session_window_state(app);
+                start_full_system_live_session(app, &binding_id);
                 show_recording_overlay(app);
                 log::info!(
                     "[latency] full-system overlay requested binding={} warming=false elapsed_ms={}",
@@ -1603,6 +2822,9 @@ impl ShortcutAction for FullSystemTranscribeAction {
         }
 
         start_transcription_session(app, binding_id.as_str(), recording_started);
+        if !recording_started {
+            emit_idle_session_window_state(app);
+        }
         let preload_model_id = if settings.selected_model.is_empty() {
             tm.get_current_model().unwrap_or_default()
         } else {
@@ -1649,13 +2871,15 @@ impl ShortcutAction for FullSystemTranscribeAction {
         let post_process = self.post_process || get_settings(app).post_process_enabled;
 
         change_tray_icon(app, TrayIconState::Transcribing);
-        crate::overlay::show_full_system_progress_overlay(
+        utils::hide_recording_overlay(app);
+        emit_session_window_state(
             app,
-            &full_system_progress_payload(FullSystemProgressStage::Preparing, None, None),
+            session_window_state_payload(FullSystemProgressStage::Preparing, None, None, None),
         );
         rm.remove_mute();
         play_feedback_sound(app, SoundType::Stop);
 
+        signal_full_system_live_session_stop(binding_id);
         let stop_result: FullSystemSessionStopResult = full_system_audio.stop_session();
         log::info!(
             "[latency] full-system samples retrieved binding={} sample_count={} elapsed_ms={}",
@@ -1667,17 +2891,99 @@ impl ShortcutAction for FullSystemTranscribeAction {
                 .unwrap_or(0),
             stop_time.elapsed().as_millis()
         );
-        handle_transcription_stop(
-            app,
-            binding_id,
-            stop_result.transcription_samples,
-            None,
-            post_process,
-            false,
-            TranscriptionCompletionMode::FullSystemOverlay,
-            tm,
-            hm,
-        );
+
+        let live_tail_samples = stop_result.transcription_samples;
+        let live_app = app.clone();
+        let live_binding_id = binding_id.to_string();
+        let live_tm = Arc::clone(&tm);
+        let live_hm = Arc::clone(&hm);
+        tauri::async_runtime::spawn(async move {
+            let _finish_guard = FinishGuard(live_app.clone());
+            let mut ui_guard = UiResetGuard::new(live_app.clone());
+            let fallback_samples = live_tail_samples.clone();
+            if let Some(live_final) = finish_full_system_live_session(
+                &live_app,
+                &live_binding_id,
+                live_tail_samples,
+                Arc::clone(&live_tm),
+            )
+            .await
+            {
+                if live_final.transcript_text.trim().is_empty() {
+                    debug!("Live full-system session stopped without transcript text");
+                    emit_session_window_state(
+                        &live_app,
+                        session_window_state_payload(
+                            FullSystemProgressStage::Complete,
+                            Some("No transcript was captured for this session.".to_string()),
+                            None,
+                            None,
+                        ),
+                    );
+                    change_tray_icon(&live_app, TrayIconState::Idle);
+                    ui_guard.suppress();
+                    return;
+                }
+
+                match live_hm
+                    .save_transcription(
+                        live_final.recorded_samples,
+                        live_final.transcript_text.clone(),
+                        live_final.summary_text.clone(),
+                        Some(format!(
+                            "Live session summary via {} after {} chunk(s)",
+                            live_final
+                                .summary_provider
+                                .clone()
+                                .unwrap_or_else(|| "live summary".to_string()),
+                            live_final.chunk_count
+                        )),
+                        "full_system_audio",
+                    )
+                    .await
+                {
+                    Ok(history_entry_id) => {
+                        emit_session_window_state(
+                            &live_app,
+                            session_window_state_payload(
+                                FullSystemProgressStage::Complete,
+                                live_final.summary_text.clone(),
+                                Some(live_final.transcript_text.clone()),
+                                Some(history_entry_id),
+                            ),
+                        );
+                    }
+                    Err(error) => {
+                        warn!("Failed to save live full-system session: {}", error);
+                        emit_session_window_state(
+                            &live_app,
+                            session_window_state_payload(
+                                FullSystemProgressStage::Complete,
+                                Some(format!("Session could not be saved: {}", error)),
+                                Some(live_final.transcript_text.clone()),
+                                None,
+                            ),
+                        );
+                    }
+                }
+                change_tray_icon(&live_app, TrayIconState::Idle);
+                ui_guard.suppress();
+                return;
+            }
+
+            drop(ui_guard);
+            handle_transcription_stop(
+                &live_app,
+                &live_binding_id,
+                fallback_samples,
+                None,
+                post_process,
+                false,
+                TranscriptionCompletionMode::FullSystemOverlay,
+                live_tm,
+                live_hm,
+            );
+        });
 
         debug!(
             "FullSystemTranscribeAction::stop completed in {:?}",
@@ -1769,6 +3075,7 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
         "transcribe".to_string(),
         Arc::new(TranscribeAction {
             post_process: false,
+            completion_mode: TranscriptionCompletionMode::Standard,
         }) as Arc<dyn ShortcutAction>,
     );
     map.insert(
@@ -1779,6 +3086,13 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
         "transcribe_full_system_audio".to_string(),
         Arc::new(FullSystemTranscribeAction {
             post_process: false,
+        }) as Arc<dyn ShortcutAction>,
+    );
+    map.insert(
+        "edit_mode".to_string(),
+        Arc::new(TranscribeAction {
+            post_process: false,
+            completion_mode: TranscriptionCompletionMode::EditMode,
         }) as Arc<dyn ShortcutAction>,
     );
     map.insert(
@@ -1799,12 +3113,19 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
-        clean_post_process_response, is_effectively_silent_audio, is_supported_post_process_model,
-        select_preferred_groq_model, should_refresh_microphone_stream_after_suspected_no_input,
+        build_edit_mode_prompt, build_live_summary_prompt, clean_edit_mode_response,
+        clean_post_process_response, custom_vocabulary_prompt_block, friendly_live_summary_error,
+        is_effectively_silent_audio, is_supported_post_process_model,
+        normalize_live_summary_output, parse_meeting_summary_state,
+        render_meeting_summary_markdown, resolved_post_process_system_prompt,
+        select_preferred_groq_model, should_pause_live_summaries,
+        should_refresh_microphone_stream_after_suspected_no_input, should_update_live_summary,
         toggle_post_process_enabled, transcription_timeout_for_samples,
-        transcription_watchdog_delay, usable_post_processed_text, TranscriptionCompletionMode,
-        ACTION_MAP, FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT,
+        transcription_watchdog_delay, usable_post_processed_text, MeetingSummaryState,
+        SummaryPoint, TranscriptionCompletionMode, ACTION_MAP,
+        FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT, FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL,
     };
+    use crate::app_context::AppContextSnapshot;
     use crate::settings::get_default_settings;
 
     #[test]
@@ -1820,6 +3141,73 @@ mod tests {
     #[test]
     fn post_process_shortcut_binding_is_registered_in_action_map() {
         assert!(ACTION_MAP.contains_key("transcribe_with_post_process"));
+    }
+
+    #[test]
+    fn edit_mode_binding_is_registered_in_action_map() {
+        assert!(ACTION_MAP.contains_key("edit_mode"));
+    }
+
+    #[test]
+    fn vocabulary_block_normalizes_and_warns_against_insertion() {
+        let terms = vec![
+            " Zach Latta ".to_string(),
+            "zach latta".to_string(),
+            "Prime Directive".to_string(),
+        ];
+
+        let block = custom_vocabulary_prompt_block(&terms).unwrap();
+
+        assert!(block.contains("- Zach Latta"));
+        assert!(block.contains("- Prime Directive"));
+        assert_eq!(block.matches("Zach Latta").count(), 1);
+        assert!(block.contains("do not insert terms that were not spoken"));
+    }
+
+    #[test]
+    fn post_process_prompt_includes_vocabulary_and_context() {
+        let mut settings = get_default_settings();
+        settings.custom_vocabulary_terms = vec!["FreeFlow".to_string()];
+        let context = AppContextSnapshot {
+            app_name: Some("Terminal".to_string()),
+            window_title: Some("uttr".to_string()),
+            ..Default::default()
+        };
+
+        let prompt = resolved_post_process_system_prompt(&settings, Some(&context)).unwrap();
+
+        assert!(prompt.contains("FreeFlow"));
+        assert!(prompt.contains("Nearby app context"));
+        assert!(prompt.contains("Terminal"));
+    }
+
+    #[test]
+    fn edit_mode_prompt_keeps_selection_and_instruction_separate() {
+        let context = AppContextSnapshot {
+            app_name: Some("Notes".to_string()),
+            selected_text: Some("selected text".to_string()),
+            ..Default::default()
+        };
+        let prompt = build_edit_mode_prompt(
+            "This is too long.",
+            "make this shorter",
+            &context,
+            &["Prime Directive".to_string()],
+        );
+
+        assert!(prompt.contains("# Spoken instruction\nmake this shorter"));
+        assert!(prompt.contains("# Selected text\nThis is too long."));
+        assert!(prompt.contains("Prime Directive"));
+        assert!(prompt.contains("<uttr_edit_output>"));
+    }
+
+    #[test]
+    fn clean_edit_mode_response_prefers_edit_tag() {
+        let cleaned = clean_edit_mode_response(
+            "notes <uttr_edit_output>\nShorter text.\n</uttr_edit_output>",
+        );
+
+        assert_eq!(cleaned, "Shorter text.");
     }
 
     #[test]
@@ -1859,6 +3247,116 @@ mod tests {
         let long_timeout = transcription_timeout_for_samples(16_000 * 60 * 31);
         let long_watchdog = transcription_watchdog_delay(16_000 * 60 * 31);
         assert!(long_watchdog > long_timeout);
+    }
+
+    #[test]
+    fn live_summary_quota_errors_are_user_facing() {
+        let raw = r#"API request failed with status 429 Too Many Requests: {
+          "error": {
+            "message": "You exceeded your current quota, please check your plan and billing details.",
+            "type": "insufficient_quota",
+            "code": "insufficient_quota"
+          }
+        }"#;
+
+        let friendly = friendly_live_summary_error(raw);
+
+        assert_eq!(
+            friendly,
+            "OpenAI quota is exhausted for the saved API key. Recording continues, but live summaries are paused for this session."
+        );
+        assert!(should_pause_live_summaries(raw));
+        assert!(!friendly.contains('{'));
+        assert!(!friendly.contains("insufficient_quota"));
+    }
+
+    #[test]
+    fn live_summary_updates_every_minute_and_on_final_chunk() {
+        assert_eq!(FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL, 6);
+        assert!(!should_update_live_summary(1, false));
+        assert!(!should_update_live_summary(5, false));
+        assert!(should_update_live_summary(6, false));
+        assert!(!should_update_live_summary(7, false));
+        assert!(should_update_live_summary(12, false));
+        assert!(should_update_live_summary(3, true));
+    }
+
+    #[test]
+    fn live_summary_prompt_requests_only_supported_sections() {
+        let prompt = build_live_summary_prompt(
+            "Discussed launch timing and follow-up work.",
+            Some("## Current gist\nEarlier notes.".to_string()),
+        );
+
+        assert!(prompt.contains("current_gist"));
+        assert!(prompt.contains("key_points"));
+        assert!(prompt.contains("details"));
+        assert!(prompt.contains("Current gist, Key points"));
+        assert!(prompt.contains("Do not include action items"));
+        assert!(prompt.contains("more expanded than terse bullets"));
+        assert!(!prompt.contains("\"action_items\""));
+        assert!(!prompt.contains("\"timeline\""));
+        assert!(!prompt.contains("Notable points"));
+        assert!(!prompt.contains("Risks / blockers"));
+        assert!(!prompt.contains("Open questions"));
+    }
+
+    #[test]
+    fn meeting_summary_json_renders_to_expanded_key_points() {
+        let raw = r#"{
+          "current_gist": "The team discussed launch timing.",
+          "key_points": [{
+            "text": "Launch timing depends on summary quality.",
+            "details": [
+              "The team wants the notes to stay readable in the desktop app.",
+              "Repeated points should be merged instead of duplicated."
+            ]
+          }]
+        }"#;
+
+        let state = parse_meeting_summary_state(raw).expect("valid summary json");
+        let rendered = render_meeting_summary_markdown(&state);
+
+        assert!(rendered.contains("## Current gist"));
+        assert!(rendered.contains("## Key points"));
+        assert!(rendered.contains("- Launch timing depends on summary quality."));
+        assert!(rendered.contains("  - The team wants the notes to stay readable"));
+        assert!(!rendered.contains("## Action items"));
+        assert!(!rendered.contains("## Timeline"));
+        assert!(!rendered.contains("## Notable points"));
+    }
+
+    #[test]
+    fn invalid_live_summary_output_keeps_previous_summary() {
+        let previous = "## Current gist\nThe existing summary should remain.";
+        let normalized = normalize_live_summary_output("not json", Some(previous));
+
+        assert_eq!(normalized, previous);
+    }
+
+    #[test]
+    fn empty_structured_summary_is_rejected() {
+        let raw = r#"{
+          "current_gist": " ",
+          "key_points": []
+        }"#;
+
+        assert!(parse_meeting_summary_state(raw).is_none());
+    }
+
+    #[test]
+    fn meeting_summary_renderer_keeps_detail_only_points() {
+        let rendered = render_meeting_summary_markdown(&MeetingSummaryState {
+            current_gist: "Launch planning is underway.".to_string(),
+            key_points: vec![SummaryPoint {
+                text: "".to_string(),
+                details: vec!["The summary needs to be easy to scan.".to_string()],
+            }],
+        });
+
+        assert!(rendered.contains("  - The summary needs to be easy to scan."));
+        assert!(!rendered.contains("## Action items"));
+        assert!(!rendered.contains("## Timeline"));
     }
 
     #[test]

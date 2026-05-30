@@ -358,11 +358,6 @@ export const FileTranscriptionSettings: React.FC = () => {
     <div className="mx-auto w-full max-w-3xl space-y-5">
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div className="space-y-2">
-          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-text/34">
-            {t("settings.fileTranscription.eyebrow", {
-              defaultValue: "Utility",
-            })}
-          </p>
           <h1 className="text-[28px] font-semibold tracking-tight text-text">
             {t("settings.fileTranscription.title", {
               defaultValue: "File Transcription",

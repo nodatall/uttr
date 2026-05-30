@@ -174,6 +174,7 @@ extern "C" {
     fn uttr_full_system_audio_start_capture(
         config: *const FullSystemAudioCaptureConfig,
     ) -> FullSystemAudioStartResult;
+    fn uttr_full_system_audio_drain_capture() -> FullSystemAudioStopResult;
     fn uttr_full_system_audio_stop_capture() -> FullSystemAudioStopResult;
     fn uttr_full_system_audio_cancel_capture();
     fn uttr_full_system_audio_cleanup_last_session();
@@ -275,6 +276,18 @@ pub fn stop_capture() -> FullSystemAudioStopResult {
     #[cfg(target_os = "macos")]
     {
         unsafe { uttr_full_system_audio_stop_capture() }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        FullSystemAudioStopResult::default()
+    }
+}
+
+pub fn drain_capture() -> FullSystemAudioStopResult {
+    #[cfg(target_os = "macos")]
+    {
+        unsafe { uttr_full_system_audio_drain_capture() }
     }
 
     #[cfg(not(target_os = "macos"))]
