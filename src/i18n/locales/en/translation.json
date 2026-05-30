@@ -14,7 +14,7 @@
     "apiKeys": "API Keys",
     "advanced": "Advanced",
     "postProcessing": "Post Process",
-    "history": "History",
+    "history": "Transcriptions",
     "debug": "Debug",
     "about": "About",
     "manageSubscription": "Manage subscription",
@@ -176,8 +176,8 @@
             "description": "The keyboard shortcut to record and transcribe your voice."
           },
           "transcribe_full_system_audio": {
-            "name": "Full-System Recording Shortcut",
-            "description": "A dedicated toggle shortcut that starts and stops system audio plus microphone capture."
+            "name": "Meeting Recording Shortcut",
+            "description": "A dedicated shortcut that starts and stops meeting recording."
           },
           "edit_mode": {
             "name": "Edit Mode Shortcut",
@@ -327,13 +327,13 @@
         "description": "Keep the microphone open between recordings so transcription starts faster. Turn this off to open it only while recording."
       },
       "fullSystemAudio": {
-        "title": "Enable system audio recording",
-        "shortcutLabel": "Shortcut",
-        "description": "Capture system audio and microphone together for calls and meetings.",
-        "loading": "Checking support and Screen Recording readiness...",
-        "statusCheckFailed": "Uttr could not check full-system audio support right now.",
+        "title": "Enable Meetings",
+        "shortcutLabel": "Meeting Recording Shortcut",
+        "description": "Record meetings with system audio and microphone together.",
+        "loading": "Checking Meetings support and Screen Recording readiness...",
+        "statusCheckFailed": "Uttr could not check Meetings support right now.",
         "unsupportedDescription": "This feature is available only on macOS 13 or later.",
-        "permissionRequired": "Screen Recording access is required before this can be enabled. Microphone access alone is not enough.",
+        "permissionRequired": "Screen Recording access is required before Meetings can be enabled. Microphone access alone is not enough.",
         "pendingDescription": "{{reason}} Microphone access is handled separately. Uttr will retry automatically when this window regains focus."
       },
       "audioFeedback": {
@@ -357,7 +357,7 @@
         "app": "App",
         "output": "Output",
         "transcription": "Transcription",
-        "history": "History",
+        "history": "Transcriptions",
         "experimental": "Experimental"
       },
       "experimentalToggle": {
@@ -520,10 +520,10 @@
     },
     "history": {
       "eyebrow": "Archive",
-      "title": "History",
+      "title": "Transcriptions",
       "openFolder": "Open Recordings Folder",
       "loading": "Loading history...",
-      "empty": "No transcriptions yet. Start recording to build your history!",
+      "empty": "No transcriptions yet.",
       "copyToClipboard": "Copy transcription to clipboard",
       "showingLatest": "Showing latest {{count}} entries (older entries are still stored).",
       "save": "Save transcription",
@@ -531,10 +531,10 @@
       "delete": "Delete entry",
       "deleteError": "Failed to delete entry. Please try again.",
       "dictations": "Dictations",
-      "sessions": "Sessions",
-      "openSession": "Open session",
-      "emptySessions": "No full-system sessions yet.",
-      "emptyDictations": "No quick dictations yet."
+      "sessions": "Meetings",
+      "openSession": "Open meeting",
+      "emptySessions": "No meetings yet.",
+      "emptyDictations": "No transcriptions yet."
     },
     "debug": {
       "title": "Debug",
@@ -714,7 +714,7 @@
       "recording": "Recording",
       "summary": "Summary",
       "liveSummary": "Live summary",
-      "completeBody": "The session transcript is saved in History.",
+      "completeBody": "The meeting transcript is saved in Meetings.",
       "liveBody": "Uttr is recording system audio and microphone audio. The summary appears here as the session is processed.",
       "readyTitle": "Ready to start",
       "readyDescription": "Use Start for full-system audio recording and session summarization.",

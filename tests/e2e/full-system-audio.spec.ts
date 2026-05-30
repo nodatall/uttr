@@ -104,9 +104,9 @@ const bindings = {
     current_binding: "ctrl+space",
   },
   transcribe_full_system_audio: {
-    name: "Full-System Recording Shortcut",
+    name: "Meeting Recording Shortcut",
     description:
-      "A dedicated toggle shortcut that starts and stops system audio plus microphone capture.",
+      "A dedicated shortcut that starts and stops meeting recording.",
     default_binding: "ctrl+fn",
     current_binding: "ctrl+fn",
   },
@@ -428,7 +428,7 @@ async function installBrowserMocks(
 }
 
 test.describe("full-system audio settings", () => {
-  test("starts a full-system session from Home without file, history, or side cards", async ({
+  test("starts a full-system session from Home without file or side cards", async ({
     page,
   }) => {
     await installBrowserMocks(page, createTestState(false, true));
@@ -445,7 +445,8 @@ test.describe("full-system audio settings", () => {
     ).toHaveCount(0);
     await expect(
       workspace.getByRole("button", { name: /^History$/i }),
-    ).toHaveCount(0);
+    ).toBeVisible();
+    await expect(workspace.getByText("Past meetings")).toHaveCount(0);
     await expect(workspace.getByText("Capture")).toHaveCount(0);
     await expect(workspace.getByText("Recent surfaces")).toHaveCount(0);
 
@@ -488,6 +489,9 @@ test.describe("full-system audio settings", () => {
     await expect(
       workspace.getByRole("button", { name: /^Start$/i }),
     ).toHaveCount(0);
+    await expect(
+      workspace.getByRole("button", { name: /^History$/i }),
+    ).toHaveCount(0);
 
     await workspace.getByRole("button", { name: /^Stop$/i }).click();
 
@@ -505,6 +509,43 @@ test.describe("full-system audio settings", () => {
       .toBe(1);
   });
 
+  test("keeps the live meeting timer when switching tabs", async ({ page }) => {
+    const state = createTestState(false, true);
+    state.sessionWindowState = {
+      stage: "active",
+      title: "Live session",
+      subtitle: "Capturing system audio and microphone audio.",
+      progressLabel: "Recording",
+      progressValue: 0,
+      summaryText: null,
+      rawTranscriptText: null,
+      historyEntryId: null,
+    };
+    await installBrowserMocks(page, state);
+
+    await page.goto("/");
+
+    const workspace = page.getByTestId("home-workspace");
+    await expect(
+      workspace
+        .locator("span")
+        .filter({ hasText: /^0:0[1-9]$/ })
+        .first(),
+    ).toBeVisible({ timeout: 2500 });
+
+    await page.getByRole("button", { name: /Settings/i }).click();
+    await page.getByRole("button", { name: /^Meetings$/i }).click();
+
+    const returnedWorkspace = page.getByTestId("home-workspace");
+    await expect(returnedWorkspace.getByText(/^0:00$/)).toHaveCount(0);
+    await expect(
+      returnedWorkspace
+        .locator("span")
+        .filter({ hasText: /^0:0[1-9]$/ })
+        .first(),
+    ).toBeVisible();
+  });
+
   test("shows saved session summary separately from the raw transcript", async ({
     page,
   }) => {
@@ -512,7 +553,7 @@ test.describe("full-system audio settings", () => {
     state.sessionWindowState = {
       stage: "complete",
       title: "Session saved",
-      subtitle: "The transcript is ready in History under Sessions.",
+      subtitle: "The transcript is ready under Meetings.",
       progressLabel: "Complete",
       progressValue: 1,
       summaryText: "Bitcoin sentiment improved as recurring buying continued.",
@@ -539,7 +580,37 @@ test.describe("full-system audio settings", () => {
     await expect(dialog.getByText("every single month.")).toBeVisible();
   });
 
-  test("opens a session from History on Home with its summary", async ({
+  test("hides legacy action and timeline sections in saved meetings", async ({
+    page,
+  }) => {
+    const state = createTestState(false, true);
+    state.sessionWindowState = {
+      stage: "complete",
+      title: "Session saved",
+      subtitle: "The transcript is ready under Meetings.",
+      progressLabel: "Complete",
+      progressValue: 1,
+      summaryText:
+        "## Current gist\nLegacy meeting gist.\n\n## Key points\n- Keep this point.\n\n## Action items\n- Task: Old task that should not show.\n\n## Timeline\n- 00:10 - Old timeline item that should not show.",
+      rawTranscriptText: "raw transcript",
+      historyEntryId: 43,
+    };
+    await installBrowserMocks(page, state);
+
+    await page.goto("/");
+
+    const workspace = page.getByTestId("home-workspace");
+    await expect(workspace.getByText("Legacy meeting gist.")).toBeVisible();
+    await expect(workspace.getByText("Keep this point.")).toBeVisible();
+    await expect(
+      workspace.getByText(/Old task that should not show/),
+    ).toHaveCount(0);
+    await expect(
+      workspace.getByText(/Old timeline item that should not show/),
+    ).toHaveCount(0);
+  });
+
+  test("opens a saved meeting from Meetings history with its summary", async ({
     page,
   }) => {
     const state = createTestState(false, true);
@@ -561,20 +632,17 @@ test.describe("full-system audio settings", () => {
     await installBrowserMocks(page, state);
 
     await page.goto("/");
-    await page.getByRole("button", { name: /History/i }).click();
-    await page.getByRole("button", { name: /Sessions/i }).click();
+    await page.getByRole("button", { name: /^History$/i }).click();
     await page
       .getByRole("button", { name: /Session summary: confidence improved/i })
       .click();
 
     const workspace = page.getByTestId("home-workspace");
     await expect(
-      workspace.getByRole("heading", { name: "Session saved" }),
-    ).toBeVisible();
-    await expect(
-      workspace.getByText(
-        "Session summary: confidence improved as participants discussed recurring accumulation.",
-      ),
+      workspace.getByRole("paragraph").filter({
+        hasText:
+          "Session summary: confidence improved as participants discussed recurring accumulation.",
+      }),
     ).toBeVisible();
     await expect(workspace.getByText("raw session words")).toHaveCount(0);
 
@@ -588,6 +656,62 @@ test.describe("full-system audio settings", () => {
     ).toBeVisible();
   });
 
+  test("keeps meetings on Meetings and dictations on Transcriptions", async ({
+    page,
+  }) => {
+    const state = createTestState(false, true);
+    state.historyEntries = [
+      {
+        id: 7,
+        file_name: "session.wav",
+        timestamp: 1_717_200_000,
+        saved: false,
+        title: "Session",
+        transcription_text: "raw meeting transcript",
+        post_processed_text:
+          "## Current gist\nMeeting summary.\n\n## Key points\n- Meeting-only point.",
+        post_process_prompt: "Live session summary via OpenAI after 1 chunk(s)",
+        recording_source: "full_system_audio",
+      },
+      {
+        id: 8,
+        file_name: "dictation.wav",
+        timestamp: 1_717_196_400,
+        saved: false,
+        title: "Dictation",
+        transcription_text: "normal dictation transcript",
+        post_processed_text: null,
+        post_process_prompt: null,
+        recording_source: "dictation",
+      },
+    ];
+    await installBrowserMocks(page, state);
+
+    await page.goto("/");
+
+    const workspace = page.getByTestId("home-workspace");
+    await expect(
+      workspace.getByRole("button", { name: /^Start$/i }),
+    ).toBeVisible();
+    await expect(workspace.getByText("Past meetings")).toHaveCount(0);
+    await workspace.getByRole("button", { name: /^History$/i }).click();
+    await expect(workspace.getByText("Past meetings")).toBeVisible();
+    await expect(
+      workspace.getByRole("button", { name: /^Start$/i }),
+    ).toHaveCount(0);
+    await expect(workspace.getByText(/Meeting summary/)).toBeVisible();
+    await expect(
+      workspace.getByText(/normal dictation transcript/),
+    ).toHaveCount(0);
+
+    await page.getByRole("button", { name: /^Transcriptions$/i }).click();
+    await expect(
+      page.getByRole("heading", { name: "Transcriptions" }),
+    ).toBeVisible();
+    await expect(page.getByText("normal dictation transcript")).toBeVisible();
+    await expect(page.getByText(/Meeting summary/)).toHaveCount(0);
+  });
+
   test("shows the supported toggle and reveals the dedicated shortcut without changing transcribe", async ({
     page,
   }) => {
@@ -599,7 +723,12 @@ test.describe("full-system audio settings", () => {
     const toggle = page.getByTestId("record-full-system-audio-toggle");
     await expect(toggle).toBeVisible();
     await expect(toggle).toBeEnabled();
+    await expect(page.getByText("Enable Meetings")).toBeVisible();
     await expect(page.getByText("Transcribe Shortcut")).toBeVisible();
+    await expect(page.getByText("Meeting Recording Shortcut")).toHaveCount(0);
+    await expect(page.getByText("Full-System Recording Shortcut")).toHaveCount(
+      0,
+    );
     await expect(page.getByText("Ctrl + fn")).toHaveCount(0);
 
     await page
@@ -607,6 +736,7 @@ test.describe("full-system audio settings", () => {
       .click();
 
     await expect(toggle).toBeChecked();
+    await expect(page.getByText("Meeting Recording Shortcut")).toBeVisible();
     await expect(page.getByText("Ctrl + fn")).toBeVisible();
     await expect(page.getByText("Transcribe Shortcut")).toBeVisible();
   });
@@ -622,6 +752,7 @@ test.describe("full-system audio settings", () => {
     const toggle = page.getByTestId("record-full-system-audio-toggle");
     await expect(toggle).toBeVisible();
     await expect(toggle).toBeDisabled();
+    await expect(page.getByText("Enable Meetings")).toBeVisible();
     await expect(
       page.getByText("This feature is available only on macOS 13 or later."),
     ).toBeVisible();

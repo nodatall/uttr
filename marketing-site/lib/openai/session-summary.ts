@@ -17,7 +17,7 @@ interface OpenAiChatCompletionResponse {
 }
 
 export const SESSION_SUMMARY_SYSTEM_PROMPT =
-  "You are the live meeting summarizer inside Uttr, a macOS transcription app. Update meeting notes from transcript text only. Return valid JSON only.";
+  "You are the live meeting summarizer inside Uttr, a macOS transcription app. Update meeting notes from transcript text only. Return valid JSON only with current_gist and expanded key_points.";
 
 export function buildSummaryPrompt(input: SessionSummaryInput) {
   const previous = input.previousSummary?.trim() || "No previous summary yet.";
@@ -29,9 +29,10 @@ Rules:
 - Do not invent decisions, tasks, names, deadlines, or speakers.
 - Preserve useful existing information.
 - Merge duplicates.
-- If a task has no owner, use "Unassigned".
-- If a task has no deadline, use "No deadline".
-- Keep all text concise for a desktop meeting UI.
+- Use only Current gist and Key points.
+- Do not include action items, timelines, decisions, open questions, or raw transcript.
+- Make key points more expanded than terse bullets: use short topic bullets with one to three concrete supporting details when the transcript supports them.
+- Keep the gist concise and keep key point detail readable in a desktop meeting UI.
 
 Previous rendered summary:
 ${previous}
@@ -45,22 +46,17 @@ Use exactly this shape:
 {
   "current_gist": "one to three concise sentences",
   "key_points": [
-    { "text": "important discussion point" }
-  ],
-  "action_items": [
     {
-      "task": "specific task",
-      "owner": "owner name or Unassigned",
-      "deadline": "deadline or No deadline",
-      "status": "Open"
+      "text": "short topic or important discussion point",
+      "details": [
+        "expanded supporting detail, tradeoff, rationale, or context from the transcript",
+        "another concrete detail when useful"
+      ]
     }
-  ],
-  "timeline": [
-    { "time": "chunk or timestamp", "event": "brief event or topic change" }
   ]
 }
 
-Rendered sections must map only to: Current gist, Key points, Action items, Timeline.`;
+Rendered sections must map only to: Current gist, Key points.`;
 }
 
 function extractAssistantText(payload: OpenAiChatCompletionResponse) {

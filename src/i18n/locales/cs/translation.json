@@ -212,8 +212,8 @@
             "description": "Volitelné: Vyhrazená klávesová zkratka, která zapíná nebo vypíná následné zpracování pomocí AI."
           },
           "transcribe_full_system_audio": {
-            "name": "Full-System Recording Shortcut",
-            "description": "A dedicated toggle shortcut that starts and stops system audio plus microphone capture."
+            "name": "Meeting Recording Shortcut",
+            "description": "A dedicated shortcut that starts and stops meeting recording."
           }
         },
         "errors": {
@@ -262,14 +262,14 @@
         "description": "Upravte hlasitost zvukové odezvy"
       },
       "fullSystemAudio": {
-        "title": "Record full system audio",
-        "description": "Capture system audio and microphone together for calls and meetings.",
-        "loading": "Checking support and Screen Recording readiness...",
-        "statusCheckFailed": "Uttr could not check full-system audio support right now.",
+        "title": "Enable Meetings",
+        "description": "Record meetings with system audio and microphone together.",
+        "loading": "Checking Meetings support and Screen Recording readiness...",
+        "statusCheckFailed": "Uttr could not check Meetings support right now.",
         "unsupportedDescription": "This feature is available only on macOS 13 or later.",
-        "permissionRequired": "Screen Recording access is required before this can be enabled. Microphone access alone is not enough.",
+        "permissionRequired": "Screen Recording access is required before Meetings can be enabled. Microphone access alone is not enough.",
         "pendingDescription": "{{reason}} Microphone access is handled separately. Uttr will retry automatically when this window regains focus.",
-        "shortcutLabel": "Shortcut"
+        "shortcutLabel": "Meeting Recording Shortcut"
       }
     },
     "advanced": {
@@ -452,10 +452,10 @@
       "eyebrow": "Archiv",
       "showingLatest": "Zobrazuje se posledních {{count}} položek (starší položky jsou stále uložené).",
       "dictations": "Dictations",
-      "sessions": "Sessions",
-      "openSession": "Open session",
-      "emptySessions": "No full-system sessions yet.",
-      "emptyDictations": "No quick dictations yet."
+      "sessions": "Meetings",
+      "openSession": "Open meeting",
+      "emptySessions": "No meetings yet.",
+      "emptyDictations": "No transcriptions yet."
     },
     "debug": {
       "title": "Ladění",
@@ -714,7 +714,7 @@
       "recording": "Recording",
       "summary": "Summary",
       "liveSummary": "Live summary",
-      "completeBody": "The session transcript is saved in History.",
+      "completeBody": "The meeting transcript is saved in Meetings.",
       "liveBody": "Uttr is recording system audio and microphone audio. The summary appears here as the session is processed.",
       "readyTitle": "Ready to start",
       "readyDescription": "Use Start for full-system audio recording and session summarization.",

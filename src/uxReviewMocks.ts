@@ -26,9 +26,9 @@ const bindings = {
     current_binding: "ctrl+space",
   },
   transcribe_full_system_audio: {
-    name: "Full-System Recording Shortcut",
+    name: "Meeting Recording Shortcut",
     description:
-      "A dedicated toggle shortcut that starts and stops system audio plus microphone capture.",
+      "A dedicated shortcut that starts and stops meeting recording.",
     default_binding: "ctrl+fn",
     current_binding: "ctrl+fn",
   },
@@ -79,7 +79,7 @@ const sampleHistoryEntries = [
     transcription_text:
       "every single month. It makes it easier for people to at least hold Bitcoin or buy back into Bitcoin. And I think we are in this healing process.",
     post_processed_text:
-      "## Current gist\nThe meeting is about market confidence and how recurring Bitcoin accumulation affects sentiment.\n\n## Key points\n- Participants framed recurring monthly accumulation as easier for buyers to maintain.\n- Higher prices were discussed as improving optimism during a healing phase.\n\n## Action items\n- Task: Review whether this belongs in the market notes.\n  - Owner: Unassigned\n  - Deadline: No deadline\n  - Status: Open\n\n## Timeline\n- 00:01 - Discussion moved from accumulation habits to market confidence.",
+      "## Current gist\nThe meeting is about market confidence and how recurring Bitcoin accumulation affects sentiment.\n\n## Key points\n- Recurring accumulation is framed as easier to maintain.\n  - Participants described monthly buying as a habit that can help people keep holding Bitcoin or return to it after stepping away.\n  - The point was less about a single trade and more about how repeated behavior can rebuild confidence over time.\n- Higher prices are connected to improving sentiment.\n  - The discussion treats price recovery as part of a broader healing process.\n  - Participants suggested that optimism improves when people see the market validating their patience.",
     post_process_prompt: "Live session summary via OpenAI after 2 chunk(s)",
     recording_source: "full_system_audio",
   },
@@ -114,14 +114,14 @@ const sessionStates = {
     progressLabel: "Chunk 2 summarized",
     progressValue: 0,
     summaryText:
-      "## Current gist\nThe meeting is about Bitcoin confidence, monthly accumulation, and whether the discussion belongs in market notes.\n\n## Key points\n- Bitcoin confidence is improving as participants discuss monthly accumulation.\n- Higher prices are framed as helping sentiment recover.\n\n## Action items\n- Task: Review whether this belongs in the market notes.\n  - Owner: Unassigned\n  - Deadline: No deadline\n  - Status: Open\n\n## Timeline\n- 00:20 - Participants connected accumulation behavior to improving confidence.",
+      "## Current gist\nThe meeting is about Bitcoin confidence, monthly accumulation, and whether the discussion belongs in market notes.\n\n## Key points\n- Monthly accumulation is being treated as a confidence signal.\n  - Participants connected recurring buying with a lower-friction way to stay exposed while sentiment recovers.\n  - The conversation frames this as a behavioral pattern rather than a one-time market call.\n- Price recovery is improving the tone of the discussion.\n  - Higher prices are described as making it easier for people to feel optimistic again.\n  - The group is still cautious, but the language suggests confidence is returning.",
     rawTranscriptText: null,
     historyEntryId: null,
   },
   saved: {
     stage: "complete",
     title: "Session saved",
-    subtitle: "The transcript is ready in History under Sessions.",
+    subtitle: "The transcript is ready under Meetings.",
     progressLabel: "Complete",
     progressValue: 1,
     summaryText: sampleHistoryEntries[0].post_processed_text,
@@ -131,7 +131,7 @@ const sessionStates = {
   "missing-summary": {
     stage: "complete",
     title: "Session saved",
-    subtitle: "The transcript is ready in History under Sessions.",
+    subtitle: "The transcript is ready under Meetings.",
     progressLabel: "Complete",
     progressValue: 1,
     summaryText: null,
@@ -188,7 +188,7 @@ const installUxReviewToolbar = () => {
     ["live", "Live"],
     ["saved", "Saved"],
     ["missing-summary", "No summary"],
-    ["history", "History"],
+    ["history", "Transcriptions"],
   ];
 
   toolbar.innerHTML = states
@@ -219,17 +219,10 @@ const installInitialNavigation = () => {
   }
 
   window.setTimeout(() => {
-    const historyButton = Array.from(document.querySelectorAll("button")).find(
-      (button) => button.textContent?.trim() === "History",
-    );
-    historyButton?.click();
-
-    window.setTimeout(() => {
-      const sessionsButton = Array.from(
-        document.querySelectorAll("button"),
-      ).find((button) => button.textContent?.includes("Sessions"));
-      sessionsButton?.click();
-    }, 100);
+    const transcriptionsButton = Array.from(
+      document.querySelectorAll("button"),
+    ).find((button) => button.textContent?.trim() === "Transcriptions");
+    transcriptionsButton?.click();
   }, 250);
 };
 
@@ -354,6 +347,17 @@ const installInitialNavigation = () => {
         return review.fullSystemAudio.supportStatus;
       case "get_full_system_audio_readiness_status":
         return review.fullSystemAudio.readinessStatus;
+      case "set_record_full_system_audio_enabled":
+        review.settings = {
+          ...review.settings,
+          record_full_system_audio: Boolean(args.enabled),
+        };
+        return {
+          requested_enabled: Boolean(args.enabled),
+          stored_enabled: Boolean(args.enabled),
+          support: review.fullSystemAudio.supportStatus,
+          readiness: review.fullSystemAudio.readinessStatus,
+        };
       case "get_history_entries":
         return review.historyEntries;
       case "get_audio_file_path":

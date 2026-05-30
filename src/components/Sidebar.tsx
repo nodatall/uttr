@@ -1,11 +1,19 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getVersion } from "@tauri-apps/api/app";
-import { History, Home, FileAudio, Settings } from "lucide-react";
+import {
+  Cpu,
+  History,
+  Home,
+  FileAudio,
+  KeyRound,
+  Settings,
+} from "lucide-react";
 import { useSettings } from "../hooks/useSettings";
 import UpdateChecker from "./update-checker";
 import { ManageSubscriptionButton } from "./settings/ManageSubscriptionButton";
 import { UpgradeButton } from "./settings/UpgradeButton";
+import { shouldShowModelControls } from "@/lib/utils/premiumFeatures";
 
 export type SidebarSection = keyof typeof SECTIONS_CONFIG;
 
@@ -31,6 +39,26 @@ export const SECTIONS_CONFIG = {
     icon: Settings,
     enabled: () => true,
   },
+  models: {
+    labelKey: "sidebar.models",
+    defaultLabel: "Models",
+    icon: Cpu,
+    enabled: (settings) =>
+      shouldShowModelControls(settings?.installAccess ?? null) ||
+      Boolean(
+        settings?.settings?.byok_enabled || settings?.settings?.debug_mode,
+      ),
+  },
+  apiKeys: {
+    labelKey: "sidebar.apiKeys",
+    defaultLabel: "API Keys",
+    icon: KeyRound,
+    enabled: (settings) =>
+      shouldShowModelControls(settings?.installAccess ?? null) ||
+      Boolean(
+        settings?.settings?.byok_enabled || settings?.settings?.debug_mode,
+      ),
+  },
   home: {
     labelKey: "sidebar.home",
     defaultLabel: "Meetings",
@@ -45,7 +73,7 @@ export const SECTIONS_CONFIG = {
   },
   history: {
     labelKey: "sidebar.history",
-    defaultLabel: "History",
+    defaultLabel: "Transcriptions",
     icon: History,
     enabled: () => true,
   },
@@ -61,7 +89,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSectionChange,
 }) => {
   const { t } = useTranslation();
-  const { installAccess } = useSettings();
+  const { settings, installAccess } = useSettings();
   const [version, setVersion] = useState("");
   const versionTapCountRef = useRef(0);
   const versionTapTimerRef = useRef<number | null>(null);
@@ -108,7 +136,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   };
 
   const availableSections = Object.entries(SECTIONS_CONFIG)
-    .filter(([, config]) => config.enabled())
+    .filter(([, config]) => config.enabled({ settings, installAccess }))
     .map(([id, config]) => ({ id: id as SidebarSection, ...config }));
 
   return (

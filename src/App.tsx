@@ -13,8 +13,10 @@ import Footer from "./components/footer";
 import { AccessibilityOnboarding } from "./components/onboarding";
 import { Sidebar, SidebarSection } from "./components/Sidebar";
 import {
+  ApiKeysSettings,
   FileTranscriptionSettings,
   HistorySettings,
+  ModelsSettings,
 } from "./components/settings";
 import {
   HomeWorkspace,
@@ -47,6 +49,15 @@ const DEFAULT_SESSION_WINDOW_STATE: SessionWindowState = {
   historyEntryId: null,
 };
 
+const isLiveSessionStage = (stage: SessionWindowState["stage"]) =>
+  stage === "active" ||
+  stage === "preparing" ||
+  stage === "transcribing" ||
+  stage === "processing";
+
+const isProcessingSessionStage = (stage: SessionWindowState["stage"]) =>
+  stage === "preparing" || stage === "transcribing" || stage === "processing";
+
 const getInitialSessionWindowState = (): SessionWindowState => ({
   ...DEFAULT_SESSION_WINDOW_STATE,
   ...(typeof window !== "undefined"
@@ -70,25 +81,49 @@ const renderSettingsContent = (
   section: SidebarSection,
   historyFocusRequest: HistoryFocusRequest | null,
   sessionWindowState: SessionWindowState,
+  sessionClock: SessionClockState,
   onOpenSessionEntry: (entry: HistoryEntry) => void,
 ) => {
   switch (section) {
     case "home":
-      return <HomeWorkspace sessionState={sessionWindowState} />;
+      return (
+        <HomeWorkspace
+          sessionState={sessionWindowState}
+          sessionClock={sessionClock}
+          onOpenSessionEntry={onOpenSessionEntry}
+        />
+      );
     case "files":
       return <FileTranscriptionSettings />;
+    case "models":
+      return <ModelsSettings />;
+    case "apiKeys":
+      return <ApiKeysSettings />;
     case "history":
       return (
         <HistorySettings
           focusRequest={historyFocusRequest}
           onOpenSessionEntry={onOpenSessionEntry}
+          mode="dictations"
         />
       );
     case "settings":
       return <SettingsWorkspace />;
     default:
-      return <HomeWorkspace sessionState={sessionWindowState} />;
+      return (
+        <HomeWorkspace
+          sessionState={sessionWindowState}
+          sessionClock={sessionClock}
+          onOpenSessionEntry={onOpenSessionEntry}
+        />
+      );
   }
+};
+
+type SessionClockState = {
+  recordingStartedAt: number | null;
+  recordingStoppedAt: number | null;
+  clockNow: number;
 };
 
 function App() {
@@ -101,6 +136,13 @@ function App() {
     useState<HistoryFocusRequest | null>(null);
   const [sessionWindowState, setSessionWindowState] =
     useState<SessionWindowState>(getInitialSessionWindowState);
+  const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(
+    null,
+  );
+  const [recordingStoppedAt, setRecordingStoppedAt] = useState<number | null>(
+    null,
+  );
+  const [clockNow, setClockNow] = useState(() => Date.now());
   const sessionStageRef = useRef(sessionWindowState.stage);
   const { settings, updateSetting } = useSettings();
   const direction = getLanguageDirection(i18n.language);
@@ -117,10 +159,12 @@ function App() {
   const hasCompletedPostOnboardingInit = useRef(false);
 
   const openSessionEntry = useCallback((entry: HistoryEntry) => {
+    setRecordingStartedAt(null);
+    setRecordingStoppedAt(null);
     setSessionWindowState({
       stage: "complete",
       title: "Session saved",
-      subtitle: "The transcript is ready in History under Sessions.",
+      subtitle: "The transcript is ready under Meetings.",
       progressLabel: "Complete",
       progressValue: 1,
       summaryText: entry.post_processed_text,
@@ -129,6 +173,39 @@ function App() {
     });
     setCurrentSection("home");
   }, []);
+
+  useEffect(() => {
+    if (sessionWindowState.stage !== "active") {
+      return;
+    }
+
+    const timer = window.setInterval(() => setClockNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [sessionWindowState.stage]);
+
+  useEffect(() => {
+    const recording = sessionWindowState.stage === "active";
+    const processing = isProcessingSessionStage(sessionWindowState.stage);
+    const complete = sessionWindowState.stage === "complete";
+
+    if (recording) {
+      setRecordingStoppedAt(null);
+      setRecordingStartedAt((startedAt) => startedAt ?? Date.now());
+      return;
+    }
+
+    if (processing || complete) {
+      if (recordingStartedAt !== null && recordingStoppedAt === null) {
+        setRecordingStoppedAt(Date.now());
+      }
+      return;
+    }
+
+    if (!isLiveSessionStage(sessionWindowState.stage)) {
+      setRecordingStartedAt(null);
+      setRecordingStoppedAt(null);
+    }
+  }, [recordingStartedAt, recordingStoppedAt, sessionWindowState.stage]);
 
   useEffect(() => {
     if (hasStartedOnboardingCheck.current) {
@@ -379,6 +456,11 @@ function App() {
                   currentSection,
                   historyFocusRequest,
                   sessionWindowState,
+                  {
+                    recordingStartedAt,
+                    recordingStoppedAt,
+                    clockNow,
+                  },
                   openSessionEntry,
                 )}
               </div>

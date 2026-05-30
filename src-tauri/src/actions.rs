@@ -54,7 +54,7 @@ const FULL_SYSTEM_LIVE_SUMMARY_SECONDS: usize = 60;
 const FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL: u64 =
     (FULL_SYSTEM_LIVE_SUMMARY_SECONDS / FULL_SYSTEM_LIVE_CHUNK_SECONDS) as u64;
 const FULL_SYSTEM_SUMMARY_MODEL_FALLBACK: &str = "gpt-4o-mini";
-const FULL_SYSTEM_SUMMARY_SYSTEM_PROMPT: &str = "You are the live meeting summarizer inside Uttr, a macOS transcription app. Update meeting notes from transcript text only. Return valid JSON only.";
+const FULL_SYSTEM_SUMMARY_SYSTEM_PROMPT: &str = "You are the live meeting summarizer inside Uttr, a macOS transcription app. Update meeting notes from transcript text only. Return valid JSON only with current_gist and expanded key_points.";
 
 #[derive(Clone, Copy)]
 enum DeferredOverlayState {
@@ -1092,7 +1092,7 @@ fn session_window_state_payload(
         FullSystemProgressStage::Complete => SessionWindowStatePayload {
             stage: "complete".to_string(),
             title: "Session saved".to_string(),
-            subtitle: "The transcript is ready in History under Sessions.".to_string(),
+            subtitle: "The transcript is ready under Meetings.".to_string(),
             progress_label: "Complete".to_string(),
             progress_value: 1.0,
             summary_text,
@@ -1110,6 +1110,22 @@ fn emit_active_session_window_state(app: &AppHandle) {
             title: "Live session".to_string(),
             subtitle: "Capturing system audio and microphone audio.".to_string(),
             progress_label: "Recording".to_string(),
+            progress_value: 0.0,
+            summary_text: None,
+            raw_transcript_text: None,
+            history_entry_id: None,
+        },
+    );
+}
+
+fn emit_idle_session_window_state(app: &AppHandle) {
+    emit_session_window_state(
+        app,
+        SessionWindowStatePayload {
+            stage: "idle".to_string(),
+            title: "Open Uttr".to_string(),
+            subtitle: String::new(),
+            progress_label: String::new(),
             progress_value: 0.0,
             summary_text: None,
             raw_transcript_text: None,
@@ -1229,29 +1245,14 @@ struct MeetingSummaryState {
     current_gist: String,
     #[serde(default)]
     key_points: Vec<SummaryPoint>,
-    #[serde(default)]
-    action_items: Vec<SummaryActionItem>,
-    #[serde(default)]
-    timeline: Vec<SummaryTimelineEvent>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct SummaryPoint {
+    #[serde(default)]
     text: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct SummaryActionItem {
-    task: String,
-    owner: String,
-    deadline: String,
-    status: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-struct SummaryTimelineEvent {
-    time: String,
-    event: String,
+    #[serde(default)]
+    details: Vec<String>,
 }
 
 fn meeting_summary_prompt_contract() -> &'static str {
@@ -1261,22 +1262,17 @@ Use exactly this shape:
 {
   "current_gist": "one to three concise sentences",
   "key_points": [
-    { "text": "important discussion point" }
-  ],
-  "action_items": [
     {
-      "task": "specific task",
-      "owner": "owner name or Unassigned",
-      "deadline": "deadline or No deadline",
-      "status": "Open"
+      "text": "short topic or important discussion point",
+      "details": [
+        "expanded supporting detail, tradeoff, rationale, or context from the transcript",
+        "another concrete detail when useful"
+      ]
     }
-  ],
-  "timeline": [
-    { "time": "chunk or timestamp", "event": "brief event or topic change" }
   ]
 }
 
-Rendered sections must map only to: Current gist, Key points, Action items, Timeline."#
+Rendered sections must map only to: Current gist, Key points."#
 }
 
 fn build_live_summary_prompt(transcript_text: &str, previous_summary: Option<String>) -> String {
@@ -1284,7 +1280,7 @@ fn build_live_summary_prompt(transcript_text: &str, previous_summary: Option<Str
         .filter(|summary| !summary.trim().is_empty())
         .unwrap_or_else(|| "No previous summary yet.".to_string());
     format!(
-        "Update the live meeting summary incrementally.\n\nRules:\n- Use only facts supported by the transcript.\n- Do not invent decisions, tasks, names, deadlines, or speakers.\n- Preserve useful existing information.\n- Merge duplicates.\n- If a task has no owner, use \"Unassigned\".\n- If a task has no deadline, use \"No deadline\".\n- Keep all text concise for a desktop meeting UI.\n\nPrevious rendered summary:\n{}\n\nTranscript so far:\n{}\n\n{}",
+        "Update the live meeting summary incrementally.\n\nRules:\n- Use only facts supported by the transcript.\n- Do not invent decisions, tasks, names, deadlines, or speakers.\n- Preserve useful existing information.\n- Merge duplicates.\n- Use only Current gist and Key points.\n- Do not include action items, timelines, decisions, open questions, or raw transcript.\n- Make key points more expanded than terse bullets: use short topic bullets with one to three concrete supporting details when the transcript supports them.\n- Keep the gist concise and keep key point detail readable in a desktop meeting UI.\n\nPrevious rendered summary:\n{}\n\nTranscript so far:\n{}\n\n{}",
         previous,
         transcript_text,
         meeting_summary_prompt_contract()
@@ -1309,29 +1305,20 @@ fn parse_meeting_summary_state(text: &str) -> Option<MeetingSummaryState> {
     let json = extract_json_object(text)?;
     let mut state: MeetingSummaryState = serde_json::from_str(json).ok()?;
     state.current_gist = state.current_gist.trim().to_string();
+    state.key_points.iter_mut().for_each(|item| {
+        item.text = item.text.trim().to_string();
+        item.details = item
+            .details
+            .iter()
+            .map(|detail| detail.trim().to_string())
+            .filter(|detail| !detail.is_empty())
+            .collect();
+    });
     state
         .key_points
-        .iter_mut()
-        .for_each(|item| item.text = item.text.trim().to_string());
-    state.key_points.retain(|item| !item.text.is_empty());
-    state.action_items.iter_mut().for_each(|item| {
-        item.task = item.task.trim().to_string();
-        item.owner = item.owner.trim().to_string();
-        item.deadline = item.deadline.trim().to_string();
-        item.status = item.status.trim().to_string();
-    });
-    state.action_items.retain(|item| !item.task.is_empty());
-    state.timeline.iter_mut().for_each(|item| {
-        item.time = item.time.trim().to_string();
-        item.event = item.event.trim().to_string();
-    });
-    state.timeline.retain(|item| !item.event.is_empty());
+        .retain(|item| !item.text.is_empty() || !item.details.is_empty());
 
-    (!state.current_gist.is_empty()
-        || !state.key_points.is_empty()
-        || !state.action_items.is_empty()
-        || !state.timeline.is_empty())
-    .then_some(state)
+    (!state.current_gist.is_empty() || !state.key_points.is_empty()).then_some(state)
 }
 
 fn render_meeting_summary_markdown(state: &MeetingSummaryState) -> String {
@@ -1347,56 +1334,20 @@ fn render_meeting_summary_markdown(state: &MeetingSummaryState) -> String {
         output.push_str("- None yet.\n");
     } else {
         for point in &state.key_points {
-            output.push_str("- ");
-            output.push_str(point.text.trim());
-            output.push('\n');
-        }
-    }
-
-    output.push_str("\n## Action items\n");
-    if state.action_items.is_empty() {
-        output.push_str("- None yet.\n");
-    } else {
-        for item in &state.action_items {
-            let owner = if item.owner.trim().is_empty() {
-                "Unassigned"
-            } else {
-                item.owner.trim()
-            };
-            let deadline = if item.deadline.trim().is_empty() {
-                "No deadline"
-            } else {
-                item.deadline.trim()
-            };
-            let status = if item.status.trim().is_empty() {
-                "Open"
-            } else {
-                item.status.trim()
-            };
-            output.push_str("- Task: ");
-            output.push_str(item.task.trim());
-            output.push_str("\n  - Owner: ");
-            output.push_str(owner);
-            output.push_str("\n  - Deadline: ");
-            output.push_str(deadline);
-            output.push_str("\n  - Status: ");
-            output.push_str(status);
-            output.push('\n');
-        }
-    }
-
-    output.push_str("\n## Timeline\n");
-    if state.timeline.is_empty() {
-        output.push_str("- None yet.\n");
-    } else {
-        for event in &state.timeline {
-            output.push_str("- ");
-            if !event.time.trim().is_empty() {
-                output.push_str(event.time.trim());
-                output.push_str(" - ");
+            let text = point.text.trim();
+            if !text.is_empty() {
+                output.push_str("- ");
+                output.push_str(text);
+                output.push('\n');
             }
-            output.push_str(event.event.trim());
-            output.push('\n');
+            for detail in &point.details {
+                let detail = detail.trim();
+                if !detail.is_empty() {
+                    output.push_str("  - ");
+                    output.push_str(detail);
+                    output.push('\n');
+                }
+            }
         }
     }
 
@@ -2871,6 +2822,9 @@ impl ShortcutAction for FullSystemTranscribeAction {
         }
 
         start_transcription_session(app, binding_id.as_str(), recording_started);
+        if !recording_started {
+            emit_idle_session_window_state(app);
+        }
         let preload_model_id = if settings.selected_model.is_empty() {
             tm.get_current_model().unwrap_or_default()
         } else {
@@ -3168,8 +3122,8 @@ mod tests {
         should_refresh_microphone_stream_after_suspected_no_input, should_update_live_summary,
         toggle_post_process_enabled, transcription_timeout_for_samples,
         transcription_watchdog_delay, usable_post_processed_text, MeetingSummaryState,
-        SummaryActionItem, SummaryPoint, SummaryTimelineEvent, TranscriptionCompletionMode,
-        ACTION_MAP, FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT, FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL,
+        SummaryPoint, TranscriptionCompletionMode, ACTION_MAP,
+        FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT, FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL,
     };
     use crate::app_context::AppContextSnapshot;
     use crate::settings::get_default_settings;
@@ -3336,26 +3290,28 @@ mod tests {
 
         assert!(prompt.contains("current_gist"));
         assert!(prompt.contains("key_points"));
-        assert!(prompt.contains("action_items"));
-        assert!(prompt.contains("timeline"));
-        assert!(prompt.contains("Current gist, Key points, Action items, Timeline"));
+        assert!(prompt.contains("details"));
+        assert!(prompt.contains("Current gist, Key points"));
+        assert!(prompt.contains("Do not include action items"));
+        assert!(prompt.contains("more expanded than terse bullets"));
+        assert!(!prompt.contains("\"action_items\""));
+        assert!(!prompt.contains("\"timeline\""));
         assert!(!prompt.contains("Notable points"));
         assert!(!prompt.contains("Risks / blockers"));
         assert!(!prompt.contains("Open questions"));
     }
 
     #[test]
-    fn meeting_summary_json_renders_to_four_section_markdown() {
+    fn meeting_summary_json_renders_to_expanded_key_points() {
         let raw = r#"{
           "current_gist": "The team discussed launch timing.",
-          "key_points": [{ "text": "Launch timing depends on summary quality." }],
-          "action_items": [{
-            "task": "Review the summary panel",
-            "owner": "Unassigned",
-            "deadline": "No deadline",
-            "status": "Open"
-          }],
-          "timeline": [{ "time": "00:60", "event": "Moved to action items." }]
+          "key_points": [{
+            "text": "Launch timing depends on summary quality.",
+            "details": [
+              "The team wants the notes to stay readable in the desktop app.",
+              "Repeated points should be merged instead of duplicated."
+            ]
+          }]
         }"#;
 
         let state = parse_meeting_summary_state(raw).expect("valid summary json");
@@ -3363,9 +3319,10 @@ mod tests {
 
         assert!(rendered.contains("## Current gist"));
         assert!(rendered.contains("## Key points"));
-        assert!(rendered.contains("## Action items"));
-        assert!(rendered.contains("## Timeline"));
-        assert!(rendered.contains("- Task: Review the summary panel"));
+        assert!(rendered.contains("- Launch timing depends on summary quality."));
+        assert!(rendered.contains("  - The team wants the notes to stay readable"));
+        assert!(!rendered.contains("## Action items"));
+        assert!(!rendered.contains("## Timeline"));
         assert!(!rendered.contains("## Notable points"));
     }
 
@@ -3381,37 +3338,25 @@ mod tests {
     fn empty_structured_summary_is_rejected() {
         let raw = r#"{
           "current_gist": " ",
-          "key_points": [],
-          "action_items": [],
-          "timeline": []
+          "key_points": []
         }"#;
 
         assert!(parse_meeting_summary_state(raw).is_none());
     }
 
     #[test]
-    fn meeting_summary_renderer_fills_missing_action_metadata() {
+    fn meeting_summary_renderer_keeps_detail_only_points() {
         let rendered = render_meeting_summary_markdown(&MeetingSummaryState {
             current_gist: "Launch planning is underway.".to_string(),
             key_points: vec![SummaryPoint {
-                text: "The summary needs to be easy to scan.".to_string(),
-            }],
-            action_items: vec![SummaryActionItem {
-                task: "Check the UI".to_string(),
-                owner: "".to_string(),
-                deadline: "".to_string(),
-                status: "".to_string(),
-            }],
-            timeline: vec![SummaryTimelineEvent {
-                time: "".to_string(),
-                event: "Reviewed next steps.".to_string(),
+                text: "".to_string(),
+                details: vec!["The summary needs to be easy to scan.".to_string()],
             }],
         });
 
-        assert!(rendered.contains("Owner: Unassigned"));
-        assert!(rendered.contains("Deadline: No deadline"));
-        assert!(rendered.contains("Status: Open"));
-        assert!(rendered.contains("- Reviewed next steps."));
+        assert!(rendered.contains("  - The summary needs to be easy to scan."));
+        assert!(!rendered.contains("## Action items"));
+        assert!(!rendered.contains("## Timeline"));
     }
 
     #[test]

@@ -188,8 +188,8 @@
             "description": "선택 사항: AI 후처리를 켜거나 끄는 전용 단축키입니다."
           },
           "transcribe_full_system_audio": {
-            "name": "Full-System Recording Shortcut",
-            "description": "A dedicated toggle shortcut that starts and stops system audio plus microphone capture."
+            "name": "Meeting Recording Shortcut",
+            "description": "A dedicated shortcut that starts and stops meeting recording."
           }
         },
         "errors": {
@@ -238,14 +238,14 @@
         "description": "오디오 피드백 사운드의 볼륨 조절"
       },
       "fullSystemAudio": {
-        "title": "Record full system audio",
-        "description": "Capture system audio and microphone together for calls and meetings.",
-        "loading": "Checking support and Screen Recording readiness...",
-        "statusCheckFailed": "Uttr could not check full-system audio support right now.",
+        "title": "Enable Meetings",
+        "description": "Record meetings with system audio and microphone together.",
+        "loading": "Checking Meetings support and Screen Recording readiness...",
+        "statusCheckFailed": "Uttr could not check Meetings support right now.",
         "unsupportedDescription": "This feature is available only on macOS 13 or later.",
-        "permissionRequired": "Screen Recording access is required before this can be enabled. Microphone access alone is not enough.",
+        "permissionRequired": "Screen Recording access is required before Meetings can be enabled. Microphone access alone is not enough.",
         "pendingDescription": "{{reason}} Microphone access is handled separately. Uttr will retry automatically when this window regains focus.",
-        "shortcutLabel": "Shortcut"
+        "shortcutLabel": "Meeting Recording Shortcut"
       }
     },
     "models": {
@@ -452,10 +452,10 @@
       "eyebrow": "아카이브",
       "showingLatest": "최신 {{count}}개 항목을 표시합니다(이전 항목도 계속 저장됩니다).",
       "dictations": "Dictations",
-      "sessions": "Sessions",
-      "openSession": "Open session",
-      "emptySessions": "No full-system sessions yet.",
-      "emptyDictations": "No quick dictations yet."
+      "sessions": "Meetings",
+      "openSession": "Open meeting",
+      "emptySessions": "No meetings yet.",
+      "emptyDictations": "No transcriptions yet."
     },
     "debug": {
       "title": "디버그",
@@ -714,7 +714,7 @@
       "recording": "Recording",
       "summary": "Summary",
       "liveSummary": "Live summary",
-      "completeBody": "The session transcript is saved in History.",
+      "completeBody": "The meeting transcript is saved in Meetings.",
       "liveBody": "Uttr is recording system audio and microphone audio. The summary appears here as the session is processed.",
       "readyTitle": "Ready to start",
       "readyDescription": "Use Start for full-system audio recording and session summarization.",
