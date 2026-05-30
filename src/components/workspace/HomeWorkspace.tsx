@@ -271,7 +271,7 @@ export const HomeWorkspace: React.FC<HomeWorkspaceProps> = ({
 
     setIsStarting(false);
     setIsStopping(false);
-  }, [complete, processing, recording]);
+  }, [complete, processing, recording, sessionState]);
 
   const handleStartSession = useCallback(async () => {
     if (live || isStarting) {

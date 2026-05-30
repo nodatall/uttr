@@ -73,6 +73,16 @@ type FullSystemAudioTestState = {
     post_process_prompt: string | null;
     recording_source: string;
   }>;
+  startFullSystemAudioSessionEvent?: {
+    stage: string;
+    title: string;
+    subtitle: string;
+    progressLabel: string;
+    progressValue: number;
+    summaryText: string | null;
+    rawTranscriptText: string | null;
+    historyEntryId: number | null;
+  };
   sessionWindowState?: {
     stage: string;
     title: string;
@@ -207,7 +217,26 @@ async function installBrowserMocks(
 ) {
   await page.addInitScript((testState) => {
     const callbacks = new Map<number, (payload: unknown) => void>();
+    const eventListeners = new Map<
+      number,
+      { event: string; handler: number }
+    >();
     let nextCallbackId = 1;
+    let nextEventId = 1;
+
+    const dispatchTauriEvent = (event: string, payload: unknown) => {
+      eventListeners.forEach((listener, id) => {
+        if (listener.event !== event) {
+          return;
+        }
+
+        callbacks.get(listener.handler)?.({
+          event,
+          id,
+          payload,
+        });
+      });
+    };
 
     (
       window as unknown as { __UTTR_E2E__: FullSystemAudioTestState }
@@ -241,7 +270,9 @@ async function installBrowserMocks(
         };
       }
     ).__TAURI_EVENT_PLUGIN_INTERNALS__ = {
-      unregisterListener: () => {},
+      unregisterListener: (_event: string, eventId: number) => {
+        eventListeners.delete(eventId);
+      },
     };
     (
       window as unknown as {
@@ -279,9 +310,16 @@ async function installBrowserMocks(
           case "plugin:macos-permissions|request_accessibility_permission":
           case "plugin:macos-permissions|request_microphone_permission":
             return null;
-          case "plugin:event|listen":
-            return Math.floor(Math.random() * 10000) + 1;
+          case "plugin:event|listen": {
+            const eventId = nextEventId++;
+            eventListeners.set(eventId, {
+              event: String(args.event),
+              handler: Number(args.handler),
+            });
+            return eventId;
+          }
           case "plugin:event|unlisten":
+            eventListeners.delete(Number(args.eventId));
             return null;
           case "get_current_model":
             return "parakeet-tdt-0.6b-v3";
@@ -343,6 +381,14 @@ async function installBrowserMocks(
             };
           case "start_full_system_audio_session":
             e2eState.startedFullSystemAudioSessions += 1;
+            if (e2eState.startFullSystemAudioSessionEvent) {
+              e2eState.sessionWindowState =
+                e2eState.startFullSystemAudioSessionEvent;
+              dispatchTauriEvent(
+                "session-window-state",
+                e2eState.startFullSystemAudioSessionEvent,
+              );
+            }
             return null;
           case "stop_full_system_audio_session":
             e2eState.stoppedFullSystemAudioSessions += 1;
@@ -464,6 +510,47 @@ test.describe("full-system audio settings", () => {
         ),
       )
       .toBe(1);
+  });
+
+  test("returns from Starting when a session start falls back to idle", async ({
+    page,
+  }) => {
+    const state = createTestState(false, true);
+    state.startFullSystemAudioSessionEvent = {
+      stage: "idle",
+      title: "Open Uttr",
+      subtitle: "",
+      progressLabel: "",
+      progressValue: 0,
+      summaryText: null,
+      rawTranscriptText: null,
+      historyEntryId: null,
+    };
+    await installBrowserMocks(page, state);
+
+    await page.goto("/");
+
+    const workspace = page.getByTestId("home-workspace");
+    await workspace.getByRole("button", { name: /^Start$/i }).click();
+
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __UTTR_E2E__: FullSystemAudioTestState;
+              }
+            ).__UTTR_E2E__.startedFullSystemAudioSessions,
+        ),
+      )
+      .toBe(1);
+    await expect(
+      workspace.getByRole("button", { name: /^Start$/i }),
+    ).toBeVisible();
+    await expect(
+      workspace.getByRole("button", { name: /^Starting$/i }),
+    ).toHaveCount(0);
   });
 
   test("stops a live full-system session from Home", async ({ page }) => {
@@ -710,6 +797,40 @@ test.describe("full-system audio settings", () => {
     ).toBeVisible();
     await expect(page.getByText("normal dictation transcript")).toBeVisible();
     await expect(page.getByText(/Meeting summary/)).toHaveCount(0);
+  });
+
+  test("does not cap Meetings history at the transcription preview limit", async ({
+    page,
+  }) => {
+    const state = createTestState(false, true);
+    state.historyEntries = Array.from({ length: 21 }, (_, index) => {
+      const id = index + 1;
+      return {
+        id,
+        file_name: `session-${id}.wav`,
+        timestamp: 1_717_200_000 + id,
+        saved: false,
+        title: `Session ${id}`,
+        transcription_text: `raw meeting transcript ${id}`,
+        post_processed_text: `Meeting summary ${id}`,
+        post_process_prompt: "Live session summary via OpenAI after 1 chunk(s)",
+        recording_source: "full_system_audio",
+      };
+    });
+    await installBrowserMocks(page, state);
+
+    await page.goto("/");
+
+    const workspace = page.getByTestId("home-workspace");
+    await workspace.getByRole("button", { name: /^History$/i }).click();
+
+    await expect(
+      workspace.getByRole("button", { name: "Meeting summary 21" }),
+    ).toBeVisible();
+    await expect(
+      workspace.getByRole("button", { name: "Meeting summary 1", exact: true }),
+    ).toBeVisible();
+    await expect(workspace.getByText(/Showing latest/)).toHaveCount(0);
   });
 
   test("shows the supported toggle and reveals the dedicated shortcut without changing transcribe", async ({
