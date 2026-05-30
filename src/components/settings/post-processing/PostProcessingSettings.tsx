@@ -198,7 +198,11 @@ const PostProcessingSettingsAdvancedComponent: React.FC = () => {
           />
           <div className="flex items-center justify-between gap-3">
             <p className="text-xs text-mid-gray/70">
-              {customVocabularyTerms.length}/{MAX_CUSTOM_VOCABULARY_TERMS} terms
+              {t("settings.postProcessing.customVocabulary.count", {
+                defaultValue: "{{count}}/{{max}} terms",
+                count: customVocabularyTerms.length,
+                max: MAX_CUSTOM_VOCABULARY_TERMS,
+              })}
             </p>
             {isVocabularyDirty && (
               <div className="flex gap-2">
@@ -215,14 +219,18 @@ const PostProcessingSettingsAdvancedComponent: React.FC = () => {
                   size="md"
                   disabled={isUpdating("custom_vocabulary_terms")}
                 >
-                  Save
+                  {t("settings.postProcessing.customVocabulary.save", {
+                    defaultValue: "Save",
+                  })}
                 </Button>
                 <Button
                   onClick={() => setDraftVocabulary(savedVocabulary)}
                   variant="secondary"
                   size="md"
                 >
-                  Cancel
+                  {t("settings.postProcessing.customVocabulary.cancel", {
+                    defaultValue: "Cancel",
+                  })}
                 </Button>
               </div>
             )}
