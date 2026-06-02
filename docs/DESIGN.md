@@ -159,6 +159,10 @@ Pills are for status, selected model/provider state, and compact metadata. Avoid
 
 The recording overlay should feel immediate and lightweight. It may use the app font and accent colors, but it must not look like a settings card. Warm, recording, transcribing, and processing states should be visually distinct without adding heavy borders.
 
+## Ask Selection Panel
+
+Ask Selection is an interactive floating panel, not a recording overlay state. It should use the settings-style dark translucent surface, subtle border, compact top-right close button, and the shared rose loader for thinking/loading. Do not show a title in the panel. The result text is the primary surface; clicking it copies the answer while keeping the answer visible and showing only a small `Copied` status in the header.
+
 ## Session Workspace
 
 A full-system session window should prioritize the live summary and meeting/session output. Raw transcript is available on request, not the default focus. Use a full-window working layout, not a boxed mockup inside another box.

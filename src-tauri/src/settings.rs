@@ -1040,9 +1040,9 @@ pub fn get_default_settings() -> AppSettings {
         "edit_mode".to_string(),
         ShortcutBinding {
             id: "edit_mode".to_string(),
-            name: "Edit Mode".to_string(),
+            name: "Ask Selection".to_string(),
             description:
-                "Transforms selected text using a spoken instruction, then replaces the selection."
+                "Ask a spoken question about selected text and show the answer in a panel."
                     .to_string(),
             default_binding: default_edit_mode_shortcut.to_string(),
             current_binding: default_edit_mode_shortcut.to_string(),
@@ -1521,14 +1521,15 @@ mod tests {
     }
 
     #[test]
-    fn default_edit_mode_binding_is_registered() {
+    fn default_ask_selection_binding_is_registered() {
         let settings = get_default_settings();
         let binding = settings
             .bindings
             .get("edit_mode")
-            .expect("missing edit-mode binding");
+            .expect("missing ask-selection binding");
 
         assert_eq!(binding.id, "edit_mode");
+        assert_eq!(binding.name, "Ask Selection");
         assert_eq!(binding.current_binding, binding.default_binding);
     }
 

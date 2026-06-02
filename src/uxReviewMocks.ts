@@ -40,8 +40,8 @@ const bindings = {
     current_binding: "ctrl+shift+space",
   },
   edit_mode: {
-    name: "Edit Mode Shortcut",
-    description: "Transforms selected text using a spoken instruction.",
+    name: "Ask Selection Shortcut",
+    description: "Ask a spoken question about selected text.",
     default_binding: "ctrl+shift+e",
     current_binding: "ctrl+shift+e",
   },

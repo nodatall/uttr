@@ -176,8 +176,8 @@
             "description": "Комбінація клавіш для запису та транскрибування вашого голосу."
           },
           "edit_mode": {
-            "name": "Edit Mode Shortcut",
-            "description": "Transforms selected text using a spoken instruction."
+            "name": "Ask Selection Shortcut",
+            "description": "Ask a spoken question about selected text."
           },
           "cancel": {
             "name": "Гаряча клавіша скасування",

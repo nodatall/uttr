@@ -1462,16 +1462,16 @@ async fn summarize_live_session(
     })
 }
 
-const EDIT_MODE_SYSTEM_PROMPT: &str = "You transform selected text using a spoken instruction. Return only the replacement text. Preserve the user's meaning unless the instruction explicitly asks for a change. Do not explain, quote, wrap in markdown, or include labels.";
+const ASK_SELECTION_SYSTEM_PROMPT: &str = "You answer a spoken request using the user's selected text as context. Return only the answer. Do not replace, rewrite, or quote the selection unless the request asks for that. Do not explain your process, wrap in markdown fences, or include labels.";
 
-fn build_edit_mode_prompt(
+fn build_ask_selection_prompt(
     selected_text: &str,
     spoken_instruction: &str,
     context: &AppContextSnapshot,
     custom_vocabulary_terms: &[String],
 ) -> String {
     let mut prompt = format!(
-        "# Task\nTransform the selected text according to the spoken instruction. Return only the replacement text inside <uttr_edit_output>...</uttr_edit_output>.\n\n# Spoken instruction\n{}\n\n# Selected text\n{}",
+        "# Task\nAnswer the spoken request using the selected text as context. Return only the answer inside <uttr_ask_output>...</uttr_ask_output>. Do not modify the user's selected text or produce replacement text unless the spoken request explicitly asks for a rewrite.\n\n# Spoken request\n{}\n\n# Selected text\n{}",
         spoken_instruction.trim(),
         selected_text
     );
@@ -1485,26 +1485,26 @@ fn build_edit_mode_prompt(
         prompt.push_str(&block);
     }
 
-    prompt.push_str("\n\n# Output format\n<uttr_edit_output>\n...\n</uttr_edit_output>");
+    prompt.push_str("\n\n# Output format\n<uttr_ask_output>\n...\n</uttr_ask_output>");
     prompt
 }
 
-fn clean_edit_mode_response(content: &str) -> String {
-    if let Some(output) = extract_tagged_output(content, "uttr_edit_output") {
+fn clean_ask_selection_response(content: &str) -> String {
+    if let Some(output) = extract_tagged_output(content, "uttr_ask_output") {
         return strip_wrapping_code_fence(&trim_chat_stop_tokens(&output));
     }
 
     clean_post_process_response(content)
 }
 
-async fn transform_edit_mode_text(
+async fn answer_ask_selection(
     app_handle: &AppHandle,
     settings: &AppSettings,
     selected_text: &str,
     spoken_instruction: &str,
     context: &AppContextSnapshot,
 ) -> Result<(String, String), String> {
-    let prompt = build_edit_mode_prompt(
+    let prompt = build_ask_selection_prompt(
         selected_text,
         spoken_instruction,
         context,
@@ -1513,16 +1513,16 @@ async fn transform_edit_mode_text(
 
     match summary_client::transform_with_codex_app(
         prompt.clone(),
-        EDIT_MODE_SYSTEM_PROMPT.to_string(),
+        ASK_SELECTION_SYSTEM_PROMPT.to_string(),
     )
     .await
     {
         Ok(output) => {
-            let output = clean_edit_mode_response(&output);
+            let output = clean_ask_selection_response(&output);
             if output.trim().is_empty() {
-                return Err("Codex returned an empty edit.".to_string());
+                return Err("Codex returned an empty Ask Selection answer.".to_string());
             }
-            return Ok((output, "Edit Mode via Codex app-server".to_string()));
+            return Ok((output, "Ask Selection via Codex app-server".to_string()));
         }
         Err(error) => summary_client::summarize_codex_unavailable(&error),
     }
@@ -1530,7 +1530,7 @@ async fn transform_edit_mode_text(
     let provider = settings
         .active_post_process_provider()
         .cloned()
-        .ok_or_else(|| "Edit Mode fallback needs a post-processing provider.".to_string())?;
+        .ok_or_else(|| "Ask Selection fallback needs a post-processing provider.".to_string())?;
 
     let api_key =
         match crate::byok_secrets::load_provider_api_key(app_handle, settings, &provider.id) {
@@ -1548,7 +1548,7 @@ async fn transform_edit_mode_text(
     let model = resolve_post_process_model(&provider, settings, &api_key)
         .await
         .ok_or_else(|| {
-            "Edit Mode fallback could not resolve a post-processing model.".to_string()
+            "Ask Selection fallback could not resolve a post-processing model.".to_string()
         })?;
 
     crate::llm_client::send_chat_completion(
@@ -1556,17 +1556,17 @@ async fn transform_edit_mode_text(
         api_key,
         &model,
         prompt,
-        Some(EDIT_MODE_SYSTEM_PROMPT),
+        Some(ASK_SELECTION_SYSTEM_PROMPT),
     )
     .await?
     .map(|content| {
         (
-            clean_edit_mode_response(&content),
-            format!("Edit Mode via {}", provider.label),
+            clean_ask_selection_response(&content),
+            format!("Ask Selection via {}", provider.label),
         )
     })
     .filter(|(output, _)| !output.trim().is_empty())
-    .ok_or_else(|| "Edit Mode fallback returned an empty edit.".to_string())
+    .ok_or_else(|| "Ask Selection fallback returned an empty answer.".to_string())
 }
 
 fn friendly_live_summary_error(error: &str) -> String {
@@ -2203,7 +2203,7 @@ fn handle_transcription_stop(
                             .filter(|text| !text.is_empty())
                         else {
                             let message =
-                                "Edit Mode needs selected text before you start recording.";
+                                "Ask Selection needs selected text before you start recording.";
                             warn!("{}", message);
                             let _ = ah.emit("transcription-error", message.to_string());
                             utils::hide_recording_overlay(&ah);
@@ -2212,7 +2212,15 @@ fn handle_transcription_stop(
                         };
 
                         spawn_deferred_overlay_state(&ah, DeferredOverlayState::Processing);
-                        match transform_edit_mode_text(
+                        utils::show_ask_selection_panel(
+                            &ah,
+                            utils::AskSelectionPayload {
+                                state: "loading".to_string(),
+                                text: None,
+                                error: None,
+                            },
+                        );
+                        match answer_ask_selection(
                             &ah,
                             &settings,
                             selected_text,
@@ -2221,72 +2229,54 @@ fn handle_transcription_stop(
                         )
                         .await
                         {
-                            Ok((replacement_text, prompt_label)) => {
+                            Ok((answer_text, prompt_label)) => {
                                 let hm_clone = Arc::clone(&hm);
                                 let ah_for_history = ah.clone();
                                 let transcription_for_history = transcription.clone();
-                                let replacement_for_history = replacement_text.clone();
+                                let answer_for_history = answer_text.clone();
                                 tauri::async_runtime::spawn(async move {
                                     if let Err(e) = hm_clone
                                         .save_transcription(
                                             samples_clone,
                                             transcription_for_history,
-                                            Some(replacement_for_history),
+                                            Some(answer_for_history),
                                             Some(prompt_label),
                                             "dictation",
                                         )
                                         .await
                                     {
-                                        error!("Failed to save edit-mode transcription: {}", e);
+                                        error!("Failed to save Ask Selection transcription: {}", e);
                                         let _ = ah_for_history.emit(
                                             "transcription-error",
                                             format!(
-                                                "Edit Mode succeeded, but saving history failed: {}",
+                                                "Ask Selection succeeded, but saving history failed: {}",
                                                 e
                                             ),
                                         );
                                     }
                                 });
 
-                                let ah_clone = ah.clone();
-                                let paste_time = Instant::now();
-                                ah.run_on_main_thread(move || {
-                                    let text_for_paste = replacement_text.clone();
-                                    match utils::paste(text_for_paste.clone(), ah_clone.clone()) {
-                                        Ok(()) => debug!(
-                                            "Edit Mode replacement pasted successfully in {:?}",
-                                            paste_time.elapsed()
-                                        ),
-                                        Err(e) => {
-                                            error!("Failed to paste Edit Mode replacement: {}", e);
-                                            let _ = ah_clone.emit(
-                                                "transcription-error",
-                                                format!(
-                                                    "Edit Mode succeeded, but paste failed: {}",
-                                                    e
-                                                ),
-                                            );
-                                            if let Err(copy_err) =
-                                                ah_clone.clipboard().write_text(&text_for_paste)
-                                            {
-                                                error!(
-                                                    "Failed to copy Edit Mode replacement after paste error: {}",
-                                                    copy_err
-                                                );
-                                            }
-                                        }
-                                    }
-                                    utils::hide_recording_overlay(&ah_clone);
-                                    change_tray_icon(&ah_clone, TrayIconState::Idle);
-                                })
-                                .unwrap_or_else(|e| {
-                                    error!("Failed to run Edit Mode paste on main thread: {:?}", e);
-                                    utils::hide_recording_overlay(&ah);
-                                    change_tray_icon(&ah, TrayIconState::Idle);
-                                });
+                                utils::update_ask_selection_panel(
+                                    &ah,
+                                    utils::AskSelectionPayload {
+                                        state: "result".to_string(),
+                                        text: Some(answer_text),
+                                        error: None,
+                                    },
+                                );
+                                utils::hide_recording_overlay(&ah);
+                                change_tray_icon(&ah, TrayIconState::Idle);
                             }
                             Err(error) => {
-                                error!("Edit Mode transform failed: {}", error);
+                                error!("Ask Selection failed: {}", error);
+                                utils::update_ask_selection_panel(
+                                    &ah,
+                                    utils::AskSelectionPayload {
+                                        state: "error".to_string(),
+                                        text: None,
+                                        error: Some(error.clone()),
+                                    },
+                                );
                                 let _ = ah.emit("transcription-error", error);
                                 utils::hide_recording_overlay(&ah);
                                 change_tray_icon(&ah, TrayIconState::Idle);
@@ -2521,7 +2511,7 @@ impl ShortcutAction for TranscribeAction {
         if self.completion_mode == TranscriptionCompletionMode::EditMode
             && !settings.edit_mode_enabled
         {
-            let message = "Edit Mode is disabled in settings.";
+            let message = "Ask Selection is disabled in settings.";
             warn!("{}", message);
             let _ = app.emit("transcription-error", message.to_string());
             change_tray_icon(app, TrayIconState::Idle);
@@ -3113,7 +3103,7 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
-        build_edit_mode_prompt, build_live_summary_prompt, clean_edit_mode_response,
+        build_ask_selection_prompt, build_live_summary_prompt, clean_ask_selection_response,
         clean_post_process_response, custom_vocabulary_prompt_block, friendly_live_summary_error,
         is_effectively_silent_audio, is_supported_post_process_model,
         normalize_live_summary_output, parse_meeting_summary_state,
@@ -3182,29 +3172,30 @@ mod tests {
     }
 
     #[test]
-    fn edit_mode_prompt_keeps_selection_and_instruction_separate() {
+    fn ask_selection_prompt_uses_selection_as_context() {
         let context = AppContextSnapshot {
             app_name: Some("Notes".to_string()),
             selected_text: Some("selected text".to_string()),
             ..Default::default()
         };
-        let prompt = build_edit_mode_prompt(
+        let prompt = build_ask_selection_prompt(
             "This is too long.",
             "make this shorter",
             &context,
             &["Prime Directive".to_string()],
         );
 
-        assert!(prompt.contains("# Spoken instruction\nmake this shorter"));
+        assert!(prompt.contains("# Spoken request\nmake this shorter"));
         assert!(prompt.contains("# Selected text\nThis is too long."));
+        assert!(prompt.contains("using the selected text as context"));
         assert!(prompt.contains("Prime Directive"));
-        assert!(prompt.contains("<uttr_edit_output>"));
+        assert!(prompt.contains("<uttr_ask_output>"));
     }
 
     #[test]
-    fn clean_edit_mode_response_prefers_edit_tag() {
-        let cleaned = clean_edit_mode_response(
-            "notes <uttr_edit_output>\nShorter text.\n</uttr_edit_output>",
+    fn clean_ask_selection_response_prefers_ask_tag() {
+        let cleaned = clean_ask_selection_response(
+            "notes <uttr_ask_output>\nShorter text.\n</uttr_ask_output>",
         );
 
         assert_eq!(cleaned, "Shorter text.");

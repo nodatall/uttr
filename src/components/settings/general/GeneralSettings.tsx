@@ -59,8 +59,8 @@ export const GeneralSettings: React.FC = () => {
           checked={editModeEnabled}
           onChange={(checked) => updateSetting("edit_mode_enabled", checked)}
           isUpdating={isUpdating("edit_mode_enabled")}
-          label="Edit Mode"
-          description="Use the Edit Mode shortcut on selected text, then speak a transform instruction."
+          label="Ask Selection"
+          description="Use the Ask Selection shortcut on selected text, then speak a request."
           descriptionMode="tooltip"
           grouped={true}
         />

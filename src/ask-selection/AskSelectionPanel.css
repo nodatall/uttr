@@ -1,0 +1,120 @@
+@import url("https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&display=swap");
+
+.ask-selection-shell {
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  box-sizing: border-box;
+  background: transparent;
+  font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  color: #e6edf3;
+}
+
+.ask-selection-panel {
+  width: 100%;
+  height: 100%;
+  border: 1px solid rgb(255 255 255 / 14%);
+  border-radius: 18px;
+  background: rgb(5 10 18 / 94%);
+  box-shadow:
+    0 22px 60px rgb(0 0 0 / 46%),
+    inset 0 1px 0 rgb(255 255 255 / 6%);
+  backdrop-filter: blur(18px) saturate(130%);
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+.ask-selection-header {
+  height: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px;
+  border-bottom: 1px solid rgb(255 255 255 / 7%);
+  box-sizing: border-box;
+}
+
+.ask-selection-status {
+  min-width: 0;
+  padding-left: 8px;
+  color: #67d7a3;
+  font-size: 12px;
+  font-weight: 650;
+  opacity: 0;
+}
+
+.ask-selection-status-visible {
+  opacity: 1;
+}
+
+.ask-selection-close {
+  width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: rgb(230 237 243 / 62%);
+  cursor: pointer;
+}
+
+.ask-selection-close:hover {
+  background: rgb(255 255 255 / 4%);
+  color: #e6edf3;
+}
+
+.ask-selection-body {
+  max-height: calc(100% - 34px);
+  padding: 15px 16px 16px;
+  box-sizing: border-box;
+  overflow: auto;
+  color: #e6edf3;
+  font-size: 15px;
+  line-height: 1.52;
+}
+
+.ask-selection-loading {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-height: 70px;
+  color: rgb(230 237 243 / 74%);
+}
+
+.ask-selection-loader {
+  width: 42px;
+  height: 42px;
+  flex: 0 0 auto;
+  color: #67d7a3;
+  filter: drop-shadow(0 0 18px rgb(103 215 163 / 24%));
+}
+
+.ask-selection-result {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-align: left;
+  white-space: pre-wrap;
+  cursor: pointer;
+}
+
+.ask-selection-result:focus-visible {
+  outline: 2px solid rgb(103 215 163 / 58%);
+  outline-offset: 4px;
+  border-radius: 6px;
+}
+
+.ask-selection-error {
+  margin: 0;
+  color: #faa2ca;
+  white-space: pre-wrap;
+}

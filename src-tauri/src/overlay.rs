@@ -1,6 +1,7 @@
 use crate::settings;
 use crate::settings::OverlayPosition;
 use log::debug;
+use serde::Serialize;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -28,6 +29,13 @@ tauri_panel! {
             is_floating_panel: true
         }
     })
+
+    panel!(AskSelectionPanel {
+        config: {
+            can_become_key_window: true,
+            is_floating_panel: true
+        }
+    })
 }
 
 const OVERLAY_WIDTH: f64 = 172.0;
@@ -35,7 +43,21 @@ const OVERLAY_HEIGHT: f64 = 42.0;
 const OVERLAY_ALERT_WIDTH: f64 = 260.0;
 const OVERLAY_ALERT_HEIGHT: f64 = 72.0;
 const OVERLAY_LABEL_BASE: &str = "recording_overlay";
+const ASK_SELECTION_LABEL: &str = "ask_selection_panel";
+const ASK_SELECTION_WIDTH: f64 = 420.0;
+const ASK_SELECTION_HEIGHT: f64 = 260.0;
+const ASK_SELECTION_CURSOR_OFFSET: f64 = 18.0;
+const ASK_SELECTION_SCREEN_MARGIN: f64 = 14.0;
 static OVERLAY_SESSION_EPOCH: AtomicU64 = AtomicU64::new(1);
+static ASK_SELECTION_SESSION_EPOCH: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AskSelectionPayload {
+    pub state: String,
+    pub text: Option<String>,
+    pub error: Option<String>,
+}
 
 #[cfg(target_os = "macos")]
 const OVERLAY_TOP_OFFSET: f64 = 46.0;
@@ -97,6 +119,69 @@ fn clamp_bounds_to_monitor(bounds: OverlayBounds, monitor_bounds: OverlayBounds)
         width: x2 - x1,
         height: y2 - y1,
     }
+}
+
+fn calculate_cursor_relative_panel_position_in_bounds(
+    cursor_x: f64,
+    cursor_y: f64,
+    work_area_bounds: OverlayBounds,
+    panel_width: f64,
+    panel_height: f64,
+    offset: f64,
+    margin: f64,
+) -> (f64, f64) {
+    let min_x = work_area_bounds.x + margin;
+    let min_y = work_area_bounds.y + margin;
+    let max_x = (work_area_bounds.x + work_area_bounds.width - panel_width - margin).max(min_x);
+    let max_y = (work_area_bounds.y + work_area_bounds.height - panel_height - margin).max(min_y);
+
+    let preferred_x = cursor_x + offset;
+    let preferred_y = cursor_y + offset;
+    let fallback_x = cursor_x - panel_width - offset;
+    let fallback_y = cursor_y - panel_height - offset;
+
+    let x = if preferred_x <= max_x {
+        preferred_x
+    } else {
+        fallback_x
+    };
+    let y = if preferred_y <= max_y {
+        preferred_y
+    } else {
+        fallback_y
+    };
+
+    (x.clamp(min_x, max_x), y.clamp(min_y, max_y))
+}
+
+fn calculate_ask_selection_position(app_handle: &AppHandle) -> Option<(f64, f64)> {
+    let monitor = get_monitor_with_cursor(app_handle)
+        .or_else(|| app_handle.primary_monitor().ok().flatten())?;
+    let work_area = monitor.work_area();
+    let scale = monitor.scale_factor();
+    let cursor = app_handle.cursor_position().ok();
+    let cursor_x = cursor
+        .map(|position| position.x)
+        .unwrap_or_else(|| (work_area.position.x as f64 / scale) + 64.0);
+    let cursor_y = cursor
+        .map(|position| position.y)
+        .unwrap_or_else(|| (work_area.position.y as f64 / scale) + 64.0);
+    let work_area_bounds = OverlayBounds {
+        x: work_area.position.x as f64 / scale,
+        y: work_area.position.y as f64 / scale,
+        width: work_area.size.width as f64 / scale,
+        height: work_area.size.height as f64 / scale,
+    };
+
+    Some(calculate_cursor_relative_panel_position_in_bounds(
+        cursor_x,
+        cursor_y,
+        work_area_bounds,
+        ASK_SELECTION_WIDTH,
+        ASK_SELECTION_HEIGHT,
+        ASK_SELECTION_CURSOR_OFFSET,
+        ASK_SELECTION_SCREEN_MARGIN,
+    ))
 }
 
 #[cfg(target_os = "linux")]
@@ -726,6 +811,152 @@ pub fn hide_recording_overlay(app_handle: &AppHandle) {
     }
 }
 
+#[cfg(target_os = "macos")]
+fn create_ask_selection_panel(app_handle: &AppHandle) {
+    if app_handle.get_webview_window(ASK_SELECTION_LABEL).is_some() {
+        return;
+    }
+
+    let (x, y) = calculate_ask_selection_position(app_handle).unwrap_or((64.0, 64.0));
+    match PanelBuilder::<_, AskSelectionPanel>::new(app_handle, ASK_SELECTION_LABEL)
+        .url(WebviewUrl::App("src/ask-selection/index.html".into()))
+        .title("Ask Selection")
+        .position(tauri::Position::Logical(tauri::LogicalPosition { x, y }))
+        .level(PanelLevel::Status)
+        .size(tauri::Size::Logical(tauri::LogicalSize {
+            width: ASK_SELECTION_WIDTH,
+            height: ASK_SELECTION_HEIGHT,
+        }))
+        .has_shadow(true)
+        .transparent(true)
+        .hides_on_deactivate(true)
+        .no_activate(false)
+        .corner_radius(0.0)
+        .with_window(|w| {
+            w.decorations(false)
+                .transparent(true)
+                .always_on_top(true)
+                .visible_on_all_workspaces(true)
+                .skip_taskbar(true)
+                .accept_first_mouse(true)
+        })
+        .collection_behavior(
+            CollectionBehavior::new()
+                .can_join_all_spaces()
+                .full_screen_auxiliary(),
+        )
+        .build()
+    {
+        Ok(panel) => {
+            let _ = panel.hide();
+            debug!(
+                "[overlay] macos created label={} (hidden)",
+                ASK_SELECTION_LABEL
+            );
+        }
+        Err(error) => {
+            debug!(
+                "Failed to create macOS ask-selection panel {}: {}",
+                ASK_SELECTION_LABEL, error
+            );
+        }
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn create_ask_selection_panel(app_handle: &AppHandle) {
+    if app_handle.get_webview_window(ASK_SELECTION_LABEL).is_some() {
+        return;
+    }
+
+    let (x, y) = calculate_ask_selection_position(app_handle).unwrap_or((64.0, 64.0));
+    match WebviewWindowBuilder::new(
+        app_handle,
+        ASK_SELECTION_LABEL,
+        tauri::WebviewUrl::App("src/ask-selection/index.html".into()),
+    )
+    .title("Ask Selection")
+    .resizable(false)
+    .inner_size(ASK_SELECTION_WIDTH, ASK_SELECTION_HEIGHT)
+    .shadow(true)
+    .maximizable(false)
+    .minimizable(false)
+    .closable(false)
+    .accept_first_mouse(true)
+    .decorations(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .transparent(true)
+    .focused(true)
+    .visible(false)
+    .position(x, y)
+    .build()
+    {
+        Ok(_) => debug!("Ask Selection panel created successfully (hidden)"),
+        Err(error) => debug!("Failed to create Ask Selection panel: {}", error),
+    }
+}
+
+pub fn show_ask_selection_panel(app_handle: &AppHandle, payload: AskSelectionPayload) {
+    let show_epoch = ASK_SELECTION_SESSION_EPOCH.fetch_add(1, Ordering::Relaxed) + 1;
+    let position = calculate_ask_selection_position(app_handle);
+    create_ask_selection_panel(app_handle);
+
+    if let Some(panel_window) = app_handle.get_webview_window(ASK_SELECTION_LABEL) {
+        if let Some((x, y)) = position {
+            let _ = panel_window
+                .set_position(tauri::Position::Logical(tauri::LogicalPosition { x, y }));
+        }
+        let _ = panel_window.set_size(tauri::Size::Logical(tauri::LogicalSize {
+            width: ASK_SELECTION_WIDTH,
+            height: ASK_SELECTION_HEIGHT,
+        }));
+        let _ = panel_window.emit("ask-selection-state", payload.clone());
+        let _ = panel_window.show();
+        let _ = panel_window.set_focus();
+
+        #[cfg(target_os = "macos")]
+        if let Ok(panel) = app_handle.get_webview_panel(ASK_SELECTION_LABEL) {
+            panel.set_level(PanelLevel::Status.value());
+            panel.order_front_regardless();
+        }
+
+        let retry_window = panel_window.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(80));
+            if ASK_SELECTION_SESSION_EPOCH.load(Ordering::Relaxed) != show_epoch {
+                return;
+            }
+            let _ = retry_window.emit("ask-selection-state", payload.clone());
+            std::thread::sleep(std::time::Duration::from_millis(180));
+            if ASK_SELECTION_SESSION_EPOCH.load(Ordering::Relaxed) != show_epoch {
+                return;
+            }
+            let _ = retry_window.emit("ask-selection-state", payload);
+        });
+    }
+}
+
+pub fn update_ask_selection_panel(app_handle: &AppHandle, payload: AskSelectionPayload) {
+    let show_epoch = ASK_SELECTION_SESSION_EPOCH.fetch_add(1, Ordering::Relaxed) + 1;
+    if let Some(panel_window) = app_handle.get_webview_window(ASK_SELECTION_LABEL) {
+        let _ = panel_window.emit("ask-selection-state", payload.clone());
+        let retry_window = panel_window.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(80));
+            if ASK_SELECTION_SESSION_EPOCH.load(Ordering::Relaxed) != show_epoch {
+                return;
+            }
+            let _ = retry_window.emit("ask-selection-state", payload.clone());
+            std::thread::sleep(std::time::Duration::from_millis(180));
+            if ASK_SELECTION_SESSION_EPOCH.load(Ordering::Relaxed) != show_epoch {
+                return;
+            }
+            let _ = retry_window.emit("ask-selection-state", payload);
+        });
+    }
+}
+
 pub fn current_overlay_session_epoch() -> u64 {
     OVERLAY_SESSION_EPOCH.load(Ordering::Relaxed)
 }
@@ -737,9 +968,9 @@ pub fn cancel_pending_overlay_transitions() {
 #[cfg(test)]
 mod tests {
     use super::{
-        calculate_overlay_position_in_bounds, cancel_pending_overlay_transitions,
-        current_overlay_session_epoch, is_mouse_within_monitor, overlay_session_epoch_is_current,
-        OverlayBounds, OVERLAY_BOTTOM_OFFSET, OVERLAY_TOP_OFFSET,
+        calculate_cursor_relative_panel_position_in_bounds, calculate_overlay_position_in_bounds,
+        cancel_pending_overlay_transitions, current_overlay_session_epoch, is_mouse_within_monitor,
+        overlay_session_epoch_is_current, OverlayBounds, OVERLAY_BOTTOM_OFFSET, OVERLAY_TOP_OFFSET,
     };
     use crate::settings::OverlayPosition;
     use tauri::{PhysicalPosition, PhysicalSize};
@@ -919,6 +1150,40 @@ mod tests {
 
         assert_f64_eq(x, 740.0);
         assert_f64_eq(y, 24.0 + (OVERLAY_TOP_OFFSET * 2.0));
+    }
+
+    #[test]
+    fn ask_selection_panel_prefers_below_right_of_cursor() {
+        let work_area = OverlayBounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1440.0,
+            height: 900.0,
+        };
+
+        let (x, y) = calculate_cursor_relative_panel_position_in_bounds(
+            200.0, 120.0, work_area, 420.0, 260.0, 18.0, 14.0,
+        );
+
+        assert_f64_eq(x, 218.0);
+        assert_f64_eq(y, 138.0);
+    }
+
+    #[test]
+    fn ask_selection_panel_flips_and_clamps_near_screen_edge() {
+        let work_area = OverlayBounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1440.0,
+            height: 900.0,
+        };
+
+        let (x, y) = calculate_cursor_relative_panel_position_in_bounds(
+            1380.0, 850.0, work_area, 420.0, 260.0, 18.0, 14.0,
+        );
+
+        assert_f64_eq(x, 942.0);
+        assert_f64_eq(y, 572.0);
     }
 }
 

@@ -180,8 +180,8 @@
             "description": "A dedicated shortcut that starts and stops meeting recording."
           },
           "edit_mode": {
-            "name": "Edit Mode Shortcut",
-            "description": "Transforms selected text using a spoken instruction."
+            "name": "Ask Selection Shortcut",
+            "description": "Ask a spoken question about selected text."
           },
           "cancel": {
             "name": "Cancel Shortcut",

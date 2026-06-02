@@ -176,8 +176,8 @@
             "description": "O atalho de teclado para gravar e transcrever sua voz."
           },
           "edit_mode": {
-            "name": "Edit Mode Shortcut",
-            "description": "Transforms selected text using a spoken instruction."
+            "name": "Ask Selection Shortcut",
+            "description": "Ask a spoken question about selected text."
           },
           "cancel": {
             "name": "Atalho de Cancelar",
