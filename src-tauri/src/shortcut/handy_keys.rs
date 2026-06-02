@@ -44,7 +44,6 @@ use crate::transcription_coordinator::{is_transcribe_binding, transcribe_binding
 
 use super::handler::handle_shortcut_event;
 
-const MODIFIER_ONLY_STALE_TIMEOUT: Duration = Duration::from_millis(750);
 const MODIFIER_ONLY_CHORD_WINDOW: Duration = Duration::from_millis(500);
 const MODIFIER_ONLY_RELEASE_DEBOUNCE: Duration = Duration::from_millis(100);
 
@@ -130,7 +129,7 @@ impl ModifierOnlyTracker {
             }
 
             let is_stale = self.last_pressed_at[family].is_some_and(|pressed_at| {
-                now.duration_since(pressed_at) > MODIFIER_ONLY_STALE_TIMEOUT
+                now.duration_since(pressed_at) > MODIFIER_ONLY_CHORD_WINDOW
             });
             if is_stale {
                 self.active[family] = false;
@@ -1110,7 +1109,28 @@ mod tests {
         let now = Instant::now();
         tracker.active[3] = true;
         tracker.last_pressed_at[3] =
-            Some(now - MODIFIER_ONLY_STALE_TIMEOUT - Duration::from_millis(1));
+            Some(now - MODIFIER_ONLY_CHORD_WINDOW - Duration::from_secs(1));
+
+        let event = KeyEvent {
+            modifiers: handy_keys::Modifiers::CMD_LEFT | handy_keys::Modifiers::FN,
+            key: None,
+            is_key_down: true,
+            changed_modifier: Some(handy_keys::Modifiers::FN),
+        };
+
+        tracker.clear_stale_before_modifier_press(&event, now, true);
+        tracker.apply(&event, now);
+
+        assert_eq!(tracker.modifiers(), handy_keys::Modifiers::FN);
+    }
+
+    #[test]
+    fn modifier_only_tracker_recovers_unfresh_command_before_fn_press() {
+        let mut tracker = ModifierOnlyTracker::default();
+        let now = Instant::now();
+        tracker.active[3] = true;
+        tracker.last_pressed_at[3] =
+            Some(now - MODIFIER_ONLY_CHORD_WINDOW - Duration::from_millis(1));
 
         let event = KeyEvent {
             modifiers: handy_keys::Modifiers::CMD_LEFT | handy_keys::Modifiers::FN,
