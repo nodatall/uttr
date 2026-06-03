@@ -899,9 +899,32 @@ fn create_ask_selection_panel(app_handle: &AppHandle) {
 
 pub fn show_ask_selection_panel(app_handle: &AppHandle, payload: AskSelectionPayload) {
     let show_epoch = ASK_SELECTION_SESSION_EPOCH.fetch_add(1, Ordering::Relaxed) + 1;
-    let position = calculate_ask_selection_position(app_handle);
-    create_ask_selection_panel(app_handle);
 
+    #[cfg(target_os = "macos")]
+    {
+        let app = app_handle.clone();
+        let _ = app_handle.run_on_main_thread(move || {
+            let position = calculate_ask_selection_position(&app);
+            create_ask_selection_panel(&app);
+            show_ask_selection_panel_inner(&app, payload, position, show_epoch);
+        });
+        return;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let position = calculate_ask_selection_position(app_handle);
+        create_ask_selection_panel(app_handle);
+        show_ask_selection_panel_inner(app_handle, payload, position, show_epoch);
+    }
+}
+
+fn show_ask_selection_panel_inner(
+    app_handle: &AppHandle,
+    payload: AskSelectionPayload,
+    position: Option<(f64, f64)>,
+    show_epoch: u64,
+) {
     if let Some(panel_window) = app_handle.get_webview_window(ASK_SELECTION_LABEL) {
         if let Some((x, y)) = position {
             let _ = panel_window
@@ -921,40 +944,56 @@ pub fn show_ask_selection_panel(app_handle: &AppHandle, payload: AskSelectionPay
             panel.order_front_regardless();
         }
 
-        let retry_window = panel_window.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(80));
-            if ASK_SELECTION_SESSION_EPOCH.load(Ordering::Relaxed) != show_epoch {
-                return;
-            }
-            let _ = retry_window.emit("ask-selection-state", payload.clone());
-            std::thread::sleep(std::time::Duration::from_millis(180));
-            if ASK_SELECTION_SESSION_EPOCH.load(Ordering::Relaxed) != show_epoch {
-                return;
-            }
-            let _ = retry_window.emit("ask-selection-state", payload);
-        });
+        schedule_ask_selection_state_retries(panel_window, payload, show_epoch);
     }
 }
 
 pub fn update_ask_selection_panel(app_handle: &AppHandle, payload: AskSelectionPayload) {
     let show_epoch = ASK_SELECTION_SESSION_EPOCH.fetch_add(1, Ordering::Relaxed) + 1;
+
+    #[cfg(target_os = "macos")]
+    {
+        let app = app_handle.clone();
+        let _ = app_handle.run_on_main_thread(move || {
+            update_ask_selection_panel_inner(&app, payload, show_epoch);
+        });
+        return;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        update_ask_selection_panel_inner(app_handle, payload, show_epoch);
+    }
+}
+
+fn update_ask_selection_panel_inner(
+    app_handle: &AppHandle,
+    payload: AskSelectionPayload,
+    show_epoch: u64,
+) {
     if let Some(panel_window) = app_handle.get_webview_window(ASK_SELECTION_LABEL) {
         let _ = panel_window.emit("ask-selection-state", payload.clone());
-        let retry_window = panel_window.clone();
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(80));
-            if ASK_SELECTION_SESSION_EPOCH.load(Ordering::Relaxed) != show_epoch {
-                return;
-            }
-            let _ = retry_window.emit("ask-selection-state", payload.clone());
-            std::thread::sleep(std::time::Duration::from_millis(180));
-            if ASK_SELECTION_SESSION_EPOCH.load(Ordering::Relaxed) != show_epoch {
-                return;
-            }
-            let _ = retry_window.emit("ask-selection-state", payload);
-        });
+        schedule_ask_selection_state_retries(panel_window, payload, show_epoch);
     }
+}
+
+fn schedule_ask_selection_state_retries(
+    panel_window: tauri::webview::WebviewWindow,
+    payload: AskSelectionPayload,
+    show_epoch: u64,
+) {
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(80));
+        if ASK_SELECTION_SESSION_EPOCH.load(Ordering::Relaxed) != show_epoch {
+            return;
+        }
+        let _ = panel_window.emit("ask-selection-state", payload.clone());
+        std::thread::sleep(std::time::Duration::from_millis(180));
+        if ASK_SELECTION_SESSION_EPOCH.load(Ordering::Relaxed) != show_epoch {
+            return;
+        }
+        let _ = panel_window.emit("ask-selection-state", payload);
+    });
 }
 
 pub fn current_overlay_session_epoch() -> u64 {
