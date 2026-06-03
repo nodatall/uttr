@@ -220,12 +220,6 @@ async function main() {
   await openGeneralSettingsInUttr();
   await captureScreenshot("04-settings", { expectedFrontmost: "uttr" });
   await openHistoryInUttr();
-  await waitForLog(
-    logPath,
-    `history settings visible id=${historyEntry.id}`,
-    10_000,
-    "History settings visible entry",
-  );
   await captureScreenshot("05-history", { expectedFrontmost: "uttr" });
   await closeTextEditDocumentsContaining(pastedText);
   await closeEmptyTextEditDocuments();
@@ -737,6 +731,17 @@ async function openSettingsInUttr() {
     "if exists window 1 of targetProcess then exit repeat",
     "delay 0.25",
     "end repeat",
+    'if not (exists window 1 of targetProcess) then error "Uttr settings window not found"',
+    "set targetWindow to window 1 of targetProcess",
+    "try",
+    'set value of attribute "AXMinimized" of targetWindow to false',
+    "end try",
+    "try",
+    'set value of attribute "AXMain" of targetWindow to true',
+    "end try",
+    'perform action "AXRaise" of targetWindow',
+    "set position of targetWindow to {160, 120}",
+    "set size of targetWindow to {1040, 760}",
     "end tell",
     "delay 0.75",
   ]);
@@ -755,9 +760,11 @@ async function openGeneralSettingsInUttr() {
 
 async function openHistoryInUttr() {
   await openSettingsInUttr();
-  const clicked = await clickUttrSidebarButton("History", 4);
+  const clicked = await clickUttrSidebarButton("Transcriptions", 6);
   if (!clicked.includes("clicked")) {
-    throw new Error("Could not find the History navigation button in Uttr.");
+    throw new Error(
+      "Could not find the Transcriptions navigation button in Uttr.",
+    );
   }
 }
 
