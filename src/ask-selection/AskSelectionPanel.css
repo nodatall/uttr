@@ -71,9 +71,38 @@
   padding: 15px 16px 16px;
   box-sizing: border-box;
   overflow: auto;
+  scrollbar-width: thin;
+  scrollbar-color: rgb(139 152 173 / 34%) transparent;
   color: #e6edf3;
   font-size: 15px;
   line-height: 1.52;
+}
+
+.ask-selection-body::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.ask-selection-body::-webkit-scrollbar-track,
+.ask-selection-body::-webkit-scrollbar-track-piece,
+.ask-selection-body::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.ask-selection-body::-webkit-scrollbar-button {
+  display: none;
+}
+
+.ask-selection-body::-webkit-scrollbar-thumb {
+  min-height: 24px;
+  border: 1px solid transparent;
+  border-radius: 9999px;
+  background-color: rgb(139 152 173 / 34%);
+  background-clip: padding-box;
+}
+
+.ask-selection-body::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(139 152 173 / 52%);
 }
 
 .ask-selection-loading {
