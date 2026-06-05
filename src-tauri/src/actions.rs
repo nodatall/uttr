@@ -10,6 +10,8 @@ use crate::byok_secrets;
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::full_system_audio::{
     FullSystemAudioSessionManager, FullSystemSessionStopResult,
+    FullSystemSessionTranscriptionSamples, FullSystemTranscriptionSource,
+    FullSystemTranscriptionSourceSamples,
 };
 use crate::managers::history::HistoryManager;
 use crate::managers::model::is_cloud_model_id;
@@ -56,6 +58,24 @@ const FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL: u64 =
 const FULL_SYSTEM_SUMMARY_MODEL_FALLBACK: &str = "gpt-4o-mini";
 const FULL_SYSTEM_SUMMARY_SYSTEM_PROMPT: &str = "You are the live meeting summarizer inside Uttr, a macOS transcription app. Update meeting notes from transcript text only. Return valid JSON only with current_gist and expanded key_points.";
 
+#[derive(Debug, Clone, Default)]
+struct FullSystemLiveChunk {
+    mixed_samples: Vec<f32>,
+    source_samples: Vec<FullSystemTranscriptionSourceSamples>,
+}
+
+impl FullSystemLiveChunk {
+    fn is_empty(&self) -> bool {
+        self.mixed_samples.is_empty() && self.source_samples.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LabeledTranscriptSegment {
+    source: FullSystemTranscriptionSource,
+    text: String,
+}
+
 #[derive(Clone, Copy)]
 enum DeferredOverlayState {
     Transcribing,
@@ -101,6 +121,9 @@ struct FullSystemLiveRuntime {
     summary_disabled: AtomicBool,
     recorded_samples: Mutex<Vec<f32>>,
     pending_samples: Mutex<Vec<f32>>,
+    pending_microphone_samples: Mutex<Vec<f32>>,
+    pending_system_audio_samples: Mutex<Vec<f32>>,
+    last_transcript_source: Mutex<Option<FullSystemTranscriptionSource>>,
 }
 
 impl FullSystemLiveRuntime {
@@ -115,6 +138,9 @@ impl FullSystemLiveRuntime {
             summary_disabled: AtomicBool::new(false),
             recorded_samples: Mutex::new(Vec::new()),
             pending_samples: Mutex::new(Vec::new()),
+            pending_microphone_samples: Mutex::new(Vec::new()),
+            pending_system_audio_samples: Mutex::new(Vec::new()),
+            last_transcript_source: Mutex::new(None),
         }
     }
 }
@@ -1171,15 +1197,90 @@ fn emit_idle_session_window_state(app: &AppHandle) {
     );
 }
 
-fn append_live_text(existing: &mut String, incoming: &str) {
+fn full_system_source_label(source: FullSystemTranscriptionSource) -> &'static str {
+    match source {
+        FullSystemTranscriptionSource::Microphone => "Me",
+        FullSystemTranscriptionSource::SystemAudio => "Them",
+    }
+}
+
+fn full_system_source_transcription_id(source: FullSystemTranscriptionSource) -> &'static str {
+    match source {
+        FullSystemTranscriptionSource::Microphone => "full_system_audio_microphone",
+        FullSystemTranscriptionSource::SystemAudio => "full_system_audio_system",
+    }
+}
+
+#[cfg(test)]
+fn format_labeled_transcript_segments(segments: &[LabeledTranscriptSegment]) -> String {
+    let mut output = String::new();
+    let mut last_source = None;
+
+    for segment in segments {
+        append_labeled_live_text(&mut output, &mut last_source, segment.source, &segment.text);
+    }
+
+    output
+}
+
+fn append_labeled_live_text(
+    existing: &mut String,
+    last_source: &mut Option<FullSystemTranscriptionSource>,
+    source: FullSystemTranscriptionSource,
+    incoming: &str,
+) {
     let incoming = incoming.trim();
     if incoming.is_empty() {
         return;
     }
-    if !existing.trim().is_empty() {
-        existing.push(' ');
+
+    if existing.trim().is_empty() {
+        existing.push_str(full_system_source_label(source));
+        existing.push_str(": ");
+        existing.push_str(incoming);
+        *last_source = Some(source);
+        return;
     }
-    existing.push_str(incoming);
+
+    if *last_source == Some(source) {
+        existing.push(' ');
+        existing.push_str(incoming);
+    } else {
+        existing.push_str("\n\n");
+        existing.push_str(full_system_source_label(source));
+        existing.push_str(": ");
+        existing.push_str(incoming);
+        *last_source = Some(source);
+    }
+}
+
+fn drain_front_up_to(samples: &mut Vec<f32>, max_len: usize) -> Vec<f32> {
+    let len = samples.len().min(max_len);
+    if len == 0 {
+        Vec::new()
+    } else {
+        samples.drain(..len).collect()
+    }
+}
+
+fn source_samples_from_buffers(
+    microphone_samples: Vec<f32>,
+    system_audio_samples: Vec<f32>,
+) -> Vec<FullSystemTranscriptionSourceSamples> {
+    let mut source_samples = Vec::new();
+    if !microphone_samples.is_empty() {
+        source_samples.push(FullSystemTranscriptionSourceSamples {
+            source: FullSystemTranscriptionSource::Microphone,
+            samples: microphone_samples,
+        });
+    }
+    if !system_audio_samples.is_empty() {
+        source_samples.push(FullSystemTranscriptionSourceSamples {
+            source: FullSystemTranscriptionSource::SystemAudio,
+            samples: system_audio_samples,
+        });
+    }
+    source_samples
 }
 
 fn emit_live_session_summary_state(
@@ -1859,11 +1960,11 @@ async fn transcribe_and_summarize_live_chunk(
     app: &AppHandle,
     runtime: &Arc<FullSystemLiveRuntime>,
     tm: &Arc<TranscriptionManager>,
-    chunk_samples: Vec<f32>,
+    chunk: FullSystemLiveChunk,
     is_final_chunk: bool,
     record_samples: bool,
 ) {
-    if chunk_samples.is_empty() {
+    if chunk.is_empty() {
         return;
     }
 
@@ -1872,7 +1973,7 @@ async fn transcribe_and_summarize_live_chunk(
             .recorded_samples
             .lock()
             .unwrap()
-            .extend_from_slice(&chunk_samples);
+            .extend_from_slice(&chunk.mixed_samples);
     }
 
     let chunk_index = runtime.chunk_count.load(Ordering::Relaxed) + 1;
@@ -1906,50 +2007,56 @@ async fn transcribe_and_summarize_live_chunk(
         );
     }
 
-    let transcription = match tm
-        .transcribe_with_source(chunk_samples, Some("full_system_audio"))
-        .await
-    {
-        Ok(text) => text,
-        Err(error) => {
-            warn!(
-                "Live full-system chunk {} transcription failed: {}",
-                chunk_index, error
-            );
-            *runtime.summary_error.lock().unwrap() = Some(format!(
-                "Live transcription failed for chunk {}: {}",
-                chunk_index, error
-            ));
-            if is_final_chunk {
-                emit_session_window_state(
-                    app,
-                    SessionWindowStatePayload {
-                        stage: "processing".to_string(),
-                        title: "Preparing summary".to_string(),
-                        subtitle: "Unable to transcribe the final audio chunk.".to_string(),
-                        progress_label: "Processing".to_string(),
-                        progress_value: 0.88,
-                        summary_text: runtime.summary_error.lock().unwrap().clone(),
-                        raw_transcript_text: None,
-                        history_entry_id: None,
-                    },
+    let transcription_segments =
+        match transcribe_full_system_live_chunk_sources(tm, chunk, chunk_index).await {
+            Ok(segments) => segments,
+            Err(error) => {
+                warn!(
+                    "Live full-system chunk {} transcription failed: {}",
+                    chunk_index, error
                 );
-            } else if !runtime.stop_requested.load(Ordering::Relaxed) {
-                emit_live_session_summary_state(
-                    app,
-                    runtime.chunk_count.load(Ordering::Relaxed),
-                    runtime.summary_text.lock().unwrap().clone(),
-                    runtime.summary_error.lock().unwrap().clone(),
-                );
+                *runtime.summary_error.lock().unwrap() = Some(format!(
+                    "Live transcription failed for chunk {}: {}",
+                    chunk_index, error
+                ));
+                if is_final_chunk {
+                    emit_session_window_state(
+                        app,
+                        SessionWindowStatePayload {
+                            stage: "processing".to_string(),
+                            title: "Preparing summary".to_string(),
+                            subtitle: "Unable to transcribe the final audio chunk.".to_string(),
+                            progress_label: "Processing".to_string(),
+                            progress_value: 0.88,
+                            summary_text: runtime.summary_error.lock().unwrap().clone(),
+                            raw_transcript_text: None,
+                            history_entry_id: None,
+                        },
+                    );
+                } else if !runtime.stop_requested.load(Ordering::Relaxed) {
+                    emit_live_session_summary_state(
+                        app,
+                        runtime.chunk_count.load(Ordering::Relaxed),
+                        runtime.summary_text.lock().unwrap().clone(),
+                        runtime.summary_error.lock().unwrap().clone(),
+                    );
+                }
+                return;
             }
-            return;
-        }
-    };
+        };
 
-    if !transcription.trim().is_empty() {
+    if !transcription_segments.is_empty() {
         let transcript_so_far = {
             let mut transcript = runtime.transcript_text.lock().unwrap();
-            append_live_text(&mut transcript, &transcription);
+            let mut last_source = runtime.last_transcript_source.lock().unwrap();
+            for segment in &transcription_segments {
+                append_labeled_live_text(
+                    &mut transcript,
+                    &mut *last_source,
+                    segment.source,
+                    &segment.text,
+                );
+            }
             transcript.clone()
         };
 
@@ -2083,6 +2190,73 @@ async fn transcribe_and_summarize_live_chunk(
     }
 }
 
+async fn transcribe_full_system_live_chunk_sources(
+    tm: &Arc<TranscriptionManager>,
+    chunk: FullSystemLiveChunk,
+    chunk_index: u64,
+) -> Result<Vec<LabeledTranscriptSegment>, anyhow::Error> {
+    let mut segments = Vec::new();
+
+    if chunk.source_samples.is_empty() {
+        let transcription = tm
+            .transcribe_with_source(chunk.mixed_samples, Some("full_system_audio"))
+            .await?;
+        if !transcription.trim().is_empty() {
+            return Ok(vec![LabeledTranscriptSegment {
+                source: FullSystemTranscriptionSource::SystemAudio,
+                text: transcription,
+            }]);
+        }
+        return Ok(Vec::new());
+    }
+
+    for source_samples in chunk.source_samples {
+        if source_samples.samples.is_empty() || is_effectively_silent_audio(&source_samples.samples)
+        {
+            if let Some((rms, peak)) = silent_audio_levels(&source_samples.samples) {
+                debug!(
+                    "Skipping quiet full-system source chunk source={} chunk={} rms={:.6} peak={:.6}",
+                    full_system_source_label(source_samples.source),
+                    chunk_index,
+                    rms,
+                    peak
+                );
+            }
+            continue;
+        }
+
+        let source_label = full_system_source_label(source_samples.source);
+        let source_id = full_system_source_transcription_id(source_samples.source);
+        let sample_count = source_samples.samples.len();
+        let started = Instant::now();
+        log::info!(
+            "[latency] full-system source transcription begin chunk={} source={} sample_count={}",
+            chunk_index,
+            source_label,
+            sample_count
+        );
+        let text = tm
+            .transcribe_with_source(source_samples.samples, Some(source_id))
+            .await?;
+        log::info!(
+            "[latency] full-system source transcription complete chunk={} source={} sample_count={} elapsed_ms={}",
+            chunk_index,
+            source_label,
+            sample_count,
+            started.elapsed().as_millis()
+        );
+
+        if !text.trim().is_empty() {
+            segments.push(LabeledTranscriptSegment {
+                source: source_samples.source,
+                text,
+            });
+        }
+    }
+
+    Ok(segments)
+}
+
 fn start_full_system_live_session(app: &AppHandle, binding_id: &str) {
     let runtime = Arc::new(FullSystemLiveRuntime::new());
     let worker_runtime = Arc::clone(&runtime);
@@ -2093,18 +2267,44 @@ fn start_full_system_live_session(app: &AppHandle, binding_id: &str) {
 
     let worker_handle = tauri::async_runtime::spawn(async move {
         let mut buffered = Vec::<f32>::new();
+        let mut buffered_microphone = Vec::<f32>::new();
+        let mut buffered_system_audio = Vec::<f32>::new();
 
         while !worker_runtime.stop_requested.load(Ordering::Relaxed) {
-            if let Some(delta) = full_system_audio.drain_session_delta(&worker_binding) {
-                if !delta.is_empty() {
-                    buffered.extend_from_slice(&delta);
+            if let Some(delta) = full_system_audio.drain_session_delta_sources(&worker_binding) {
+                if let Some(mixed) = delta.mixed {
+                    if !mixed.is_empty() {
+                        buffered.extend_from_slice(&mixed);
+                    }
+                }
+                for source_samples in delta.sources {
+                    match source_samples.source {
+                        FullSystemTranscriptionSource::Microphone => {
+                            buffered_microphone.extend_from_slice(&source_samples.samples);
+                        }
+                        FullSystemTranscriptionSource::SystemAudio => {
+                            buffered_system_audio.extend_from_slice(&source_samples.samples);
+                        }
+                    }
                 }
             }
 
             while buffered.len() >= FULL_SYSTEM_LIVE_CHUNK_SAMPLES
                 && !worker_runtime.stop_requested.load(Ordering::Relaxed)
             {
-                let chunk: Vec<f32> = buffered.drain(..FULL_SYSTEM_LIVE_CHUNK_SAMPLES).collect();
+                let mixed_samples: Vec<f32> =
+                    buffered.drain(..FULL_SYSTEM_LIVE_CHUNK_SAMPLES).collect();
+                let microphone_samples =
+                    drain_front_up_to(&mut buffered_microphone, FULL_SYSTEM_LIVE_CHUNK_SAMPLES);
+                let system_audio_samples =
+                    drain_front_up_to(&mut buffered_system_audio, FULL_SYSTEM_LIVE_CHUNK_SAMPLES);
+                let chunk = FullSystemLiveChunk {
+                    mixed_samples,
+                    source_samples: source_samples_from_buffers(
+                        microphone_samples,
+                        system_audio_samples,
+                    ),
+                };
                 transcribe_and_summarize_live_chunk(
                     &worker_app,
                     &worker_runtime,
@@ -2125,6 +2325,20 @@ fn start_full_system_live_session(app: &AppHandle, binding_id: &str) {
                 .lock()
                 .unwrap()
                 .extend_from_slice(&buffered);
+        }
+        if !buffered_microphone.is_empty() {
+            worker_runtime
+                .pending_microphone_samples
+                .lock()
+                .unwrap()
+                .extend_from_slice(&buffered_microphone);
+        }
+        if !buffered_system_audio.is_empty() {
+            worker_runtime
+                .pending_system_audio_samples
+                .lock()
+                .unwrap()
+                .extend_from_slice(&buffered_system_audio);
         }
     });
 
@@ -2158,7 +2372,7 @@ fn signal_full_system_live_session_stop(binding_id: &str) {
 async fn finish_full_system_live_session(
     app: &AppHandle,
     binding_id: &str,
-    tail_samples: Option<Vec<f32>>,
+    tail_samples: Option<FullSystemSessionTranscriptionSamples>,
     tm: Arc<TranscriptionManager>,
 ) -> Option<FullSystemLiveFinal> {
     let session = {
@@ -2185,11 +2399,38 @@ async fn finish_full_system_live_session(
         let mut pending = session.runtime.pending_samples.lock().unwrap();
         std::mem::take(&mut *pending)
     };
-    if let Some(tail_samples) = tail_samples.filter(|samples| !samples.is_empty()) {
-        final_samples.extend_from_slice(&tail_samples);
+    let mut final_microphone_samples = {
+        let mut pending = session.runtime.pending_microphone_samples.lock().unwrap();
+        std::mem::take(&mut *pending)
+    };
+    let mut final_system_audio_samples = {
+        let mut pending = session.runtime.pending_system_audio_samples.lock().unwrap();
+        std::mem::take(&mut *pending)
+    };
+    if let Some(tail_samples) = tail_samples {
+        if let Some(mixed) = tail_samples.mixed.filter(|samples| !samples.is_empty()) {
+            final_samples.extend_from_slice(&mixed);
+        }
+        for source_samples in tail_samples.sources {
+            match source_samples.source {
+                FullSystemTranscriptionSource::Microphone => {
+                    final_microphone_samples.extend_from_slice(&source_samples.samples);
+                }
+                FullSystemTranscriptionSource::SystemAudio => {
+                    final_system_audio_samples.extend_from_slice(&source_samples.samples);
+                }
+            }
+        }
     }
     if !final_samples.is_empty() {
-        transcribe_and_summarize_live_chunk(app, &session.runtime, &tm, final_samples, true, true)
+        let final_chunk = FullSystemLiveChunk {
+            mixed_samples: final_samples,
+            source_samples: source_samples_from_buffers(
+                final_microphone_samples,
+                final_system_audio_samples,
+            ),
+        };
+        transcribe_and_summarize_live_chunk(app, &session.runtime, &tm, final_chunk, true, true)
             .await;
     }
 
@@ -3284,7 +3525,16 @@ impl ShortcutAction for FullSystemTranscribeAction {
             stop_time.elapsed().as_millis()
         );
 
-        let live_tail_samples = stop_result.transcription_samples;
+        let fallback_samples = stop_result.transcription_samples.clone();
+        let live_tail_samples =
+            if fallback_samples.is_some() || !stop_result.transcription_source_samples.is_empty() {
+                Some(FullSystemSessionTranscriptionSamples {
+                    mixed: stop_result.transcription_samples,
+                    sources: stop_result.transcription_source_samples,
+                })
+            } else {
+                None
+            };
         let live_app = app.clone();
         let live_binding_id = binding_id.to_string();
         let live_tm = Arc::clone(&tm);
@@ -3292,7 +3542,6 @@ impl ShortcutAction for FullSystemTranscribeAction {
         tauri::async_runtime::spawn(async move {
             let _finish_guard = FinishGuard(live_app.clone());
             let mut ui_guard = UiResetGuard::new(live_app.clone());
-            let fallback_samples = live_tail_samples.clone();
             if let Some(live_final) = finish_full_system_live_session(
                 &live_app,
                 &live_binding_id,
@@ -3507,17 +3756,19 @@ mod tests {
     use super::{
         ask_selection_message, build_ask_selection_follow_up_prompt, build_ask_selection_prompt,
         build_live_summary_prompt, clean_ask_selection_response, clean_post_process_response,
-        custom_vocabulary_prompt_block, friendly_live_summary_error, is_effectively_silent_audio,
-        is_supported_post_process_model, normalize_live_summary_output,
-        parse_meeting_summary_state, render_meeting_summary_markdown,
-        resolved_post_process_system_prompt, select_preferred_groq_model,
-        should_pause_live_summaries, should_refresh_microphone_stream_after_suspected_no_input,
-        should_update_live_summary, toggle_post_process_enabled, transcription_timeout_for_samples,
-        transcription_watchdog_delay, usable_post_processed_text, MeetingSummaryState,
-        SummaryPoint, TranscriptionCompletionMode, ACTION_MAP,
+        custom_vocabulary_prompt_block, format_labeled_transcript_segments,
+        friendly_live_summary_error, is_effectively_silent_audio, is_supported_post_process_model,
+        normalize_live_summary_output, parse_meeting_summary_state,
+        render_meeting_summary_markdown, resolved_post_process_system_prompt,
+        select_preferred_groq_model, should_pause_live_summaries,
+        should_refresh_microphone_stream_after_suspected_no_input, should_update_live_summary,
+        toggle_post_process_enabled, transcription_timeout_for_samples,
+        transcription_watchdog_delay, usable_post_processed_text, LabeledTranscriptSegment,
+        MeetingSummaryState, SummaryPoint, TranscriptionCompletionMode, ACTION_MAP,
         FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT, FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL,
     };
     use crate::app_context::AppContextSnapshot;
+    use crate::managers::full_system_audio::FullSystemTranscriptionSource;
     use crate::settings::get_default_settings;
 
     #[test]
@@ -3703,6 +3954,56 @@ mod tests {
         assert!(!should_update_live_summary(7, false));
         assert!(should_update_live_summary(12, false));
         assert!(should_update_live_summary(3, true));
+    }
+
+    #[test]
+    fn labeled_meeting_transcript_formats_source_blocks() {
+        let rendered = format_labeled_transcript_segments(&[
+            LabeledTranscriptSegment {
+                source: FullSystemTranscriptionSource::Microphone,
+                text: "I want the transcript labels.".to_string(),
+            },
+            LabeledTranscriptSegment {
+                source: FullSystemTranscriptionSource::SystemAudio,
+                text: "Use source labels first.".to_string(),
+            },
+            LabeledTranscriptSegment {
+                source: FullSystemTranscriptionSource::Microphone,
+                text: "That works.".to_string(),
+            },
+        ]);
+
+        assert_eq!(
+            rendered,
+            "Me: I want the transcript labels.\n\nThem: Use source labels first.\n\nMe: That works."
+        );
+    }
+
+    #[test]
+    fn labeled_meeting_transcript_merges_adjacent_source_text_and_skips_empty() {
+        let rendered = format_labeled_transcript_segments(&[
+            LabeledTranscriptSegment {
+                source: FullSystemTranscriptionSource::Microphone,
+                text: "First sentence.".to_string(),
+            },
+            LabeledTranscriptSegment {
+                source: FullSystemTranscriptionSource::Microphone,
+                text: " Second sentence. ".to_string(),
+            },
+            LabeledTranscriptSegment {
+                source: FullSystemTranscriptionSource::SystemAudio,
+                text: " ".to_string(),
+            },
+            LabeledTranscriptSegment {
+                source: FullSystemTranscriptionSource::SystemAudio,
+                text: "Remote audio.".to_string(),
+            },
+        ]);
+
+        assert_eq!(
+            rendered,
+            "Me: First sentence. Second sentence.\n\nThem: Remote audio."
+        );
     }
 
     #[test]

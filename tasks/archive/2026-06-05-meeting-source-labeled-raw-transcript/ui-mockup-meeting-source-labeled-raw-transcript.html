@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Meeting Source-Labeled Raw Transcript Mockup</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --background: #0d1117;
+        --background-deep: #060a12;
+        --surface: #050a12;
+        --surface-soft: rgba(255, 255, 255, 0.04);
+        --surface-strong: rgba(255, 255, 255, 0.08);
+        --border: rgba(255, 255, 255, 0.08);
+        --border-strong: rgba(255, 255, 255, 0.12);
+        --text: #e6edf3;
+        --text-muted: #93a0b3;
+        --primary: #67d7a3;
+        --primary-strong: #1d9b64;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--background);
+        color: var(--text);
+        font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+      }
+
+      .app {
+        display: grid;
+        grid-template-columns: 232px minmax(0, 1fr);
+        min-height: 100vh;
+      }
+
+      .sidebar {
+        border-right: 1px solid var(--border);
+        background: var(--background-deep);
+        padding: 20px 14px;
+      }
+
+      .brand {
+        margin: 0 0 22px;
+        font-size: 15px;
+        font-weight: 700;
+      }
+
+      .nav {
+        display: grid;
+        gap: 6px;
+      }
+
+      .nav-item {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        min-height: 38px;
+        border-radius: 12px;
+        padding: 0 12px;
+        color: rgba(230, 237, 243, 0.58);
+        font-size: 14px;
+      }
+
+      .nav-item.active {
+        background: rgba(29, 155, 100, 0.14);
+        color: var(--text);
+      }
+
+      .dot {
+        width: 8px;
+        height: 8px;
+        border-radius: 999px;
+        background: currentColor;
+      }
+
+      .workspace {
+        padding: 28px;
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 24px;
+      }
+
+      h1 {
+        margin: 0;
+        font-size: 26px;
+        font-weight: 650;
+        letter-spacing: 0;
+      }
+
+      .subtitle {
+        margin: 6px 0 0;
+        color: var(--text-muted);
+        font-size: 14px;
+      }
+
+      .button {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        min-height: 34px;
+        border: 1px solid var(--border-strong);
+        border-radius: 999px;
+        background: var(--surface-soft);
+        color: var(--text);
+        padding: 0 14px;
+        font: inherit;
+        font-size: 13px;
+      }
+
+      .summary-panel {
+        min-height: 338px;
+        border: 1px solid rgba(255, 255, 255, 0.07);
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.025);
+        padding: 24px;
+      }
+
+      .panel-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 14px;
+        margin-bottom: 28px;
+      }
+
+      .section-label {
+        color: rgba(230, 237, 243, 0.36);
+        font-size: 11px;
+        font-weight: 600;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+      }
+
+      .summary-body {
+        display: grid;
+        gap: 26px;
+        max-width: 760px;
+      }
+
+      .gist {
+        margin: 0;
+        color: rgba(230, 237, 243, 0.84);
+        font-size: 16px;
+        line-height: 1.8;
+      }
+
+      .points {
+        display: grid;
+        gap: 14px;
+        margin: 0;
+        padding: 0;
+        list-style: none;
+        color: rgba(230, 237, 243, 0.76);
+        font-size: 15px;
+        line-height: 1.65;
+      }
+
+      .points li {
+        display: flex;
+        gap: 10px;
+      }
+
+      .points li::before {
+        content: "";
+        flex: 0 0 auto;
+        width: 8px;
+        height: 8px;
+        margin-top: 0.74em;
+        border-radius: 999px;
+        background: rgba(103, 215, 163, 0.7);
+      }
+
+      .modal-scrim {
+        position: fixed;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        background: rgba(2, 5, 10, 0.58);
+        padding: 28px;
+      }
+
+      .modal {
+        width: min(760px, 100%);
+        max-height: min(720px, calc(100vh - 56px));
+        border: 1px solid var(--border-strong);
+        border-radius: 20px;
+        background: rgba(5, 10, 18, 0.96);
+        box-shadow: 0 14px 40px rgba(0, 0, 0, 0.28);
+        overflow: hidden;
+      }
+
+      .modal-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        border-bottom: 1px solid var(--border);
+        padding: 16px 18px;
+      }
+
+      .modal-title {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 650;
+      }
+
+      .icon-button {
+        display: grid;
+        place-items: center;
+        width: 32px;
+        height: 32px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: var(--surface-soft);
+        color: var(--text-muted);
+      }
+
+      .transcript {
+        display: grid;
+        gap: 18px;
+        max-height: 560px;
+        overflow: auto;
+        padding: 20px;
+      }
+
+      .turn {
+        display: grid;
+        grid-template-columns: 74px minmax(0, 1fr);
+        gap: 14px;
+        align-items: start;
+      }
+
+      .speaker {
+        display: inline-grid;
+        place-items: center;
+        min-height: 28px;
+        border: 1px solid var(--border);
+        border-radius: 999px;
+        padding: 0 10px;
+        font-size: 12px;
+        font-weight: 700;
+      }
+
+      .speaker.me {
+        border-color: rgba(103, 215, 163, 0.28);
+        background: rgba(29, 155, 100, 0.13);
+        color: var(--primary);
+      }
+
+      .speaker.them {
+        background: rgba(255, 255, 255, 0.05);
+        color: rgba(230, 237, 243, 0.72);
+      }
+
+      .turn-text {
+        margin: 0;
+        color: rgba(230, 237, 243, 0.78);
+        font-size: 15px;
+        line-height: 1.7;
+      }
+
+      @media (max-width: 760px) {
+        .app {
+          grid-template-columns: 1fr;
+        }
+
+        .sidebar {
+          display: none;
+        }
+
+        .workspace {
+          padding: 18px;
+        }
+
+        .topbar {
+          align-items: flex-start;
+          flex-direction: column;
+        }
+
+        .turn {
+          grid-template-columns: 1fr;
+          gap: 8px;
+        }
+
+        .speaker {
+          justify-self: start;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="app">
+      <aside class="sidebar">
+        <p class="brand">Uttr</p>
+        <nav class="nav" aria-label="Main">
+          <div class="nav-item active"><span class="dot"></span>Home</div>
+          <div class="nav-item"><span class="dot"></span>Transcriptions</div>
+          <div class="nav-item"><span class="dot"></span>Settings</div>
+        </nav>
+      </aside>
+
+      <section class="workspace">
+        <div class="topbar">
+          <div>
+            <h1>Meeting complete</h1>
+            <p class="subtitle">
+              12 min 44 sec captured from microphone and system audio.
+            </p>
+          </div>
+          <button class="button" type="button">Raw transcript</button>
+        </div>
+
+        <section class="summary-panel">
+          <div class="panel-head">
+            <div class="section-label">Summary</div>
+          </div>
+          <div class="summary-body">
+            <section>
+              <div class="section-label">Current gist</div>
+              <p class="gist">
+                The session settled on a source-labeled raw transcript so the
+                saved meeting text shows local microphone speech separately from
+                captured system audio.
+              </p>
+            </section>
+            <section>
+              <div class="section-label">Key points</div>
+              <ul class="points">
+                <li>Keep the main meeting screen focused on the summary.</li>
+                <li>
+                  Use compact source labels inside the raw transcript modal.
+                </li>
+                <li>
+                  Preserve older plain transcript entries without special
+                  rendering.
+                </li>
+              </ul>
+            </section>
+          </div>
+        </section>
+      </section>
+    </main>
+
+    <div class="modal-scrim">
+      <section
+        class="modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="raw-transcript-title"
+      >
+        <header class="modal-head">
+          <h2 class="modal-title" id="raw-transcript-title">Raw transcript</h2>
+          <button class="icon-button" type="button" aria-label="Close">
+            x
+          </button>
+        </header>
+        <div class="transcript">
+          <article class="turn">
+            <span class="speaker me">Me</span>
+            <p class="turn-text">
+              Can we show the raw meeting transcript with separate labels for
+              what I said and what came through the call audio?
+            </p>
+          </article>
+          <article class="turn">
+            <span class="speaker them">Them</span>
+            <p class="turn-text">
+              Yes. The useful first version is source-based labeling, with
+              microphone audio marked as Me and system audio marked as Them.
+            </p>
+          </article>
+          <article class="turn">
+            <span class="speaker me">Me</span>
+            <p class="turn-text">
+              Keep the summary as the main view. The labels only need to appear
+              when I open the raw transcript.
+            </p>
+          </article>
+          <article class="turn">
+            <span class="speaker them">Them</span>
+            <p class="turn-text">
+              Older entries can keep rendering as plain text, and the labeled
+              format can be saved in the existing transcript field.
+            </p>
+          </article>
+        </div>
+      </section>
+    </div>
+  </body>
+</html>

@@ -119,6 +119,54 @@ const parseSummarySections = (summary: string): SummarySection[] => {
 
 const cleanBulletText = (line: string): string => line.replace(/^\s*-\s*/, "");
 
+type RawTranscriptSpeaker = "Me" | "Them";
+
+interface RawTranscriptTurn {
+  speaker: RawTranscriptSpeaker;
+  text: string;
+}
+
+const parseLabeledRawTranscript = (transcript: string): RawTranscriptTurn[] => {
+  const turns: RawTranscriptTurn[] = [];
+  let current: RawTranscriptTurn | null = null;
+  let sawLabel = false;
+
+  const flush = () => {
+    if (!current) {
+      return;
+    }
+    const text = current.text.trim();
+    if (text.length > 0) {
+      turns.push({ ...current, text });
+    }
+    current = null;
+  };
+
+  for (const line of transcript.split(/\r?\n/)) {
+    const match = line.match(/^(Me|Them):\s*(.*)$/);
+    if (match) {
+      sawLabel = true;
+      flush();
+      current = {
+        speaker: match[1] as RawTranscriptSpeaker,
+        text: match[2] ?? "",
+      };
+      continue;
+    }
+
+    if (!sawLabel && line.trim().length > 0) {
+      return [];
+    }
+
+    if (current) {
+      current.text = current.text ? `${current.text}\n${line}` : line;
+    }
+  }
+
+  flush();
+  return turns;
+};
+
 const SummarySectionView: React.FC<{ section: SummarySection }> = ({
   section,
 }) => {
@@ -241,6 +289,10 @@ export const HomeWorkspace: React.FC<HomeWorkspaceProps> = ({
   const summarySections = useMemo(
     () => parseSummarySections(sessionBody),
     [sessionBody],
+  );
+  const labeledTranscriptTurns = useMemo(
+    () => parseLabeledRawTranscript(rawTranscript),
+    [rawTranscript],
   );
   const showingHistory = meetingView === "history" && !live;
 
@@ -646,9 +698,33 @@ export const HomeWorkspace: React.FC<HomeWorkspaceProps> = ({
               </button>
             </div>
             <div className="overflow-auto p-5">
-              <p className="whitespace-pre-wrap text-sm leading-7 text-text/72">
-                {rawTranscript}
-              </p>
+              {labeledTranscriptTurns.length > 0 ? (
+                <div className="grid gap-4">
+                  {labeledTranscriptTurns.map((turn, index) => (
+                    <article
+                      key={`${turn.speaker}-${index}`}
+                      className="grid grid-cols-[4.25rem_minmax(0,1fr)] items-start gap-3 max-sm:grid-cols-1 max-sm:gap-2"
+                    >
+                      <span
+                        className={`inline-grid min-h-7 place-items-center justify-self-start rounded-full border px-3 text-xs font-semibold ${
+                          turn.speaker === "Me"
+                            ? "border-logo-primary/25 bg-logo-primary/12 text-logo-primary"
+                            : "border-white/10 bg-white/[0.045] text-text/68"
+                        }`}
+                      >
+                        {turn.speaker}
+                      </span>
+                      <p className="whitespace-pre-wrap text-sm leading-7 text-text/72">
+                        {turn.text}
+                      </p>
+                    </article>
+                  ))}
+                </div>
+              ) : (
+                <p className="whitespace-pre-wrap text-sm leading-7 text-text/72">
+                  {rawTranscript}
+                </p>
+              )}
             </div>
           </div>
         </div>

@@ -72,6 +72,24 @@ pub struct FullSystemSessionStartResult {
     pub microphone_error: Option<String>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FullSystemTranscriptionSource {
+    Microphone,
+    SystemAudio,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FullSystemTranscriptionSourceSamples {
+    pub source: FullSystemTranscriptionSource,
+    pub samples: Vec<f32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct FullSystemSessionTranscriptionSamples {
+    pub mixed: Option<Vec<f32>>,
+    pub sources: Vec<FullSystemTranscriptionSourceSamples>,
+}
+
 #[derive(Debug, PartialEq)]
 pub struct FullSystemSessionStopResult {
     pub session: Option<FullSystemSessionSnapshot>,
@@ -79,6 +97,7 @@ pub struct FullSystemSessionStopResult {
     pub had_active_session: bool,
     pub bridge_result: Option<FullSystemAudioStopResult>,
     pub transcription_samples: Option<Vec<f32>>,
+    pub transcription_source_samples: Vec<FullSystemTranscriptionSourceSamples>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -380,6 +399,7 @@ where
                 had_active_session: false,
                 bridge_result: None,
                 transcription_samples: None,
+                transcription_source_samples: Vec::new(),
             };
         };
 
@@ -395,12 +415,13 @@ where
         } else {
             None
         };
-        let transcription_samples = mix_session_audio(
+        let transcription_payload = build_session_transcription_samples(
             microphone_samples,
             bridge_result
                 .as_mut()
                 .and_then(|result| result.pcm.take_samples()),
         );
+        let transcription_samples = transcription_payload.mixed.clone();
         self.cleanup_last_session();
 
         let mut state = self.state.lock().unwrap();
@@ -412,10 +433,19 @@ where
             had_active_session: true,
             bridge_result,
             transcription_samples,
+            transcription_source_samples: transcription_payload.sources,
         }
     }
 
     pub fn drain_session_delta(&self, binding_id: &str) -> Option<Vec<f32>> {
+        self.drain_session_delta_sources(binding_id)
+            .and_then(|payload| payload.mixed)
+    }
+
+    pub fn drain_session_delta_sources(
+        &self,
+        binding_id: &str,
+    ) -> Option<FullSystemSessionTranscriptionSamples> {
         let snapshot = {
             let state = self.state.lock().unwrap();
             match state.clone() {
@@ -440,12 +470,14 @@ where
             None
         };
 
-        mix_session_audio(
+        let payload = build_session_transcription_samples(
             microphone_samples,
             bridge_result
                 .as_mut()
                 .and_then(|result| result.pcm.take_samples()),
-        )
+        );
+
+        (payload.mixed.is_some() || !payload.sources.is_empty()).then_some(payload)
     }
 
     pub fn cancel_session(&self) -> FullSystemSessionStopResult {
@@ -476,6 +508,7 @@ where
                 had_active_session: false,
                 bridge_result: None,
                 transcription_samples: None,
+                transcription_source_samples: Vec::new(),
             };
         };
 
@@ -492,6 +525,7 @@ where
             had_active_session: true,
             bridge_result: None,
             transcription_samples: None,
+            transcription_source_samples: Vec::new(),
         }
     }
 
@@ -500,15 +534,23 @@ where
     }
 }
 
-fn mix_session_audio(
+fn build_session_transcription_samples(
     microphone_samples: Option<Vec<f32>>,
     system_audio: Option<FullSystemAudioCapturedPcm>,
-) -> Option<Vec<f32>> {
+) -> FullSystemSessionTranscriptionSamples {
+    let mut sources = Vec::new();
     let mut normalized_sources = Vec::new();
 
     if let Some(samples) = microphone_samples {
         match normalize_transcription_pcm(&samples, WHISPER_SAMPLE_RATE, 1) {
-            Ok(normalized) if !normalized.is_empty() => normalized_sources.push(normalized),
+            Ok(normalized) if !normalized.is_empty() => {
+                let samples = sanitize_transcription_audio(normalized);
+                normalized_sources.push(samples.clone());
+                sources.push(FullSystemTranscriptionSourceSamples {
+                    source: FullSystemTranscriptionSource::Microphone,
+                    samples,
+                });
+            }
             Ok(_) => {}
             Err(err) => warn!("Failed to normalize microphone samples for transcription: {err}"),
         }
@@ -520,25 +562,35 @@ fn mix_session_audio(
             system_audio.sample_rate,
             system_audio.channel_count,
         ) {
-            Ok(normalized) if !normalized.is_empty() => normalized_sources.push(normalized),
+            Ok(normalized) if !normalized.is_empty() => {
+                let samples = sanitize_transcription_audio(normalized);
+                normalized_sources.push(samples.clone());
+                sources.push(FullSystemTranscriptionSourceSamples {
+                    source: FullSystemTranscriptionSource::SystemAudio,
+                    samples,
+                });
+            }
             Ok(_) => {}
             Err(err) => warn!("Failed to normalize system audio samples for transcription: {err}"),
         }
     }
 
     let mixed = match normalized_sources.as_slice() {
-        [] => return None,
-        [samples] => samples.clone(),
+        [] => None,
+        [samples] => Some(samples.clone()),
         _ => {
             let source_refs: Vec<&[f32]> = normalized_sources
                 .iter()
                 .map(|samples| samples.as_slice())
                 .collect();
-            mix_transcription_pcm_sources(&source_refs)
+            Some(mix_transcription_pcm_sources(&source_refs))
         }
     };
 
-    Some(sanitize_transcription_audio(mixed))
+    FullSystemSessionTranscriptionSamples {
+        mixed: mixed.map(sanitize_transcription_audio),
+        sources,
+    }
 }
 
 fn system_audio_start_error(permission_state: i32) -> &'static str {
@@ -565,8 +617,10 @@ mod tests {
     #[derive(Default)]
     struct FakeMicrophone {
         start_result: Mutex<Option<Result<(), anyhow::Error>>>,
+        drain_result: Mutex<Option<DrainResult>>,
         stop_result: Mutex<Option<Vec<f32>>>,
         start_calls: AtomicUsize,
+        drain_calls: AtomicUsize,
         stop_calls: AtomicUsize,
         cancel_calls: AtomicUsize,
     }
@@ -585,6 +639,10 @@ mod tests {
 
         fn stop_calls(&self) -> usize {
             self.stop_calls.load(Ordering::SeqCst)
+        }
+
+        fn drain_calls(&self) -> usize {
+            self.drain_calls.load(Ordering::SeqCst)
         }
 
         fn cancel_calls(&self) -> usize {
@@ -608,7 +666,8 @@ mod tests {
         }
 
         fn drain_microphone_capture(&self, _binding_id: &str) -> Option<DrainResult> {
-            None
+            self.drain_calls.fetch_add(1, Ordering::SeqCst);
+            self.drain_result.lock().unwrap().take()
         }
 
         fn cancel_microphone_capture(&self) {
@@ -620,8 +679,10 @@ mod tests {
     struct FakeBridge {
         supported: bool,
         start_result: Mutex<Option<FullSystemAudioStartResult>>,
+        drain_result: Mutex<Option<FullSystemAudioStopResult>>,
         stop_result: Mutex<Option<FullSystemAudioStopResult>>,
         start_calls: AtomicUsize,
+        drain_calls: AtomicUsize,
         stop_calls: AtomicUsize,
         cancel_calls: AtomicUsize,
         cleanup_calls: AtomicUsize,
@@ -657,6 +718,10 @@ mod tests {
             self.stop_calls.load(Ordering::SeqCst)
         }
 
+        fn drain_calls(&self) -> usize {
+            self.drain_calls.load(Ordering::SeqCst)
+        }
+
         fn cancel_calls(&self) -> usize {
             self.cancel_calls.load(Ordering::SeqCst)
         }
@@ -685,7 +750,8 @@ mod tests {
         }
 
         fn drain_capture(&self) -> FullSystemAudioStopResult {
-            FullSystemAudioStopResult::default()
+            self.drain_calls.fetch_add(1, Ordering::SeqCst);
+            self.drain_result.lock().unwrap().take().unwrap_or_default()
         }
 
         fn cancel_capture(&self) {
@@ -733,6 +799,14 @@ mod tests {
                 sample_rate,
                 channel_count,
             ),
+        }
+    }
+
+    fn drain_result(samples: &[f32]) -> DrainResult {
+        DrainResult {
+            samples: samples.to_vec(),
+            total_speech_samples: samples.len(),
+            saw_pause: false,
         }
     }
 
@@ -787,6 +861,62 @@ mod tests {
         assert_eq!(bridge.stop_calls(), 1);
         assert_eq!(bridge.cleanup_calls(), 1);
         assert_eq!(stop_result.transcription_samples, Some(vec![0.375, 0.125]));
+        assert_eq!(
+            stop_result.transcription_source_samples,
+            vec![
+                FullSystemTranscriptionSourceSamples {
+                    source: FullSystemTranscriptionSource::Microphone,
+                    samples: vec![0.25, -0.25],
+                },
+                FullSystemTranscriptionSourceSamples {
+                    source: FullSystemTranscriptionSource::SystemAudio,
+                    samples: vec![0.5, 0.5],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn drain_session_delta_sources_preserves_source_buffers_and_mixed_audio() {
+        let microphone = Arc::new(FakeMicrophone {
+            drain_result: Mutex::new(Some(drain_result(&[0.2, -0.2]))),
+            ..FakeMicrophone::default()
+        });
+        let bridge = Arc::new(FakeBridge {
+            supported: true,
+            start_result: Mutex::new(Some(supported_start_result())),
+            drain_result: Mutex::new(Some(stop_result_with_pcm(&[0.4, 0.4], 16000, 1))),
+            ..FakeBridge::default()
+        });
+        let manager =
+            FullSystemAudioSessionManager::with_backend(microphone.clone(), bridge.clone());
+
+        let start_result = manager.start_session(
+            "transcribe_full_system_audio",
+            FullSystemAudioCaptureConfig::default(),
+        );
+        assert!(start_result.started);
+
+        let delta = manager
+            .drain_session_delta_sources("transcribe_full_system_audio")
+            .expect("source delta");
+
+        assert_eq!(microphone.drain_calls(), 1);
+        assert_eq!(bridge.drain_calls(), 1);
+        assert_eq!(delta.mixed, Some(vec![0.3, 0.1]));
+        assert_eq!(
+            delta.sources,
+            vec![
+                FullSystemTranscriptionSourceSamples {
+                    source: FullSystemTranscriptionSource::Microphone,
+                    samples: vec![0.2, -0.2],
+                },
+                FullSystemTranscriptionSourceSamples {
+                    source: FullSystemTranscriptionSource::SystemAudio,
+                    samples: vec![0.4, 0.4],
+                },
+            ]
+        );
     }
 
     #[test]

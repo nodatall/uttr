@@ -167,6 +167,8 @@ Ask Selection uses the compact bottom recording/transcribing overlay while the u
 
 A full-system session window should prioritize the live summary and meeting/session output. Raw transcript is available on request, not the default focus. Use a full-window working layout, not a boxed mockup inside another box.
 
+Meeting raw transcripts may show compact source labels when source information is available. Use `Me` for local microphone audio and `Them` for captured system audio. Keep older unlabeled transcripts readable as plain text.
+
 # Do's and Don'ts
 
 Do:
