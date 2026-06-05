@@ -641,6 +641,32 @@ fn store_active_context_async(binding_id: &str) {
     });
 }
 
+fn store_active_context_snapshot(binding_id: &str, snapshot: AppContextSnapshot) {
+    ACTIVE_APP_CONTEXT_REQUESTS
+        .lock()
+        .unwrap()
+        .remove(binding_id);
+    ACTIVE_APP_CONTEXT
+        .lock()
+        .unwrap()
+        .insert(binding_id.to_string(), snapshot);
+}
+
+fn capture_ask_selection_start_context() -> AppContextSnapshot {
+    let started = Instant::now();
+    let snapshot = collect_text_context();
+
+    debug!(
+        "Captured Ask Selection start AX context in {}ms selected_text={}",
+        started.elapsed().as_millis(),
+        snapshot
+            .selected_text
+            .as_deref()
+            .is_some_and(|text| !text.trim().is_empty())
+    );
+    snapshot
+}
+
 fn custom_vocabulary_prompt_block(terms: &[String]) -> Option<String> {
     let terms = normalize_custom_vocabulary_terms(terms);
     if terms.is_empty() {
@@ -1503,23 +1529,6 @@ fn ask_selection_payload(
     }
 }
 
-fn begin_ask_selection_recording_panel(app: &AppHandle) -> u64 {
-    let session_id = ASK_SELECTION_CHAT_SESSION_ID.fetch_add(1, Ordering::Relaxed);
-    if let Ok(mut session) = ASK_SELECTION_CHAT_SESSION.lock() {
-        *session = Some(AskSelectionChatSession {
-            id: session_id,
-            selected_text: None,
-            context: AppContextSnapshot::default(),
-            messages: Vec::new(),
-        });
-    }
-    utils::show_ask_selection_panel(
-        app,
-        ask_selection_payload("recording", Some(session_id), Vec::new(), None, None),
-    );
-    session_id
-}
-
 fn current_ask_selection_session_id() -> u64 {
     ASK_SELECTION_CHAT_SESSION
         .lock()
@@ -2250,7 +2259,7 @@ fn handle_transcription_stop(
             warn!("No samples retrieved from recording stop");
             if completion_mode == TranscriptionCompletionMode::EditMode {
                 let session_id = current_ask_selection_session_id();
-                utils::update_ask_selection_panel(
+                utils::show_ask_selection_panel(
                     &ah,
                     ask_selection_payload(
                         "error",
@@ -2283,7 +2292,7 @@ fn handle_transcription_stop(
         if samples.is_empty() {
             if completion_mode == TranscriptionCompletionMode::EditMode {
                 let session_id = current_ask_selection_session_id();
-                utils::update_ask_selection_panel(
+                utils::show_ask_selection_panel(
                     &ah,
                     ask_selection_payload(
                         "error",
@@ -2441,7 +2450,7 @@ fn handle_transcription_stop(
                 if suspected_no_input && transcription.trim().is_empty() {
                     if completion_mode == TranscriptionCompletionMode::EditMode {
                         let session_id = current_ask_selection_session_id();
-                        utils::update_ask_selection_panel(
+                        utils::show_ask_selection_panel(
                             &ah,
                             ask_selection_payload(
                                 "error",
@@ -2512,7 +2521,7 @@ fn handle_transcription_stop(
                                 "Ask Selection needs selected text before you start recording.";
                             warn!("{}", message);
                             let _ = ah.emit("transcription-error", message.to_string());
-                            utils::update_ask_selection_panel(
+                            utils::show_ask_selection_panel(
                                 &ah,
                                 ask_selection_payload(
                                     "error",
@@ -2536,7 +2545,7 @@ fn handle_transcription_stop(
                             context_snapshot.clone(),
                             thinking_messages.clone(),
                         );
-                        utils::update_ask_selection_panel(
+                        utils::show_ask_selection_panel(
                             &ah,
                             ask_selection_payload(
                                 "thinking",
@@ -2770,7 +2779,7 @@ fn handle_transcription_stop(
                     });
                 } else if completion_mode == TranscriptionCompletionMode::EditMode {
                     let session_id = current_ask_selection_session_id();
-                    utils::update_ask_selection_panel(
+                    utils::show_ask_selection_panel(
                         &ah,
                         ask_selection_payload(
                             "error",
@@ -2794,7 +2803,7 @@ fn handle_transcription_stop(
                     } else {
                         format!("Ask Selection transcription failed: {}", err)
                     };
-                    utils::update_ask_selection_panel(
+                    utils::show_ask_selection_panel(
                         &ah,
                         ask_selection_payload(
                             "error",
@@ -2898,9 +2907,9 @@ impl ShortcutAction for TranscribeAction {
         }
         let is_edit_mode = self.completion_mode == TranscriptionCompletionMode::EditMode;
         if is_edit_mode {
-            begin_ask_selection_recording_panel(app);
-        }
-        if is_edit_mode || self.post_process || settings.post_process_enabled {
+            let snapshot = capture_ask_selection_start_context();
+            store_active_context_snapshot(&binding_id, snapshot);
+        } else if self.post_process || settings.post_process_enabled {
             store_active_context_async(&binding_id);
         }
         let use_incremental = should_use_incremental_transcription(&settings, &tm);
@@ -2937,26 +2946,18 @@ impl ShortcutAction for TranscribeAction {
                 start_time.elapsed().as_millis()
             );
             if recording_started {
-                if !is_edit_mode {
-                    show_recording_overlay(app);
-                    log::info!(
-                        "[latency] transcribe overlay requested binding={} warming=false elapsed_ms={}",
-                        binding_id,
-                        start_time.elapsed().as_millis()
-                    );
-                } else {
-                    log::info!(
-                        "[latency] ask selection panel recording active binding={} elapsed_ms={}",
-                        binding_id,
-                        start_time.elapsed().as_millis()
-                    );
-                }
+                show_recording_overlay(app);
+                log::info!(
+                    "[latency] transcribe overlay requested binding={} warming=false elapsed_ms={}",
+                    binding_id,
+                    start_time.elapsed().as_millis()
+                );
             }
         } else {
             // On-demand mode: Start recording first, then play audio feedback, then apply mute
             // This allows the microphone to be activated before playing the sound
             debug!("On-demand mode: Starting recording first, then audio feedback");
-            if should_show_warming && !is_edit_mode {
+            if should_show_warming {
                 show_warming_overlay(app);
                 log::info!(
                     "[latency] transcribe overlay requested binding={} warming=true elapsed_ms={}",
@@ -2967,20 +2968,12 @@ impl ShortcutAction for TranscribeAction {
             let recording_start_time = Instant::now();
             if rm.try_start_recording(&binding_id) {
                 recording_started = true;
-                if !is_edit_mode {
-                    show_recording_overlay(app);
-                    log::info!(
-                        "[latency] transcribe overlay requested binding={} warming=false elapsed_ms={}",
-                        binding_id,
-                        start_time.elapsed().as_millis()
-                    );
-                } else {
-                    log::info!(
-                        "[latency] ask selection panel recording active binding={} elapsed_ms={}",
-                        binding_id,
-                        start_time.elapsed().as_millis()
-                    );
-                }
+                show_recording_overlay(app);
+                log::info!(
+                    "[latency] transcribe overlay requested binding={} warming=false elapsed_ms={}",
+                    binding_id,
+                    start_time.elapsed().as_millis()
+                );
                 log::info!(
                     "[latency] transcribe recording active binding={} elapsed_ms={}",
                     binding_id,
@@ -3005,7 +2998,7 @@ impl ShortcutAction for TranscribeAction {
 
         if is_edit_mode && !recording_started {
             let session_id = current_ask_selection_session_id();
-            utils::update_ask_selection_panel(
+            utils::show_ask_selection_panel(
                 app,
                 ask_selection_payload(
                     "error",
@@ -3068,16 +3061,7 @@ impl ShortcutAction for TranscribeAction {
         let hm = Arc::clone(&app.state::<Arc<HistoryManager>>());
 
         change_tray_icon(app, TrayIconState::Transcribing);
-        if self.completion_mode == TranscriptionCompletionMode::EditMode {
-            let session_id = current_ask_selection_session_id();
-            utils::update_ask_selection_panel(
-                app,
-                ask_selection_payload("thinking", Some(session_id), Vec::new(), None, None),
-            );
-            utils::hide_recording_overlay(app);
-        } else {
-            spawn_deferred_overlay_state(app, DeferredOverlayState::Transcribing);
-        }
+        spawn_deferred_overlay_state(app, DeferredOverlayState::Transcribing);
 
         // Unmute before playing audio feedback so the stop sound is audible
         rm.remove_mute();

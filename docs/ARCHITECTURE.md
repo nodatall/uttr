@@ -14,7 +14,7 @@ This document records the repo boundaries that are easy to blur during desktop f
 
 - `src-tauri/src/overlay.rs` owns native always-on-top windows, screen positioning, monitor clamping, show/hide events, and mic-level forwarding.
 - `src/overlay/` owns the compact recording overlay only. It should stay non-interactive and focused on recording, transcribing, processing, warning, and mic-level states.
-- `src/ask-selection/` owns the interactive Ask Selection panel. It listens for `ask-selection-state`, renders recording/thinking/result/error states, handles the current-session follow-up chat UI, closes on `Esc` or the close button, and copies assistant answers on click.
+- `src/ask-selection/` owns the interactive Ask Selection panel. It listens for `ask-selection-state`, renders thinking/result/error states after recording, handles the current-session follow-up chat UI, closes on `Esc` or the close button, and copies assistant answers on click.
 
 ## Settings And Labels
 
