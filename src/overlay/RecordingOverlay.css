@@ -11,9 +11,18 @@
   border: none;
   backdrop-filter: blur(11px) saturate(128%);
   border-radius: 18px;
+  clip-path: inset(0 round 18px);
+  overflow: hidden;
   opacity: 0;
   transition: opacity 300ms ease-out;
   box-sizing: border-box;
+  cursor: grab;
+  user-select: none;
+  isolation: isolate;
+}
+
+.recording-overlay:active {
+  cursor: grabbing;
 }
 
 .overlay-middle {

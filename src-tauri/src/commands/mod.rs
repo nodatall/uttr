@@ -25,6 +25,19 @@ pub fn dismiss_overlay(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 #[specta::specta]
+pub fn hide_ask_selection_panel(app: AppHandle) -> Result<(), String> {
+    crate::utils::hide_ask_selection_panel(&app);
+    Ok(())
+}
+
+#[tauri::command]
+#[specta::specta]
+pub fn get_ask_selection_payload() -> Option<crate::utils::AskSelectionPayload> {
+    crate::utils::current_ask_selection_payload()
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn show_main_window(app: AppHandle) -> Result<(), String> {
     let Some(main_window) = app.get_webview_window("main") else {
         return Err("Main window not found.".to_string());

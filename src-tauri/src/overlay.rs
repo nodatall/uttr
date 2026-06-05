@@ -2,7 +2,9 @@ use crate::settings;
 use crate::settings::OverlayPosition;
 use log::debug;
 use serde::Serialize;
+use specta::Type;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
 use tauri::{PhysicalPosition, PhysicalSize};
@@ -50,8 +52,9 @@ const ASK_SELECTION_CURSOR_OFFSET: f64 = 18.0;
 const ASK_SELECTION_SCREEN_MARGIN: f64 = 14.0;
 static OVERLAY_SESSION_EPOCH: AtomicU64 = AtomicU64::new(1);
 static ASK_SELECTION_SESSION_EPOCH: AtomicU64 = AtomicU64::new(1);
+static ASK_SELECTION_LAST_PAYLOAD: Mutex<Option<AskSelectionPayload>> = Mutex::new(None);
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
 pub struct AskSelectionPayload {
     pub state: String,
@@ -424,15 +427,18 @@ pub fn create_recording_overlay(app_handle: &AppHandle) {
         }))
         .has_shadow(false)
         .transparent(true)
+        .movable_by_window_background(true)
         .hides_on_deactivate(false)
         .no_activate(true)
         .corner_radius(0.0)
         .with_window(|w| {
             w.decorations(false)
                 .transparent(true)
+                .background_color(tauri::window::Color(0, 0, 0, 0))
                 .always_on_top(true)
                 .visible_on_all_workspaces(true)
                 .skip_taskbar(true)
+                .accept_first_mouse(true)
         })
         .collection_behavior(
             CollectionBehavior::new()
@@ -829,30 +835,24 @@ fn create_ask_selection_panel(app_handle: &AppHandle) {
         }))
         .has_shadow(true)
         .transparent(true)
-        .hides_on_deactivate(true)
+        .movable_by_window_background(true)
+        .hides_on_deactivate(false)
         .no_activate(false)
         .corner_radius(0.0)
         .with_window(|w| {
             w.decorations(false)
                 .transparent(true)
+                .background_color(tauri::window::Color(0, 0, 0, 0))
                 .always_on_top(true)
-                .visible_on_all_workspaces(true)
+                .visible_on_all_workspaces(false)
                 .skip_taskbar(true)
                 .accept_first_mouse(true)
         })
-        .collection_behavior(
-            CollectionBehavior::new()
-                .can_join_all_spaces()
-                .full_screen_auxiliary(),
-        )
+        .collection_behavior(CollectionBehavior::new().full_screen_auxiliary())
         .build()
     {
-        Ok(panel) => {
-            let _ = panel.hide();
-            debug!(
-                "[overlay] macos created label={} (hidden)",
-                ASK_SELECTION_LABEL
-            );
+        Ok(_) => {
+            debug!("[overlay] macos created label={}", ASK_SELECTION_LABEL);
         }
         Err(error) => {
             debug!(
@@ -899,32 +899,45 @@ fn create_ask_selection_panel(app_handle: &AppHandle) {
 
 pub fn show_ask_selection_panel(app_handle: &AppHandle, payload: AskSelectionPayload) {
     let show_epoch = ASK_SELECTION_SESSION_EPOCH.fetch_add(1, Ordering::Relaxed) + 1;
+    store_ask_selection_payload(&payload);
+    debug!(
+        "[overlay] ask selection show requested state={} epoch={}",
+        payload.state, show_epoch
+    );
 
     #[cfg(target_os = "macos")]
     {
         let app = app_handle.clone();
         let _ = app_handle.run_on_main_thread(move || {
-            let position = calculate_ask_selection_position(&app);
             create_ask_selection_panel(&app);
-            show_ask_selection_panel_inner(&app, payload, position, show_epoch);
+            show_ask_selection_panel_inner(&app, payload, show_epoch);
         });
         return;
     }
 
     #[cfg(not(target_os = "macos"))]
     {
-        let position = calculate_ask_selection_position(app_handle);
         create_ask_selection_panel(app_handle);
-        show_ask_selection_panel_inner(app_handle, payload, position, show_epoch);
+        show_ask_selection_panel_inner(app_handle, payload, show_epoch);
     }
 }
 
 fn show_ask_selection_panel_inner(
     app_handle: &AppHandle,
     payload: AskSelectionPayload,
-    position: Option<(f64, f64)>,
     show_epoch: u64,
 ) {
+    let position = calculate_ask_selection_position(app_handle);
+    let _ = show_ask_selection_panel_window(app_handle, payload.clone(), position, show_epoch);
+    schedule_ask_selection_show_retries(app_handle.clone(), payload, position, show_epoch);
+}
+
+fn show_ask_selection_panel_window(
+    app_handle: &AppHandle,
+    payload: AskSelectionPayload,
+    position: Option<(f64, f64)>,
+    show_epoch: u64,
+) -> bool {
     if let Some(panel_window) = app_handle.get_webview_window(ASK_SELECTION_LABEL) {
         if let Some((x, y)) = position {
             let _ = panel_window
@@ -936,20 +949,29 @@ fn show_ask_selection_panel_inner(
         }));
         let _ = panel_window.emit("ask-selection-state", payload.clone());
         let _ = panel_window.show();
-        let _ = panel_window.set_focus();
 
         #[cfg(target_os = "macos")]
         if let Ok(panel) = app_handle.get_webview_panel(ASK_SELECTION_LABEL) {
             panel.set_level(PanelLevel::Status.value());
             panel.order_front_regardless();
         }
+        let _ = panel_window.set_focus();
+        hide_main_window_for_ask_selection(app_handle);
+        debug!(
+            "[overlay] ask selection shown state={} epoch={}",
+            payload.state, show_epoch
+        );
 
         schedule_ask_selection_state_retries(panel_window, payload, show_epoch);
+        true
+    } else {
+        false
     }
 }
 
 pub fn update_ask_selection_panel(app_handle: &AppHandle, payload: AskSelectionPayload) {
     let show_epoch = ASK_SELECTION_SESSION_EPOCH.fetch_add(1, Ordering::Relaxed) + 1;
+    store_ask_selection_payload(&payload);
 
     #[cfg(target_os = "macos")]
     {
@@ -973,7 +995,27 @@ fn update_ask_selection_panel_inner(
 ) {
     if let Some(panel_window) = app_handle.get_webview_window(ASK_SELECTION_LABEL) {
         let _ = panel_window.emit("ask-selection-state", payload.clone());
+        let _ = panel_window.show();
+
+        #[cfg(target_os = "macos")]
+        if let Ok(panel) = app_handle.get_webview_panel(ASK_SELECTION_LABEL) {
+            panel.set_level(PanelLevel::Status.value());
+            panel.order_front_regardless();
+        }
+        let _ = panel_window.set_focus();
+        hide_main_window_for_ask_selection(app_handle);
+        debug!(
+            "[overlay] ask selection updated state={} epoch={}",
+            payload.state, show_epoch
+        );
+
         schedule_ask_selection_state_retries(panel_window, payload, show_epoch);
+    }
+}
+
+fn hide_main_window_for_ask_selection(app_handle: &AppHandle) {
+    if let Some(main_window) = app_handle.get_webview_window("main") {
+        let _ = main_window.hide();
     }
 }
 
@@ -994,6 +1036,79 @@ fn schedule_ask_selection_state_retries(
         }
         let _ = panel_window.emit("ask-selection-state", payload);
     });
+}
+
+fn schedule_ask_selection_show_retries(
+    app_handle: AppHandle,
+    payload: AskSelectionPayload,
+    position: Option<(f64, f64)>,
+    show_epoch: u64,
+) {
+    std::thread::spawn(move || {
+        for delay_ms in [80, 180, 320] {
+            std::thread::sleep(std::time::Duration::from_millis(delay_ms));
+            if ASK_SELECTION_SESSION_EPOCH.load(Ordering::Relaxed) != show_epoch {
+                return;
+            }
+
+            #[cfg(target_os = "macos")]
+            {
+                let app = app_handle.clone();
+                let payload = payload.clone();
+                let _ = app_handle.run_on_main_thread(move || {
+                    let _ = show_ask_selection_panel_window(&app, payload, position, show_epoch);
+                });
+            }
+
+            #[cfg(not(target_os = "macos"))]
+            {
+                let _ = show_ask_selection_panel_window(
+                    &app_handle,
+                    payload.clone(),
+                    position,
+                    show_epoch,
+                );
+            }
+        }
+    });
+}
+
+fn store_ask_selection_payload(payload: &AskSelectionPayload) {
+    if let Ok(mut current) = ASK_SELECTION_LAST_PAYLOAD.lock() {
+        *current = Some(payload.clone());
+    }
+}
+
+pub fn current_ask_selection_payload() -> Option<AskSelectionPayload> {
+    ASK_SELECTION_LAST_PAYLOAD
+        .lock()
+        .ok()
+        .and_then(|current| current.clone())
+}
+
+pub fn hide_ask_selection_panel(app_handle: &AppHandle) {
+    ASK_SELECTION_SESSION_EPOCH.fetch_add(1, Ordering::Relaxed);
+    if let Ok(mut current) = ASK_SELECTION_LAST_PAYLOAD.lock() {
+        *current = None;
+    }
+
+    #[cfg(target_os = "macos")]
+    {
+        let app = app_handle.clone();
+        let _ = app_handle.run_on_main_thread(move || {
+            if let Some(panel_window) = app.get_webview_window(ASK_SELECTION_LABEL) {
+                let _ = panel_window.hide();
+            }
+        });
+        return;
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        if let Some(panel_window) = app_handle.get_webview_window(ASK_SELECTION_LABEL) {
+            let _ = panel_window.hide();
+        }
+    }
 }
 
 pub fn current_overlay_session_epoch() -> u64 {

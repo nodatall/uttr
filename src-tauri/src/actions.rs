@@ -1989,7 +1989,7 @@ fn handle_transcription_stop(
         recording_duration.unwrap_or_default().as_millis()
     );
 
-    let context_snapshot = take_active_context(
+    let mut context_snapshot = take_active_context(
         binding_id,
         completion_mode == TranscriptionCompletionMode::EditMode,
     );
@@ -2196,12 +2196,36 @@ fn handle_transcription_stop(
                 if !transcription.is_empty() {
                     let settings = get_settings(&ah);
                     if completion_mode == TranscriptionCompletionMode::EditMode {
-                        let Some(selected_text) = context_snapshot
+                        let selected_text = context_snapshot
                             .selected_text
                             .as_deref()
                             .map(str::trim)
                             .filter(|text| !text.is_empty())
-                        else {
+                            .map(ToOwned::to_owned)
+                            .or_else(|| {
+                                match crate::clipboard::capture_selected_text_via_copy(&ah) {
+                                    Ok(Some(text)) => {
+                                        log::info!(
+                                            "Captured Ask Selection text via copy fallback (chars={})",
+                                            text.chars().count()
+                                        );
+                                        context_snapshot.selected_text = Some(text.clone());
+                                        Some(text)
+                                    }
+                                    Ok(None) => {
+                                        debug!(
+                                            "Ask Selection copy fallback did not find selected text"
+                                        );
+                                        None
+                                    }
+                                    Err(error) => {
+                                        warn!("Ask Selection copy fallback unavailable: {}", error);
+                                        None
+                                    }
+                                }
+                            });
+
+                        let Some(selected_text) = selected_text else {
                             let message =
                                 "Ask Selection needs selected text before you start recording.";
                             warn!("{}", message);
@@ -2211,7 +2235,7 @@ fn handle_transcription_stop(
                             return;
                         };
 
-                        spawn_deferred_overlay_state(&ah, DeferredOverlayState::Processing);
+                        utils::hide_recording_overlay(&ah);
                         utils::show_ask_selection_panel(
                             &ah,
                             utils::AskSelectionPayload {
@@ -2223,7 +2247,7 @@ fn handle_transcription_stop(
                         match answer_ask_selection(
                             &ah,
                             &settings,
-                            selected_text,
+                            &selected_text,
                             &transcription,
                             &context_snapshot,
                         )
@@ -2517,6 +2541,9 @@ impl ShortcutAction for TranscribeAction {
             change_tray_icon(app, TrayIconState::Idle);
             utils::hide_recording_overlay(app);
             return;
+        }
+        if self.completion_mode == TranscriptionCompletionMode::EditMode {
+            utils::hide_ask_selection_panel(app);
         }
         if self.completion_mode == TranscriptionCompletionMode::EditMode
             || self.post_process

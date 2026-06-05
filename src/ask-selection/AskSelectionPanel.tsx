@@ -1,8 +1,9 @@
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
 import { RoseThreeLoader } from "@/components/shared";
 
 type AskSelectionState = "loading" | "result" | "error";
@@ -19,21 +20,65 @@ const DEFAULT_PAYLOAD: AskSelectionPayload = {
   error: null,
 };
 
+const payloadsMatch = (
+  first: AskSelectionPayload,
+  second: AskSelectionPayload,
+) =>
+  first.state === second.state &&
+  (first.text ?? null) === (second.text ?? null) &&
+  (first.error ?? null) === (second.error ?? null);
+
 const closePanel = () => {
-  void getCurrentWindow().hide();
+  void invoke("hide_ask_selection_panel").catch(() => {
+    void getCurrentWindow().hide();
+  });
+};
+
+const startPanelDrag = (event: MouseEvent<HTMLElement>) => {
+  if (event.button !== 0) {
+    return;
+  }
+  if ((event.target as HTMLElement).closest("button")) {
+    return;
+  }
+
+  void getCurrentWindow()
+    .startDragging()
+    .catch((error) => {
+      console.warn("Ask Selection drag failed:", error);
+    });
 };
 
 export default function AskSelectionPanel() {
   const [payload, setPayload] = useState<AskSelectionPayload>(DEFAULT_PAYLOAD);
   const [copied, setCopied] = useState(false);
+  const payloadRef = useRef<AskSelectionPayload>(DEFAULT_PAYLOAD);
   const copyResetRef = useRef<number | null>(null);
+
+  const applyPayload = useCallback((nextPayload: AskSelectionPayload | null) => {
+    const normalizedPayload = nextPayload ?? DEFAULT_PAYLOAD;
+    if (payloadsMatch(payloadRef.current, normalizedPayload)) {
+      return;
+    }
+
+    payloadRef.current = normalizedPayload;
+    setPayload(normalizedPayload);
+    setCopied(false);
+  }, []);
+
+  const refreshPayload = useCallback(() => {
+    void invoke<AskSelectionPayload | null>("get_ask_selection_payload")
+      .then((latestPayload) => {
+        applyPayload(latestPayload);
+      })
+      .catch(() => {});
+  }, [applyPayload]);
 
   useEffect(() => {
     const unlistenPromise = listen<AskSelectionPayload>(
       "ask-selection-state",
       (event) => {
-        setPayload(event.payload);
-        setCopied(false);
+        applyPayload(event.payload);
       },
     );
 
@@ -42,22 +87,42 @@ export default function AskSelectionPanel() {
         closePanel();
       }
     };
-    const handleBlur = () => {
-      closePanel();
+
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        refreshPayload();
+      }
     };
 
+    refreshPayload();
     window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("blur", handleBlur);
+    window.addEventListener("focus", refreshPayload);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       void unlistenPromise.then((unlisten) => unlisten());
       window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("blur", handleBlur);
+      window.removeEventListener("focus", refreshPayload);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
       if (copyResetRef.current !== null) {
         window.clearTimeout(copyResetRef.current);
       }
     };
-  }, []);
+  }, [applyPayload, refreshPayload]);
+
+  useEffect(() => {
+    if (payload.state !== "loading") {
+      return;
+    }
+
+    const interval = window.setInterval(() => {
+      refreshPayload();
+    }, 500);
+
+    return () => {
+      window.clearInterval(interval);
+    };
+  }, [payload.state, refreshPayload]);
 
   const handleCopy = async () => {
     const text = payload.text?.trim();
@@ -88,8 +153,13 @@ export default function AskSelectionPanel() {
       <section
         className="ask-selection-panel"
         aria-label="Ask Selection result"
+        data-tauri-drag-region
+        onMouseDown={startPanelDrag}
       >
-        <header className="ask-selection-header">
+        <header
+          className="ask-selection-header"
+          data-tauri-drag-region
+        >
           <span
             className={`ask-selection-status ${copied ? "ask-selection-status-visible" : ""}`}
             aria-live="polite"

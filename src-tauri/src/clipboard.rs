@@ -19,6 +19,8 @@ const CLIPBOARD_SYNC_RETRY_DELAY_MS: u64 = 8;
 const CLIPBOARD_ACCESS_TIMEOUT_MS: u64 = 500;
 const CLIPBOARD_MIN_PASTE_DELAY_MS: u64 = 120;
 const CLIPBOARD_RESTORE_DELAY_MS: u64 = 400;
+const SELECTION_COPY_ATTEMPTS: usize = 12;
+const SELECTION_COPY_RETRY_DELAY_MS: u64 = 35;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum ClipboardWriteSyncStatus {
@@ -130,6 +132,96 @@ fn wait_for_clipboard_sync(app_handle: &AppHandle, expected: &str) -> ClipboardW
     } else {
         ClipboardWriteSyncStatus::Unavailable
     }
+}
+
+fn send_copy_shortcut(enigo: &mut Enigo) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    let (modifier_key, c_key_code) = (Key::Meta, Key::Other(8));
+    #[cfg(target_os = "windows")]
+    let (modifier_key, c_key_code) = (Key::Control, Key::Other(0x43));
+    #[cfg(target_os = "linux")]
+    let (modifier_key, c_key_code) = (Key::Control, Key::Unicode('c'));
+
+    enigo
+        .key(modifier_key, Direction::Press)
+        .map_err(|e| format!("Failed to press copy modifier: {}", e))?;
+    enigo
+        .key(c_key_code, Direction::Click)
+        .map_err(|e| format!("Failed to click copy key: {}", e))?;
+    std::thread::sleep(Duration::from_millis(30));
+    enigo
+        .key(modifier_key, Direction::Release)
+        .map_err(|e| format!("Failed to release copy modifier: {}", e))?;
+
+    Ok(())
+}
+
+pub fn capture_selected_text_via_copy(app_handle: &AppHandle) -> Result<Option<String>, String> {
+    let original_text = match read_clipboard_text_with_timeout(app_handle) {
+        Ok(text) => text,
+        Err(error) => {
+            return Err(format!(
+                "Skipping copy fallback because the current text clipboard could not be read: {}",
+                error
+            ));
+        }
+    };
+
+    let sentinel = format!("__uttr_selection_capture_{}__", uuid::Uuid::new_v4());
+    write_clipboard_text_with_timeout(app_handle, sentinel.clone(), false)?;
+    match wait_for_clipboard_sync(app_handle, &sentinel) {
+        ClipboardWriteSyncStatus::Synced => {}
+        ClipboardWriteSyncStatus::Unavailable => {
+            let _ = write_clipboard_text_with_timeout(app_handle, original_text, false);
+            return Err("Skipping copy fallback because clipboard readback is unavailable.".into());
+        }
+        ClipboardWriteSyncStatus::Mismatch => {
+            let _ = write_clipboard_text_with_timeout(app_handle, original_text, false);
+            return Err("Skipping copy fallback because clipboard sentinel did not sync.".into());
+        }
+    }
+
+    let copy_result = (|| {
+        let enigo_state = app_handle
+            .try_state::<EnigoState>()
+            .ok_or("Enigo state not initialized")?;
+        let mut enigo = enigo_state
+            .0
+            .lock()
+            .map_err(|e| format!("Failed to lock Enigo: {}", e))?;
+        send_copy_shortcut(&mut enigo)
+    })();
+
+    if let Err(error) = copy_result {
+        let _ = write_clipboard_text_with_timeout(app_handle, original_text, false);
+        return Err(error);
+    }
+
+    let mut captured_text = None;
+    for attempt in 0..SELECTION_COPY_ATTEMPTS {
+        if let Ok(current) = read_clipboard_text_with_timeout(app_handle) {
+            if !clipboard_text_matches(&current, &sentinel) {
+                let trimmed = current.trim();
+                if !trimmed.is_empty() {
+                    captured_text = Some(trimmed.chars().take(6_000).collect());
+                }
+                break;
+            }
+        }
+
+        if attempt + 1 < SELECTION_COPY_ATTEMPTS {
+            std::thread::sleep(Duration::from_millis(SELECTION_COPY_RETRY_DELAY_MS));
+        }
+    }
+
+    write_clipboard_text_with_timeout(app_handle, original_text, false).map_err(|error| {
+        format!(
+            "Failed to restore clipboard after selection capture: {}",
+            error
+        )
+    })?;
+
+    Ok(captured_text)
 }
 
 fn effective_clipboard_paste_delay_ms(configured_delay_ms: u64) -> u64 {
@@ -852,5 +944,13 @@ mod tests {
     #[test]
     fn clipboard_restore_delay_matches_expected_value() {
         assert_eq!(CLIPBOARD_RESTORE_DELAY_MS, 400);
+    }
+
+    #[test]
+    fn selection_copy_retry_budget_is_short() {
+        assert_eq!(
+            SELECTION_COPY_ATTEMPTS as u64 * SELECTION_COPY_RETRY_DELAY_MS,
+            420
+        );
     }
 }

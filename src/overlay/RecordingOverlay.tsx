@@ -1,4 +1,5 @@
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./RecordingOverlay.css";
 import i18n, { syncLanguageFromSettings } from "@/i18n";
@@ -56,6 +57,18 @@ const clamp = (value: number, min: number, max: number) =>
   Math.min(max, Math.max(min, value));
 const lerp = (start: number, end: number, amount: number) =>
   start + (end - start) * amount;
+
+const startOverlayDrag = (event: React.MouseEvent<HTMLDivElement>) => {
+  if (event.button !== 0) {
+    return;
+  }
+
+  void getCurrentWindow()
+    .startDragging()
+    .catch((error) => {
+      console.warn("Recording overlay drag failed:", error);
+    });
+};
 
 const RecordingOverlay: React.FC = () => {
   const [waveHostWidth, setWaveHostWidth] = useState(0);
@@ -481,6 +494,8 @@ const RecordingOverlay: React.FC = () => {
     <div
       dir={direction}
       className={`recording-overlay ${isVisible ? "fade-in" : ""}`}
+      data-tauri-drag-region
+      onMouseDown={startOverlayDrag}
     >
       <div
         className={`overlay-middle ${isRecordingState ? "overlay-middle-full" : "overlay-split"}`}

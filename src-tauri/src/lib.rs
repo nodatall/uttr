@@ -367,6 +367,8 @@ pub fn run() {
         trigger_update_check,
         commands::cancel_operation,
         commands::dismiss_overlay,
+        commands::hide_ask_selection_panel,
+        commands::get_ask_selection_payload,
         commands::show_main_window,
         commands::get_app_dir_path,
         commands::log_frontend_startup,
