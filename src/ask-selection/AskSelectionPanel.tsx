@@ -3,21 +3,39 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type MouseEvent } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
+} from "react";
 import { RoseThreeLoader } from "@/components/shared";
 
-type AskSelectionState = "loading" | "result" | "error";
+type AskSelectionState = "recording" | "thinking" | "result" | "error";
+
+type AskSelectionMessage = {
+  role: "user" | "assistant" | string;
+  text: string;
+  pending: boolean;
+};
 
 type AskSelectionPayload = {
   state: AskSelectionState;
   text?: string | null;
   error?: string | null;
+  sessionId?: number | null;
+  messages?: AskSelectionMessage[] | null;
 };
 
 const DEFAULT_PAYLOAD: AskSelectionPayload = {
-  state: "loading",
+  state: "thinking",
   text: null,
   error: null,
+  sessionId: null,
+  messages: [],
 };
 
 const payloadsMatch = (
@@ -26,7 +44,9 @@ const payloadsMatch = (
 ) =>
   first.state === second.state &&
   (first.text ?? null) === (second.text ?? null) &&
-  (first.error ?? null) === (second.error ?? null);
+  (first.error ?? null) === (second.error ?? null) &&
+  (first.sessionId ?? null) === (second.sessionId ?? null) &&
+  JSON.stringify(first.messages ?? []) === JSON.stringify(second.messages ?? []);
 
 const closePanel = () => {
   void invoke("hide_ask_selection_panel").catch(() => {
@@ -41,6 +61,9 @@ const startPanelDrag = (event: MouseEvent<HTMLElement>) => {
   if ((event.target as HTMLElement).closest("button")) {
     return;
   }
+  if ((event.target as HTMLElement).closest("textarea,input")) {
+    return;
+  }
 
   void getCurrentWindow()
     .startDragging()
@@ -52,11 +75,18 @@ const startPanelDrag = (event: MouseEvent<HTMLElement>) => {
 export default function AskSelectionPanel() {
   const [payload, setPayload] = useState<AskSelectionPayload>(DEFAULT_PAYLOAD);
   const [copied, setCopied] = useState(false);
+  const [draft, setDraft] = useState("");
+  const [isSending, setIsSending] = useState(false);
   const payloadRef = useRef<AskSelectionPayload>(DEFAULT_PAYLOAD);
   const copyResetRef = useRef<number | null>(null);
+  const messageListRef = useRef<HTMLDivElement | null>(null);
 
   const applyPayload = useCallback((nextPayload: AskSelectionPayload | null) => {
-    const normalizedPayload = nextPayload ?? DEFAULT_PAYLOAD;
+    const normalizedPayload = {
+      ...DEFAULT_PAYLOAD,
+      ...(nextPayload ?? {}),
+      messages: nextPayload?.messages ?? [],
+    };
     if (payloadsMatch(payloadRef.current, normalizedPayload)) {
       return;
     }
@@ -64,6 +94,7 @@ export default function AskSelectionPanel() {
     payloadRef.current = normalizedPayload;
     setPayload(normalizedPayload);
     setCopied(false);
+    setIsSending(normalizedPayload.state === "thinking");
   }, []);
 
   const refreshPayload = useCallback(() => {
@@ -82,7 +113,7 @@ export default function AskSelectionPanel() {
       },
     );
 
-    const handleKeyDown = (event: KeyboardEvent) => {
+    const handleKeyDown = (event: globalThis.KeyboardEvent) => {
       if (event.key === "Escape") {
         closePanel();
       }
@@ -111,7 +142,7 @@ export default function AskSelectionPanel() {
   }, [applyPayload, refreshPayload]);
 
   useEffect(() => {
-    if (payload.state !== "loading") {
+    if (payload.state !== "thinking" && payload.state !== "recording") {
       return;
     }
 
@@ -124,14 +155,21 @@ export default function AskSelectionPanel() {
     };
   }, [payload.state, refreshPayload]);
 
-  const handleCopy = async () => {
-    const text = payload.text?.trim();
-    if (!text) {
+  useEffect(() => {
+    messageListRef.current?.scrollTo({
+      top: messageListRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [payload.messages?.length, payload.state]);
+
+  const handleCopy = async (text: string | null | undefined) => {
+    const cleanText = text?.trim();
+    if (!cleanText) {
       return;
     }
 
     try {
-      await writeText(text);
+      await writeText(cleanText);
       setCopied(true);
       if (copyResetRef.current !== null) {
         window.clearTimeout(copyResetRef.current);
@@ -144,17 +182,75 @@ export default function AskSelectionPanel() {
     }
   };
 
+  const sendFollowUp = useCallback(async () => {
+    const message = draft.trim();
+    const sessionId = payload.sessionId;
+    if (!message || !sessionId || isSending) {
+      return;
+    }
+
+    const optimisticMessages = [
+      ...(payload.messages ?? []),
+      { role: "user", text: message, pending: false },
+      { role: "assistant", text: "Thinking...", pending: true },
+    ];
+    const optimisticPayload: AskSelectionPayload = {
+      ...payload,
+      state: "thinking",
+      messages: optimisticMessages,
+    };
+    payloadRef.current = optimisticPayload;
+    setPayload(optimisticPayload);
+    setDraft("");
+    setCopied(false);
+    setIsSending(true);
+
+    try {
+      const nextPayload = await invoke<AskSelectionPayload>(
+        "ask_selection_follow_up",
+        {
+          sessionId,
+          message,
+        },
+      );
+      applyPayload(nextPayload);
+    } catch (error) {
+      const errorPayload: AskSelectionPayload = {
+        ...payloadRef.current,
+        state: "error",
+        error: String(error),
+      };
+      applyPayload(errorPayload);
+    } finally {
+      setIsSending(false);
+    }
+  }, [applyPayload, draft, isSending, payload]);
+
+  const handleComposerKeyDown = (
+    event: ReactKeyboardEvent<HTMLTextAreaElement>,
+  ) => {
+    if (event.key !== "Enter" || event.shiftKey) {
+      return;
+    }
+    event.preventDefault();
+    void sendFollowUp();
+  };
+
   const statusText = copied ? "Copied" : "";
-  const hasResult = payload.state === "result" && payload.text?.trim();
+  const messages = useMemo(() => payload.messages ?? [], [payload.messages]);
   const hasError = payload.state === "error";
+  const hasMessages = messages.length > 0;
+  const hasCompletedAssistantMessage = messages.some(
+    (message) => message.role === "assistant" && !message.pending,
+  );
+  const canChat =
+    Boolean(payload.sessionId) && hasCompletedAssistantMessage && !hasError;
 
   return (
     <div className="ask-selection-shell">
       <section
         className="ask-selection-panel"
         aria-label="Ask Selection result"
-        data-tauri-drag-region
-        onMouseDown={startPanelDrag}
       >
         <header
           className="ask-selection-header"
@@ -175,9 +271,20 @@ export default function AskSelectionPanel() {
             <X aria-hidden="true" size={15} strokeWidth={2.2} />
           </button>
         </header>
-        <div className="ask-selection-body">
-          {payload.state === "loading" && (
-            <div className="ask-selection-loading" role="status">
+        <div className="ask-selection-body" ref={messageListRef}>
+          {payload.state === "recording" && !hasMessages && (
+            <div className="ask-selection-centered-state" role="status">
+              <div className="ask-selection-audio-bars" aria-hidden="true">
+                <span />
+                <span />
+                <span />
+                <span />
+              </div>
+              <span>Listening...</span>
+            </div>
+          )}
+          {payload.state === "thinking" && !hasMessages && (
+            <div className="ask-selection-centered-state" role="status">
               <RoseThreeLoader
                 className="ask-selection-loader"
                 ariaLabel="Thinking"
@@ -185,14 +292,41 @@ export default function AskSelectionPanel() {
               <span>Thinking...</span>
             </div>
           )}
-          {hasResult && (
-            <button
-              type="button"
-              className="ask-selection-result"
-              onClick={handleCopy}
-            >
-              {payload.text}
-            </button>
+          {hasMessages && (
+            <div className="ask-selection-messages">
+              {messages.map((message, index) => {
+                const isAssistant = message.role === "assistant";
+                const messageClass = `ask-selection-message ask-selection-message-${isAssistant ? "assistant" : "user"}${message.pending ? " ask-selection-message-pending" : ""}`;
+                if (isAssistant && !message.pending) {
+                  return (
+                    <button
+                      type="button"
+                      className={messageClass}
+                      onClick={() => void handleCopy(message.text)}
+                      key={`${message.role}-${index}`}
+                    >
+                      {message.text}
+                    </button>
+                  );
+                }
+
+                return (
+                  <div className={messageClass} key={`${message.role}-${index}`}>
+                    {message.pending && isAssistant ? (
+                      <>
+                        <RoseThreeLoader
+                          className="ask-selection-message-loader"
+                          ariaLabel="Thinking"
+                        />
+                        <span>Thinking...</span>
+                      </>
+                    ) : (
+                      message.text
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           )}
           {hasError && (
             <p className="ask-selection-error">
@@ -200,6 +334,17 @@ export default function AskSelectionPanel() {
             </p>
           )}
         </div>
+        {canChat && (
+          <div className="ask-selection-composer">
+            <textarea
+              aria-label="Follow-up message"
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              onKeyDown={handleComposerKeyDown}
+              disabled={isSending}
+            />
+          </div>
+        )}
       </section>
     </div>
   );

@@ -1,7 +1,7 @@
 use crate::settings;
 use crate::settings::OverlayPosition;
 use log::debug;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -46,13 +46,21 @@ const OVERLAY_ALERT_WIDTH: f64 = 260.0;
 const OVERLAY_ALERT_HEIGHT: f64 = 72.0;
 const OVERLAY_LABEL_BASE: &str = "recording_overlay";
 const ASK_SELECTION_LABEL: &str = "ask_selection_panel";
-const ASK_SELECTION_WIDTH: f64 = 420.0;
-const ASK_SELECTION_HEIGHT: f64 = 260.0;
+const ASK_SELECTION_WIDTH: f64 = 760.0;
+const ASK_SELECTION_HEIGHT: f64 = 520.0;
 const ASK_SELECTION_CURSOR_OFFSET: f64 = 18.0;
 const ASK_SELECTION_SCREEN_MARGIN: f64 = 14.0;
 static OVERLAY_SESSION_EPOCH: AtomicU64 = AtomicU64::new(1);
 static ASK_SELECTION_SESSION_EPOCH: AtomicU64 = AtomicU64::new(1);
 static ASK_SELECTION_LAST_PAYLOAD: Mutex<Option<AskSelectionPayload>> = Mutex::new(None);
+
+#[derive(Clone, Deserialize, Serialize, Type)]
+#[serde(rename_all = "camelCase")]
+pub struct AskSelectionMessage {
+    pub role: String,
+    pub text: String,
+    pub pending: bool,
+}
 
 #[derive(Clone, Serialize, Type)]
 #[serde(rename_all = "camelCase")]
@@ -60,6 +68,8 @@ pub struct AskSelectionPayload {
     pub state: String,
     pub text: Option<String>,
     pub error: Option<String>,
+    pub session_id: Option<u64>,
+    pub messages: Vec<AskSelectionMessage>,
 }
 
 #[cfg(target_os = "macos")]

@@ -38,6 +38,16 @@ pub fn get_ask_selection_payload() -> Option<crate::utils::AskSelectionPayload> 
 
 #[tauri::command]
 #[specta::specta]
+pub async fn ask_selection_follow_up(
+    app: AppHandle,
+    session_id: u64,
+    message: String,
+) -> Result<crate::utils::AskSelectionPayload, String> {
+    crate::actions::answer_ask_selection_follow_up(app, session_id, message).await
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn show_main_window(app: AppHandle) -> Result<(), String> {
     let Some(main_window) = app.get_webview_window("main") else {
         return Err("Main window not found.".to_string());

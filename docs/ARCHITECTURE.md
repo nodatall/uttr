@@ -14,7 +14,7 @@ This document records the repo boundaries that are easy to blur during desktop f
 
 - `src-tauri/src/overlay.rs` owns native always-on-top windows, screen positioning, monitor clamping, show/hide events, and mic-level forwarding.
 - `src/overlay/` owns the compact recording overlay only. It should stay non-interactive and focused on recording, transcribing, processing, warning, and mic-level states.
-- `src/ask-selection/` owns the interactive Ask Selection panel. It listens for `ask-selection-state`, renders loading/result/error states, closes on `Esc`, close button, or focus loss, and copies the result text on click.
+- `src/ask-selection/` owns the interactive Ask Selection panel. It listens for `ask-selection-state`, renders recording/thinking/result/error states, handles the current-session follow-up chat UI, closes on `Esc` or the close button, and copies assistant answers on click.
 
 ## Settings And Labels
 
@@ -25,5 +25,5 @@ This document records the repo boundaries that are easy to blur during desktop f
 ## Dependency Direction
 
 - Backend actions may call overlay/window helpers, history, transcription, summary providers, and clipboard utilities.
-- Frontend panel code should not know about recording internals. It receives state payloads from Rust and sends only local UI actions such as close and copy.
+- Frontend panel code should not know about recording internals. It receives state payloads from Rust and sends only local UI actions such as close, copy, and current-session follow-up messages. Selected text for Ask Selection follow-ups stays backend-side.
 - Normal dictation and meeting recording should not depend on Ask Selection UI code.

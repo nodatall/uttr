@@ -161,7 +161,7 @@ The recording overlay should feel immediate and lightweight. It may use the app 
 
 ## Ask Selection Panel
 
-Ask Selection is an interactive floating panel, not a recording overlay state. It should use the settings-style dark translucent surface, subtle border, compact top-right close button, and the shared rose loader for thinking/loading. Do not show a title in the panel. The result text is the primary surface; clicking it copies the answer while keeping the answer visible and showing only a small `Copied` status in the header.
+Ask Selection is an interactive floating chat panel, not a recording overlay state. It should use the settings-style dark translucent surface, subtle border, compact top-right close button, and the shared rose loader for thinking/loading. Do not show a title in the panel, explanatory copy hints, placeholder text, or a visible send button. Listening and thinking states happen inside the panel; normal dictation keeps the separate compact recording overlay. Assistant answers can be clicked to copy while keeping the answer visible and showing only a small `Copied` status in the header. Follow-up messages send with Enter; Shift+Enter inserts a newline.
 
 ## Session Workspace
 
