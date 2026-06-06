@@ -26,6 +26,7 @@ pub fn dismiss_overlay(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 #[specta::specta]
 pub fn hide_ask_selection_panel(app: AppHandle) -> Result<(), String> {
+    crate::actions::clear_ask_selection_session();
     crate::utils::hide_ask_selection_panel(&app);
     Ok(())
 }

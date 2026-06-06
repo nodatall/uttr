@@ -1638,6 +1638,12 @@ fn current_ask_selection_session_id() -> u64 {
         .unwrap_or_else(|| ASK_SELECTION_CHAT_SESSION_ID.fetch_add(1, Ordering::Relaxed))
 }
 
+pub fn clear_ask_selection_session() {
+    if let Ok(mut session) = ASK_SELECTION_CHAT_SESSION.lock() {
+        *session = None;
+    }
+}
+
 fn update_ask_selection_session(
     session_id: u64,
     selected_text: Option<String>,
@@ -3147,6 +3153,9 @@ impl ShortcutAction for TranscribeAction {
             return;
         }
         let is_edit_mode = self.completion_mode == TranscriptionCompletionMode::EditMode;
+        if is_edit_mode {
+            clear_ask_selection_session();
+        }
         if !is_edit_mode && (self.post_process || settings.post_process_enabled) {
             store_active_context_async(&binding_id);
         }
@@ -3778,16 +3787,18 @@ mod tests {
     use super::{
         ask_selection_message, build_ask_selection_follow_up_prompt, build_ask_selection_prompt,
         build_live_summary_prompt, clean_ask_selection_response, clean_post_process_response,
-        custom_vocabulary_prompt_block, format_labeled_transcript_segments,
-        friendly_live_summary_error, is_effectively_silent_audio, is_supported_post_process_model,
+        clear_ask_selection_session, current_ask_selection_messages,
+        current_ask_selection_session_id, custom_vocabulary_prompt_block,
+        format_labeled_transcript_segments, friendly_live_summary_error,
+        is_effectively_silent_audio, is_supported_post_process_model,
         normalize_live_summary_output, parse_meeting_summary_state,
         render_meeting_summary_markdown, resolved_post_process_system_prompt,
         select_preferred_groq_model, should_pause_live_summaries,
         should_refresh_microphone_stream_after_suspected_no_input, should_update_live_summary,
         toggle_post_process_enabled, transcription_timeout_for_samples,
-        transcription_watchdog_delay, usable_post_processed_text, LabeledTranscriptSegment,
-        MeetingSummaryState, SummaryPoint, TranscriptionCompletionMode, ACTION_MAP,
-        FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT, FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL,
+        transcription_watchdog_delay, update_ask_selection_session, usable_post_processed_text,
+        LabeledTranscriptSegment, MeetingSummaryState, SummaryPoint, TranscriptionCompletionMode,
+        ACTION_MAP, FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT, FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL,
     };
     use crate::app_context::AppContextSnapshot;
     use crate::managers::full_system_audio::FullSystemTranscriptionSource;
@@ -3905,6 +3916,24 @@ mod tests {
         assert!(prompt.contains("Google Docs"));
         assert!(prompt.contains("FreeFlow"));
         assert!(prompt.contains("<uttr_ask_output>"));
+    }
+
+    #[test]
+    fn clear_ask_selection_session_drops_prior_messages() {
+        let session_id = current_ask_selection_session_id();
+        update_ask_selection_session(
+            session_id,
+            Some("selected text".to_string()),
+            AppContextSnapshot::default(),
+            vec![ask_selection_message("assistant", "Previous answer", false)],
+        );
+
+        assert_eq!(current_ask_selection_messages().len(), 1);
+
+        clear_ask_selection_session();
+
+        assert!(current_ask_selection_messages().is_empty());
+        assert_ne!(current_ask_selection_session_id(), session_id);
     }
 
     #[test]
