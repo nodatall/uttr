@@ -1,4 +1,4 @@
-use crate::actions::ACTION_MAP;
+use crate::actions::{promote_active_transcription_to_edit_mode, ACTION_MAP};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::full_system_audio::FullSystemAudioSessionManager;
 use crate::managers::transcription::TranscriptionManager;
@@ -36,6 +36,14 @@ enum Stage {
     Idle,
     Recording(String), // binding_id
     Processing,
+}
+
+fn stage_label(stage: &Stage) -> String {
+    match stage {
+        Stage::Idle => "Idle".to_string(),
+        Stage::Recording(binding_id) => format!("Recording({binding_id})"),
+        Stage::Processing => "Processing".to_string(),
+    }
 }
 
 #[derive(Default)]
@@ -136,6 +144,13 @@ impl TranscriptionCoordinator {
                         push_to_talk,
                         received_at,
                     } => {
+                        warn!(
+                            "[ask-hotkey] coordinator_input binding={} pressed={} push_to_talk={} stage={}",
+                            binding_id,
+                            is_pressed,
+                            push_to_talk,
+                            stage_label(&stage)
+                        );
                         // Debounce rapid-fire press events (key repeat / double-tap).
                         // Releases always pass through for push-to-talk.
                         if is_pressed {
@@ -179,6 +194,32 @@ impl TranscriptionCoordinator {
                                 );
                                 stop(&app, &mut stage, &binding_id, &hotkey_string);
                                 processing_started_at = Some(Instant::now());
+                            } else if is_pressed
+                                && matches!(&stage, Stage::Recording(active_binding_id)
+                                    if binding_id == "edit_mode" && active_binding_id == "transcribe")
+                            {
+                                let Stage::Recording(from_binding_id) = &stage else {
+                                    unreachable!();
+                                };
+                                let from_binding_id = from_binding_id.clone();
+                                if promote_active_transcription_to_edit_mode(
+                                    &app,
+                                    &from_binding_id,
+                                    &binding_id,
+                                ) {
+                                    info!(
+                                        "Promoted push-to-talk recording from '{}' to '{}'",
+                                        from_binding_id, binding_id
+                                    );
+                                    stage = Stage::Recording(binding_id.clone());
+                                } else {
+                                    warn!(
+                                        "[ask-hotkey] promotion_failed from={} to={} stage={}",
+                                        from_binding_id,
+                                        binding_id,
+                                        stage_label(&stage)
+                                    );
+                                }
                             } else if !is_pressed
                                 && matches!(&stage, Stage::Recording(id) if id == &binding_id)
                             {

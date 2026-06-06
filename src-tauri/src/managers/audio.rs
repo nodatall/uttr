@@ -544,6 +544,30 @@ impl AudioRecordingManager {
             _ => None,
         }
     }
+
+    pub fn transfer_recording_binding(&self, from_binding_id: &str, to_binding_id: &str) -> bool {
+        let mut state = self.state.lock().unwrap();
+        match *state {
+            RecordingState::Recording {
+                binding_id: ref active,
+            } if active == from_binding_id => {
+                *state = RecordingState::Recording {
+                    binding_id: to_binding_id.to_string(),
+                };
+                info!(
+                    "Transferred active recording binding from '{}' to '{}'",
+                    from_binding_id, to_binding_id
+                );
+                warn!(
+                    "[ask-hotkey] audio_transfer from={} to={}",
+                    from_binding_id, to_binding_id
+                );
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub fn is_recording(&self) -> bool {
         matches!(
             *self.state.lock().unwrap(),

@@ -1092,6 +1092,61 @@ fn start_transcription_session(app: &AppHandle, binding_id: &str, started: bool)
     );
 }
 
+pub fn promote_active_transcription_to_edit_mode(
+    app: &AppHandle,
+    from_binding_id: &str,
+    to_binding_id: &str,
+) -> bool {
+    if from_binding_id == to_binding_id || to_binding_id != "edit_mode" {
+        warn!(
+            "[ask-hotkey] promote_rejected invalid_target from={} to={}",
+            from_binding_id, to_binding_id
+        );
+        return false;
+    }
+
+    let settings = get_settings(app);
+    if !settings.edit_mode_enabled {
+        warn!(
+            "[ask-hotkey] promote_rejected edit_mode_disabled from={} to={}",
+            from_binding_id, to_binding_id
+        );
+        return false;
+    }
+
+    let rm = app.state::<Arc<AudioRecordingManager>>();
+    if !rm.transfer_recording_binding(from_binding_id, to_binding_id) {
+        warn!(
+            "[ask-hotkey] promote_rejected audio_owner_mismatch from={} to={}",
+            from_binding_id, to_binding_id
+        );
+        return false;
+    }
+
+    clear_ask_selection_session();
+    utils::hide_ask_selection_panel(app);
+    let context_start = Instant::now();
+    let snapshot = capture_ask_selection_start_context();
+    store_active_context_snapshot(to_binding_id, snapshot);
+
+    if let Some(tm) = app.try_state::<Arc<TranscriptionManager>>() {
+        tm.cancel_incremental_session();
+    }
+
+    log::info!(
+        "[latency] promoted active transcription to edit_mode from_binding={} elapsed_ms={}",
+        from_binding_id,
+        context_start.elapsed().as_millis()
+    );
+    warn!(
+        "[ask-hotkey] promoted_active_recording from={} to={} context_elapsed_ms={}",
+        from_binding_id,
+        to_binding_id,
+        context_start.elapsed().as_millis()
+    );
+    true
+}
+
 fn focus_workspace_window(app: &AppHandle) {
     if let Some(main_window) = app.get_webview_window("main") {
         if let Err(e) = main_window.show() {
@@ -1600,7 +1655,7 @@ async fn summarize_live_session(
     })
 }
 
-const ASK_SELECTION_SYSTEM_PROMPT: &str = "You answer a spoken request using the user's selected text as context. Return only the answer. Do not replace, rewrite, or quote the selection unless the request asks for that. Do not explain your process, wrap in markdown fences, or include labels.";
+const ASK_SELECTION_SYSTEM_PROMPT: &str = "You answer a spoken request. If selected text is provided, use it as context; otherwise answer the request directly like a chat question. Return only the answer. Do not replace, rewrite, or quote selected text unless the request asks for that. Do not explain your process, wrap in markdown fences, or include labels.";
 
 fn ask_selection_message(
     role: impl Into<String>,
@@ -1682,11 +1737,19 @@ fn build_ask_selection_prompt(
     context: &AppContextSnapshot,
     custom_vocabulary_terms: &[String],
 ) -> String {
-    let mut prompt = format!(
-        "# Task\nAnswer the spoken request using the selected text as context. Return only the answer inside <uttr_ask_output>...</uttr_ask_output>. Do not modify the user's selected text or produce replacement text unless the spoken request explicitly asks for a rewrite.\n\n# Spoken request\n{}\n\n# Selected text\n{}",
-        spoken_instruction.trim(),
-        selected_text
-    );
+    let selected_text = selected_text.trim();
+    let mut prompt = if selected_text.is_empty() {
+        format!(
+            "# Task\nAnswer the spoken request directly as a chat question. No selected text was provided. Return only the answer inside <uttr_ask_output>...</uttr_ask_output>.\n\n# Spoken request\n{}",
+            spoken_instruction.trim()
+        )
+    } else {
+        format!(
+            "# Task\nAnswer the spoken request using the selected text as context. Return only the answer inside <uttr_ask_output>...</uttr_ask_output>. Do not modify the user's selected text or produce replacement text unless the spoken request explicitly asks for a rewrite.\n\n# Spoken request\n{}\n\n# Selected text\n{}",
+            spoken_instruction.trim(),
+            selected_text
+        )
+    };
 
     if let Some(block) = app_context_prompt_block(context) {
         prompt.push_str("\n\n# Context\n");
@@ -1725,11 +1788,19 @@ fn build_ask_selection_follow_up_prompt(
     custom_vocabulary_terms: &[String],
 ) -> String {
     let conversation = render_ask_selection_conversation(messages);
-    let mut prompt = format!(
-        "# Task\nAnswer the latest follow-up using the selected text and prior Ask Selection chat as context. Return only the answer inside <uttr_ask_output>...</uttr_ask_output>. Do not invent facts outside the selected text unless the user asks a general question.\n\n# Latest follow-up\n{}\n\n# Selected text\n{}",
-        follow_up.trim(),
-        selected_text
-    );
+    let selected_text = selected_text.trim();
+    let mut prompt = if selected_text.is_empty() {
+        format!(
+            "# Task\nAnswer the latest follow-up using the prior Ask Selection chat as context. No selected text was provided. Return only the answer inside <uttr_ask_output>...</uttr_ask_output>.\n\n# Latest follow-up\n{}",
+            follow_up.trim()
+        )
+    } else {
+        format!(
+            "# Task\nAnswer the latest follow-up using the selected text and prior Ask Selection chat as context. Return only the answer inside <uttr_ask_output>...</uttr_ask_output>. Do not invent facts outside the selected text unless the user asks a general question.\n\n# Latest follow-up\n{}\n\n# Selected text\n{}",
+            follow_up.trim(),
+            selected_text
+        )
+    };
 
     if !conversation.trim().is_empty() {
         prompt.push_str("\n\n# Prior chat\n");
@@ -1761,26 +1832,47 @@ async fn run_ask_selection_prompt(
     settings: &AppSettings,
     prompt: String,
 ) -> Result<(String, String), String> {
-    match summary_client::transform_with_codex_app(
-        prompt.clone(),
-        ASK_SELECTION_SYSTEM_PROMPT.to_string(),
-    )
-    .await
+    let provider_error =
+        match run_ask_selection_provider_prompt(app_handle, settings, prompt.clone()).await {
+            Ok(result) => return Ok(result),
+            Err(error) => {
+                warn!(
+                    "Ask Selection provider route failed; falling back to Codex app-server: {}",
+                    error
+                );
+                error
+            }
+        };
+
+    match summary_client::transform_with_codex_app(prompt, ASK_SELECTION_SYSTEM_PROMPT.to_string())
+        .await
     {
         Ok(output) => {
             let output = clean_ask_selection_response(&output);
             if output.trim().is_empty() {
                 return Err("Codex returned an empty Ask Selection answer.".to_string());
             }
-            return Ok((output, "Ask Selection via Codex app-server".to_string()));
+            Ok((output, "Ask Selection via Codex app-server".to_string()))
         }
-        Err(error) => summary_client::summarize_codex_unavailable(&error),
+        Err(error) => {
+            summary_client::summarize_codex_unavailable(&error);
+            Err(format!(
+                "Ask Selection provider and Codex fallback both failed. Provider: {}. Codex fallback: {}",
+                provider_error, error
+            ))
+        }
     }
+}
 
+async fn run_ask_selection_provider_prompt(
+    app_handle: &AppHandle,
+    settings: &AppSettings,
+    prompt: String,
+) -> Result<(String, String), String> {
     let provider = settings
         .active_post_process_provider()
         .cloned()
-        .ok_or_else(|| "Ask Selection fallback needs a post-processing provider.".to_string())?;
+        .ok_or_else(|| "Ask Selection needs a post-processing provider.".to_string())?;
 
     let api_key =
         match crate::byok_secrets::load_provider_api_key(app_handle, settings, &provider.id) {
@@ -1797,9 +1889,7 @@ async fn run_ask_selection_prompt(
 
     let model = resolve_post_process_model(&provider, settings, &api_key)
         .await
-        .ok_or_else(|| {
-            "Ask Selection fallback could not resolve a post-processing model.".to_string()
-        })?;
+        .ok_or_else(|| "Ask Selection could not resolve a post-processing model.".to_string())?;
 
     crate::llm_client::send_chat_completion(
         &provider,
@@ -1816,7 +1906,7 @@ async fn run_ask_selection_prompt(
         )
     })
     .filter(|(output, _)| !output.trim().is_empty())
-    .ok_or_else(|| "Ask Selection fallback returned an empty answer.".to_string())
+    .ok_or_else(|| "Ask Selection provider returned an empty answer.".to_string())
 }
 
 async fn answer_ask_selection(
@@ -1859,8 +1949,7 @@ pub async fn answer_ask_selection_follow_up(
     let selected_text = session
         .selected_text
         .clone()
-        .filter(|text| !text.trim().is_empty())
-        .ok_or_else(|| "Ask Selection selected text is no longer available.".to_string())?;
+        .filter(|text| !text.trim().is_empty());
 
     session
         .messages
@@ -1872,7 +1961,7 @@ pub async fn answer_ask_selection_follow_up(
     };
     update_ask_selection_session(
         session.id,
-        Some(selected_text.clone()),
+        selected_text.clone(),
         session.context.clone(),
         pending_messages.clone(),
     );
@@ -1883,7 +1972,7 @@ pub async fn answer_ask_selection_follow_up(
 
     let settings = get_settings(&app_handle);
     let prompt = build_ask_selection_follow_up_prompt(
-        &selected_text,
+        selected_text.as_deref().unwrap_or(""),
         &session.messages,
         &follow_up,
         &session.context,
@@ -1900,7 +1989,7 @@ pub async fn answer_ask_selection_follow_up(
                 .push(ask_selection_message("assistant", answer.clone(), false));
             update_ask_selection_session(
                 session.id,
-                Some(selected_text),
+                selected_text,
                 session.context,
                 session.messages.clone(),
             );
@@ -2500,6 +2589,7 @@ fn handle_transcription_stop(
     let task_completed = Arc::new(AtomicBool::new(false));
     let task_completed_for_worker = Arc::clone(&task_completed);
     let tm_for_worker = tm.clone();
+    let cancel_generation_at_start = tm.cancel_generation();
     let recording_duration = recording_duration.unwrap_or_default();
     let transcription_watchdog = samples
         .as_ref()
@@ -2733,7 +2823,9 @@ fn handle_transcription_stop(
                     spawn_no_input_overlay_feedback(&ah, post_process);
                     return;
                 }
-                if tm_for_worker.is_cancel_requested() {
+                if tm_for_worker.is_cancel_requested()
+                    || tm_for_worker.cancel_generation() != cancel_generation_at_start
+                {
                     debug!("Transcription was cancelled before output handling");
                     utils::hide_recording_overlay(&ah);
                     change_tray_icon(&ah, TrayIconState::Idle);
@@ -2777,32 +2869,13 @@ fn handle_transcription_stop(
                                 }
                             });
 
-                        let Some(selected_text) = selected_text else {
-                            let message =
-                                "Ask Selection needs selected text before you start recording.";
-                            warn!("{}", message);
-                            let _ = ah.emit("transcription-error", message.to_string());
-                            utils::show_ask_selection_panel(
-                                &ah,
-                                ask_selection_payload(
-                                    "error",
-                                    Some(session_id),
-                                    Vec::new(),
-                                    None,
-                                    Some(message.to_string()),
-                                ),
-                            );
-                            change_tray_icon(&ah, TrayIconState::Idle);
-                            return;
-                        };
-
                         let mut thinking_messages = vec![
                             ask_selection_message("user", transcription.clone(), false),
                             ask_selection_message("assistant", "Thinking...", true),
                         ];
                         update_ask_selection_session(
                             session_id,
-                            Some(selected_text.clone()),
+                            selected_text.clone(),
                             context_snapshot.clone(),
                             thinking_messages.clone(),
                         );
@@ -2819,7 +2892,7 @@ fn handle_transcription_stop(
                         match answer_ask_selection(
                             &ah,
                             &settings,
-                            &selected_text,
+                            selected_text.as_deref().unwrap_or(""),
                             &transcription,
                             &context_snapshot,
                         )
@@ -2865,7 +2938,7 @@ fn handle_transcription_stop(
                                 ));
                                 update_ask_selection_session(
                                     session_id,
-                                    Some(selected_text),
+                                    selected_text,
                                     context_snapshot,
                                     thinking_messages.clone(),
                                 );
@@ -3356,6 +3429,16 @@ impl ShortcutAction for TranscribeAction {
         let post_process = self.post_process || settings.post_process_enabled;
         let use_incremental = should_use_incremental_transcription(&settings, &tm);
         let is_edit_mode = self.completion_mode == TranscriptionCompletionMode::EditMode;
+        warn!(
+            "[ask-hotkey] action_stop binding={} completion_mode={} is_edit_mode={}",
+            binding_id,
+            match self.completion_mode {
+                TranscriptionCompletionMode::Standard => "standard",
+                TranscriptionCompletionMode::EditMode => "edit_mode",
+                TranscriptionCompletionMode::FullSystemOverlay => "full_system_overlay",
+            },
+            is_edit_mode
+        );
         change_tray_icon(app, TrayIconState::Transcribing);
         if is_edit_mode {
             show_transcribing_overlay(app);
@@ -3896,6 +3979,21 @@ mod tests {
     }
 
     #[test]
+    fn ask_selection_prompt_without_selection_behaves_like_chat() {
+        let context = AppContextSnapshot {
+            app_name: Some("Notes".to_string()),
+            ..Default::default()
+        };
+        let prompt = build_ask_selection_prompt("", "why is the sky blue?", &context, &Vec::new());
+
+        assert!(prompt.contains("# Spoken request\nwhy is the sky blue?"));
+        assert!(prompt.contains("No selected text was provided"));
+        assert!(prompt.contains("chat question"));
+        assert!(!prompt.contains("# Selected text"));
+        assert!(prompt.contains("<uttr_ask_output>"));
+    }
+
+    #[test]
     fn clean_ask_selection_response_prefers_ask_tag() {
         let cleaned = clean_ask_selection_response(
             "notes <uttr_ask_output>\nShorter text.\n</uttr_ask_output>",
@@ -3932,6 +4030,35 @@ mod tests {
         assert!(!prompt.contains("Thinking..."));
         assert!(prompt.contains("Google Docs"));
         assert!(prompt.contains("FreeFlow"));
+        assert!(prompt.contains("<uttr_ask_output>"));
+    }
+
+    #[test]
+    fn ask_selection_follow_up_prompt_without_selection_uses_prior_chat() {
+        let context = AppContextSnapshot {
+            app_name: Some("Notes".to_string()),
+            ..Default::default()
+        };
+        let messages = vec![
+            ask_selection_message("user", "What is Rust?", false),
+            ask_selection_message("assistant", "Rust is a systems language.", false),
+            ask_selection_message("assistant", "Thinking...", true),
+        ];
+
+        let prompt = build_ask_selection_follow_up_prompt(
+            "",
+            &messages,
+            "make it shorter",
+            &context,
+            &Vec::new(),
+        );
+
+        assert!(prompt.contains("# Latest follow-up\nmake it shorter"));
+        assert!(prompt.contains("No selected text was provided"));
+        assert!(prompt.contains("User: What is Rust?"));
+        assert!(prompt.contains("Assistant: Rust is a systems language."));
+        assert!(!prompt.contains("Thinking..."));
+        assert!(!prompt.contains("# Selected text"));
         assert!(prompt.contains("<uttr_ask_output>"));
     }
 

@@ -50,6 +50,7 @@ const ASK_SELECTION_WIDTH: f64 = 760.0;
 const ASK_SELECTION_HEIGHT: f64 = 520.0;
 const ASK_SELECTION_CURSOR_OFFSET: f64 = 18.0;
 const ASK_SELECTION_SCREEN_MARGIN: f64 = 14.0;
+const ASK_SELECTION_BOTTOM_FLIP_ZONE_RATIO: f64 = 0.30;
 static OVERLAY_SESSION_EPOCH: AtomicU64 = AtomicU64::new(1);
 static ASK_SELECTION_SESSION_EPOCH: AtomicU64 = AtomicU64::new(1);
 static ASK_SELECTION_LAST_PAYLOAD: Mutex<Option<AskSelectionPayload>> = Mutex::new(None);
@@ -142,6 +143,7 @@ fn calculate_cursor_relative_panel_position_in_bounds(
     panel_height: f64,
     offset: f64,
     margin: f64,
+    bottom_flip_zone_ratio: f64,
 ) -> (f64, f64) {
     let min_x = work_area_bounds.x + margin;
     let min_y = work_area_bounds.y + margin;
@@ -152,13 +154,18 @@ fn calculate_cursor_relative_panel_position_in_bounds(
     let preferred_y = cursor_y + offset;
     let fallback_x = cursor_x - panel_width - offset;
     let fallback_y = cursor_y - panel_height - offset;
+    let bottom_flip_zone_start =
+        work_area_bounds.y + work_area_bounds.height * (1.0 - bottom_flip_zone_ratio);
+    let prefer_above = bottom_flip_zone_ratio > 0.0 && cursor_y >= bottom_flip_zone_start;
 
     let x = if preferred_x <= max_x {
         preferred_x
     } else {
         fallback_x
     };
-    let y = if preferred_y <= max_y {
+    let y = if prefer_above {
+        fallback_y
+    } else if preferred_y <= max_y {
         preferred_y
     } else {
         fallback_y
@@ -194,6 +201,7 @@ fn calculate_ask_selection_position(app_handle: &AppHandle) -> Option<(f64, f64)
         ASK_SELECTION_HEIGHT,
         ASK_SELECTION_CURSOR_OFFSET,
         ASK_SELECTION_SCREEN_MARGIN,
+        ASK_SELECTION_BOTTOM_FLIP_ZONE_RATIO,
     ))
 }
 
@@ -1336,11 +1344,28 @@ mod tests {
         };
 
         let (x, y) = calculate_cursor_relative_panel_position_in_bounds(
-            200.0, 120.0, work_area, 420.0, 260.0, 18.0, 14.0,
+            200.0, 120.0, work_area, 420.0, 260.0, 18.0, 14.0, 0.30,
         );
 
         assert_f64_eq(x, 218.0);
         assert_f64_eq(y, 138.0);
+    }
+
+    #[test]
+    fn ask_selection_panel_prefers_above_cursor_in_bottom_thirty_percent() {
+        let work_area = OverlayBounds {
+            x: 0.0,
+            y: 0.0,
+            width: 1440.0,
+            height: 900.0,
+        };
+
+        let (x, y) = calculate_cursor_relative_panel_position_in_bounds(
+            200.0, 650.0, work_area, 420.0, 260.0, 18.0, 14.0, 0.30,
+        );
+
+        assert_f64_eq(x, 218.0);
+        assert_f64_eq(y, 372.0);
     }
 
     #[test]
@@ -1353,7 +1378,7 @@ mod tests {
         };
 
         let (x, y) = calculate_cursor_relative_panel_position_in_bounds(
-            1380.0, 850.0, work_area, 420.0, 260.0, 18.0, 14.0,
+            1380.0, 850.0, work_area, 420.0, 260.0, 18.0, 14.0, 0.30,
         );
 
         assert_f64_eq(x, 942.0);
