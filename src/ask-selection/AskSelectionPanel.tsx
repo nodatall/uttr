@@ -46,7 +46,8 @@ const payloadsMatch = (
   (first.text ?? null) === (second.text ?? null) &&
   (first.error ?? null) === (second.error ?? null) &&
   (first.sessionId ?? null) === (second.sessionId ?? null) &&
-  JSON.stringify(first.messages ?? []) === JSON.stringify(second.messages ?? []);
+  JSON.stringify(first.messages ?? []) ===
+    JSON.stringify(second.messages ?? []);
 
 const closePanel = () => {
   void invoke("hide_ask_selection_panel").catch(() => {
@@ -65,8 +66,8 @@ const startPanelDrag = (event: MouseEvent<HTMLElement>) => {
     return;
   }
 
-  void getCurrentWindow()
-    .startDragging()
+  void invoke("start_ask_selection_panel_drag")
+    .catch(() => getCurrentWindow().startDragging())
     .catch((error) => {
       console.warn("Ask Selection drag failed:", error);
     });
@@ -81,21 +82,24 @@ export default function AskSelectionPanel() {
   const copyResetRef = useRef<number | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
 
-  const applyPayload = useCallback((nextPayload: AskSelectionPayload | null) => {
-    const normalizedPayload = {
-      ...DEFAULT_PAYLOAD,
-      ...(nextPayload ?? {}),
-      messages: nextPayload?.messages ?? [],
-    };
-    if (payloadsMatch(payloadRef.current, normalizedPayload)) {
-      return;
-    }
+  const applyPayload = useCallback(
+    (nextPayload: AskSelectionPayload | null) => {
+      const normalizedPayload = {
+        ...DEFAULT_PAYLOAD,
+        ...(nextPayload ?? {}),
+        messages: nextPayload?.messages ?? [],
+      };
+      if (payloadsMatch(payloadRef.current, normalizedPayload)) {
+        return;
+      }
 
-    payloadRef.current = normalizedPayload;
-    setPayload(normalizedPayload);
-    setCopied(false);
-    setIsSending(normalizedPayload.state === "thinking");
-  }, []);
+      payloadRef.current = normalizedPayload;
+      setPayload(normalizedPayload);
+      setCopied(false);
+      setIsSending(normalizedPayload.state === "thinking");
+    },
+    [],
+  );
 
   const refreshPayload = useCallback(() => {
     void invoke<AskSelectionPayload | null>("get_ask_selection_payload")
@@ -251,11 +255,10 @@ export default function AskSelectionPanel() {
       <section
         className="ask-selection-panel"
         aria-label="Ask Selection result"
+        data-tauri-drag-region
+        onMouseDown={startPanelDrag}
       >
-        <header
-          className="ask-selection-header"
-          data-tauri-drag-region
-        >
+        <header className="ask-selection-header" data-tauri-drag-region>
           <span
             className={`ask-selection-status ${copied ? "ask-selection-status-visible" : ""}`}
             aria-live="polite"
@@ -311,7 +314,10 @@ export default function AskSelectionPanel() {
                 }
 
                 return (
-                  <div className={messageClass} key={`${message.role}-${index}`}>
+                  <div
+                    className={messageClass}
+                    key={`${message.role}-${index}`}
+                  >
                     {message.pending && isAssistant ? (
                       <>
                         <RoseThreeLoader

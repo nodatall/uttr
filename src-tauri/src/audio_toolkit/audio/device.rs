@@ -8,6 +8,10 @@ pub struct CpalDeviceInfo {
 }
 
 pub fn list_input_devices() -> Result<Vec<CpalDeviceInfo>, Box<dyn std::error::Error>> {
+    if crate::audio_toolkit::utils::is_running_under_rosetta() {
+        return Err(crate::audio_toolkit::utils::ROSETTA_COREAUDIO_UNAVAILABLE_MESSAGE.into());
+    }
+
     let host = crate::audio_toolkit::get_cpal_host();
     let default_name = host.default_input_device().and_then(|d| d.name().ok());
 
@@ -30,6 +34,10 @@ pub fn list_input_devices() -> Result<Vec<CpalDeviceInfo>, Box<dyn std::error::E
 }
 
 pub fn list_output_devices() -> Result<Vec<CpalDeviceInfo>, Box<dyn std::error::Error>> {
+    if crate::audio_toolkit::utils::is_running_under_rosetta() {
+        return Err(crate::audio_toolkit::utils::ROSETTA_COREAUDIO_UNAVAILABLE_MESSAGE.into());
+    }
+
     let host = crate::audio_toolkit::get_cpal_host();
     let default_name = host.default_output_device().and_then(|d| d.name().ok());
 

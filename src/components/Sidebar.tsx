@@ -131,10 +131,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
         versionTapTimerRef.current = null;
       }
       versionTapCountRef.current = 0;
-      if (!settings?.debug_mode) {
-        void updateSetting("debug_mode", true);
+      if (settings?.debug_mode) {
+        onSectionChange("apiKeys");
+        return;
       }
-      onSectionChange("settings");
+      void updateSetting("debug_mode", true).finally(() => {
+        onSectionChange("apiKeys");
+      });
     }
   };
 

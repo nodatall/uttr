@@ -910,6 +910,7 @@ fn create_ask_selection_panel(app_handle: &AppHandle) {
 pub fn show_ask_selection_panel(app_handle: &AppHandle, payload: AskSelectionPayload) {
     let show_epoch = ASK_SELECTION_SESSION_EPOCH.fetch_add(1, Ordering::Relaxed) + 1;
     store_ask_selection_payload(&payload);
+    hide_recording_overlay(app_handle);
     debug!(
         "[overlay] ask selection show requested state={} epoch={}",
         payload.state, show_epoch
@@ -982,6 +983,7 @@ fn show_ask_selection_panel_window(
 pub fn update_ask_selection_panel(app_handle: &AppHandle, payload: AskSelectionPayload) {
     let show_epoch = ASK_SELECTION_SESSION_EPOCH.fetch_add(1, Ordering::Relaxed) + 1;
     store_ask_selection_payload(&payload);
+    hide_recording_overlay(app_handle);
 
     #[cfg(target_os = "macos")]
     {

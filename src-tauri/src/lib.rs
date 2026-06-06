@@ -368,6 +368,7 @@ pub fn run() {
         commands::cancel_operation,
         commands::dismiss_overlay,
         commands::hide_ask_selection_panel,
+        commands::start_ask_selection_panel_drag,
         commands::get_ask_selection_payload,
         commands::ask_selection_follow_up,
         commands::show_main_window,

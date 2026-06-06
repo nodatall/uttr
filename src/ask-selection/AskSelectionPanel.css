@@ -27,6 +27,11 @@
   overflow: hidden;
   box-sizing: border-box;
   isolation: isolate;
+  cursor: grab;
+}
+
+.ask-selection-panel:active {
+  cursor: grabbing;
 }
 
 .ask-selection-header {

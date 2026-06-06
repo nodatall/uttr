@@ -32,6 +32,18 @@ pub fn hide_ask_selection_panel(app: AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 #[specta::specta]
+pub fn start_ask_selection_panel_drag(app: AppHandle) -> Result<(), String> {
+    let Some(panel_window) = app.get_webview_window("ask_selection_panel") else {
+        return Err("Ask Selection panel window not found.".to_string());
+    };
+
+    panel_window
+        .start_dragging()
+        .map_err(|e| format!("Failed to start Ask Selection panel drag: {}", e))
+}
+
+#[tauri::command]
+#[specta::specta]
 pub fn get_ask_selection_payload() -> Option<crate::utils::AskSelectionPayload> {
     crate::utils::current_ask_selection_payload()
 }

@@ -183,6 +183,10 @@ impl AudioRecorder {
     }
 
     pub fn open(&mut self, device: Option<Device>) -> Result<(), Box<dyn std::error::Error>> {
+        if crate::audio_toolkit::utils::is_running_under_rosetta() {
+            return Err(crate::audio_toolkit::utils::ROSETTA_COREAUDIO_UNAVAILABLE_MESSAGE.into());
+        }
+
         if self.worker_handle.is_some() {
             return Ok(()); // already open
         }

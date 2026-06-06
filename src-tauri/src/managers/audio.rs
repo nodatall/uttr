@@ -206,7 +206,12 @@ impl AudioRecordingManager {
 
         // Always-on?  Open immediately.
         if matches!(mode, MicrophoneMode::AlwaysOn) {
-            manager.start_microphone_stream()?;
+            if let Err(err) = manager.start_microphone_stream() {
+                warn!(
+                    "Failed to initialize always-on microphone stream; falling back to on-demand microphone mode: {err}"
+                );
+                *manager.mode.lock().unwrap() = MicrophoneMode::OnDemand;
+            }
         }
 
         Ok(manager)

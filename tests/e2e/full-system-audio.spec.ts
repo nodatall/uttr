@@ -60,6 +60,10 @@ type FullSystemAudioTestState = {
     dev_access_override: string | null;
   };
   customSounds: { start: boolean; stop: boolean };
+  invokedCommands: Array<{
+    cmd: string;
+    args: Record<string, unknown>;
+  }>;
   startedFullSystemAudioSessions: number;
   stoppedFullSystemAudioSessions: number;
   historyEntries: Array<{
@@ -182,6 +186,7 @@ const createTestState = (
     dev_access_override: null,
   },
   customSounds: { start: true, stop: true },
+  invokedCommands: [],
   startedFullSystemAudioSessions: 0,
   stoppedFullSystemAudioSessions: 0,
   historyEntries: [],
@@ -300,6 +305,7 @@ async function installBrowserMocks(
         const e2eState = (
           window as unknown as { __UTTR_E2E__: FullSystemAudioTestState }
         ).__UTTR_E2E__;
+        e2eState.invokedCommands.push({ cmd, args });
 
         switch (cmd) {
           case "plugin:app|version":
@@ -410,7 +416,6 @@ async function installBrowserMocks(
           case "change_translate_to_english_setting":
           case "change_selected_language_setting":
           case "change_overlay_position_setting":
-          case "change_debug_mode_setting":
           case "change_word_correction_threshold_setting":
           case "change_paste_method_setting":
           case "change_typing_tool_setting":
@@ -440,6 +445,9 @@ async function installBrowserMocks(
           case "set_clamshell_microphone":
           case "play_test_sound":
           case "get_available_typing_tools":
+            return null;
+          case "change_debug_mode_setting":
+            e2eState.settings.debug_mode = Boolean(args.enabled);
             return null;
           default:
             return null;
@@ -854,6 +862,45 @@ test.describe("full-system audio settings", () => {
     await expect(page.getByText("Meeting Recording Shortcut")).toBeVisible();
     await expect(page.getByText("Ctrl + fn")).toBeVisible();
     await expect(page.getByText("Transcribe Shortcut")).toBeVisible();
+  });
+
+  test("unlocks BYOK controls after five version taps", async ({ page }) => {
+    const state = createTestState(false, true);
+    await installBrowserMocks(page, state);
+
+    await page.goto("/");
+
+    await expect(
+      page.getByRole("button", { name: /^API Keys$/i }),
+    ).toHaveCount(0);
+
+    const versionButton = page.getByRole("button", { name: "App version" });
+    await expect(versionButton).toBeVisible();
+
+    for (let tap = 0; tap < 5; tap += 1) {
+      await versionButton.click();
+    }
+
+    await expect
+      .poll(async () =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __UTTR_E2E__: FullSystemAudioTestState;
+              }
+            ).__UTTR_E2E__.invokedCommands.some(
+              (command) =>
+                command.cmd === "change_debug_mode_setting" &&
+                command.args.enabled === true,
+            ),
+        ),
+      )
+      .toBe(true);
+
+    await expect(
+      page.getByRole("button", { name: /^API Keys$/i }),
+    ).toBeVisible();
   });
 
   test("keeps the toggle disabled when support is unavailable and leaves transcribe visible", async ({

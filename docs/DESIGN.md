@@ -161,7 +161,7 @@ The recording overlay should feel immediate and lightweight. It may use the app 
 
 ## Ask Selection Panel
 
-Ask Selection uses the compact bottom recording/transcribing overlay while the user is speaking, then opens an interactive floating chat panel for thinking, answers, errors, and follow-up chat. The panel should use the settings-style dark translucent surface, subtle border, compact top-right close button, and the shared rose loader for thinking/loading. Do not show a title in the panel, explanatory copy hints, placeholder text, or a visible send button. Assistant answers can be clicked to copy while keeping the answer visible and showing only a small `Copied` status in the header. Follow-up messages send with Enter; Shift+Enter inserts a newline.
+Ask Selection uses the compact bottom recording overlay while the user is speaking, then hides that bottom overlay when the interactive floating chat panel opens for thinking, answers, errors, and follow-up chat. The panel should use the settings-style dark translucent surface, subtle border, compact top-right close button, and the shared rose loader for thinking/loading. Do not show a title in the panel, explanatory copy hints, placeholder text, or a visible send button. Assistant answers can be clicked to copy while keeping the answer visible and showing only a small `Copied` status in the header. Follow-up messages send with Enter; Shift+Enter inserts a newline.
 
 ## Session Workspace
 

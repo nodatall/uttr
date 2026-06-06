@@ -380,6 +380,14 @@ async hideAskSelectionPanel() : Promise<Result<null, string>> {
     else return { status: "error", error: e  as any };
 }
 },
+async startAskSelectionPanelDrag() : Promise<Result<null, string>> {
+    try {
+    return { status: "ok", data: await TAURI_INVOKE("start_ask_selection_panel_drag") };
+} catch (e) {
+    if(e instanceof Error) throw e;
+    else return { status: "error", error: e  as any };
+}
+},
 async getAskSelectionPayload() : Promise<AskSelectionPayload | null> {
     return await TAURI_INVOKE("get_ask_selection_payload");
 },

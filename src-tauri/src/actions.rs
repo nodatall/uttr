@@ -3147,10 +3147,7 @@ impl ShortcutAction for TranscribeAction {
             return;
         }
         let is_edit_mode = self.completion_mode == TranscriptionCompletionMode::EditMode;
-        if is_edit_mode {
-            let snapshot = capture_ask_selection_start_context();
-            store_active_context_snapshot(&binding_id, snapshot);
-        } else if self.post_process || settings.post_process_enabled {
+        if !is_edit_mode && (self.post_process || settings.post_process_enabled) {
             store_active_context_async(&binding_id);
         }
         let use_incremental = should_use_incremental_transcription(&settings, &tm);
@@ -3237,6 +3234,18 @@ impl ShortcutAction for TranscribeAction {
             }
         }
 
+        if is_edit_mode && recording_started {
+            let context_start = Instant::now();
+            let snapshot = capture_ask_selection_start_context();
+            store_active_context_snapshot(&binding_id, snapshot);
+            log::info!(
+                "[latency] ask selection context captured after recording overlay binding={} elapsed_ms={} total_start_elapsed_ms={}",
+                binding_id,
+                context_start.elapsed().as_millis(),
+                start_time.elapsed().as_millis()
+            );
+        }
+
         if is_edit_mode && !recording_started {
             let session_id = current_ask_selection_session_id();
             utils::show_ask_selection_panel(
@@ -3301,9 +3310,6 @@ impl ShortcutAction for TranscribeAction {
         let tm = Arc::clone(&app.state::<Arc<TranscriptionManager>>());
         let hm = Arc::clone(&app.state::<Arc<HistoryManager>>());
 
-        change_tray_icon(app, TrayIconState::Transcribing);
-        spawn_deferred_overlay_state(app, DeferredOverlayState::Transcribing);
-
         // Unmute before playing audio feedback so the stop sound is audible
         rm.remove_mute();
 
@@ -3315,6 +3321,11 @@ impl ShortcutAction for TranscribeAction {
         // transcription. The dedicated post-process hotkey still forces it on.
         let post_process = self.post_process || settings.post_process_enabled;
         let use_incremental = should_use_incremental_transcription(&settings, &tm);
+        let is_edit_mode = self.completion_mode == TranscriptionCompletionMode::EditMode;
+        change_tray_icon(app, TrayIconState::Transcribing);
+        if !is_edit_mode {
+            spawn_deferred_overlay_state(app, DeferredOverlayState::Transcribing);
+        }
         if use_incremental {
             tm.signal_incremental_stop(binding_id);
         }
@@ -3326,6 +3337,17 @@ impl ShortcutAction for TranscribeAction {
             samples.as_ref().map(|samples| samples.len()).unwrap_or(0),
             stop_time.elapsed().as_millis()
         );
+        if is_edit_mode && samples.as_ref().is_some_and(|samples| !samples.is_empty()) {
+            utils::show_ask_selection_panel(
+                app,
+                ask_selection_payload("thinking", None, Vec::new(), None, None),
+            );
+            log::info!(
+                "[latency] ask selection thinking panel requested after recording stop binding={} elapsed_ms={}",
+                binding_id,
+                stop_time.elapsed().as_millis()
+            );
+        }
         handle_transcription_stop(
             app,
             binding_id,
