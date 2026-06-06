@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useId } from "react";
 import { SettingContainer } from "./SettingContainer";
 
 interface ToggleSwitchProps {
@@ -24,6 +24,8 @@ export const ToggleSwitch: React.FC<ToggleSwitchProps> = ({
   grouped = false,
   tooltipPosition = "top",
 }) => {
+  const inputId = useId();
+
   return (
     <SettingContainer
       title={label}
@@ -34,11 +36,14 @@ export const ToggleSwitch: React.FC<ToggleSwitchProps> = ({
       tooltipPosition={tooltipPosition}
     >
       <label
+        htmlFor={inputId}
         className={`inline-flex items-center ${disabled || isUpdating ? "cursor-not-allowed" : "cursor-pointer"}`}
       >
         <input
+          id={inputId}
           type="checkbox"
           value=""
+          aria-label={label}
           className="sr-only peer"
           checked={checked}
           disabled={disabled || isUpdating}

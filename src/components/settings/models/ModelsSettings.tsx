@@ -23,7 +23,7 @@ const modelSupportsLanguage = (model: ModelInfo, langCode: string): boolean => {
 const isCloudModel = (modelId: string): boolean =>
   modelId.startsWith("groq-") || modelId.startsWith("openai-");
 
-export const ModelsSettings: React.FC = () => {
+const useModelsSettingsController = () => {
   const { t, i18n } = useTranslation();
   const { installAccess, settings } = useSettings();
   const showModelControls =
@@ -240,6 +240,64 @@ export const ModelsSettings: React.FC = () => {
     };
   }, [filteredLocalModels, downloadingModels, extractingModels, currentModel]);
 
+  return {
+    t,
+    loading,
+    showModelControls,
+    currentModelInfo,
+    filteredLocalModels,
+    languageDropdownRef,
+    languageSearchInputRef,
+    languageDropdownOpen,
+    setLanguageDropdownOpen,
+    languageFilter,
+    setLanguageFilter,
+    languageSearch,
+    setLanguageSearch,
+    selectedLanguageLabel,
+    filteredLanguages,
+    downloadedModels,
+    cloudModels,
+    availableModels,
+    getModelStatus,
+    handleModelSelect,
+    handleModelDownload,
+    handleModelDelete,
+    handleModelCancel,
+    getDownloadProgress,
+    getDownloadSpeed,
+  };
+};
+
+export const ModelsSettings: React.FC = () => {
+  const {
+    t,
+    loading,
+    showModelControls,
+    currentModelInfo,
+    filteredLocalModels,
+    languageDropdownRef,
+    languageSearchInputRef,
+    languageDropdownOpen,
+    setLanguageDropdownOpen,
+    languageFilter,
+    setLanguageFilter,
+    languageSearch,
+    setLanguageSearch,
+    selectedLanguageLabel,
+    filteredLanguages,
+    downloadedModels,
+    cloudModels,
+    availableModels,
+    getModelStatus,
+    handleModelSelect,
+    handleModelDownload,
+    handleModelDelete,
+    handleModelCancel,
+    getDownloadProgress,
+    getDownloadSpeed,
+  } = useModelsSettingsController();
+
   if (loading) {
     return (
       <div className="max-w-3xl w-full mx-auto">
@@ -317,6 +375,9 @@ export const ModelsSettings: React.FC = () => {
                       <input
                         ref={languageSearchInputRef}
                         type="text"
+                        aria-label={t(
+                          "settings.general.language.searchPlaceholder",
+                        )}
                         value={languageSearch}
                         onChange={(e) => setLanguageSearch(e.target.value)}
                         onKeyDown={(e) => {

@@ -1,83 +1,15 @@
 import React, { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { getVersion } from "@tauri-apps/api/app";
-import {
-  Cpu,
-  History,
-  Home,
-  FileAudio,
-  KeyRound,
-  Settings,
-} from "lucide-react";
 import { useSettings } from "../hooks/useSettings";
-import UpdateChecker from "./update-checker";
+import UpdateChecker from "./update-checker/UpdateChecker";
 import { ManageSubscriptionButton } from "./settings/ManageSubscriptionButton";
 import { UpgradeButton } from "./settings/UpgradeButton";
-import { shouldShowModelControls } from "@/lib/utils/premiumFeatures";
-
-export type SidebarSection = keyof typeof SECTIONS_CONFIG;
-
-interface IconProps {
-  width?: number | string;
-  height?: number | string;
-  size?: number | string;
-  className?: string;
-  [key: string]: any;
-}
-
-interface SectionConfig {
-  labelKey: string;
-  defaultLabel?: string;
-  icon: React.ComponentType<IconProps>;
-  enabled: (settings: any) => boolean;
-}
-
-export const SECTIONS_CONFIG = {
-  settings: {
-    labelKey: "sidebar.settings",
-    defaultLabel: "Settings",
-    icon: Settings,
-    enabled: () => true,
-  },
-  models: {
-    labelKey: "sidebar.models",
-    defaultLabel: "Models",
-    icon: Cpu,
-    enabled: (settings) =>
-      shouldShowModelControls(settings?.installAccess ?? null) ||
-      Boolean(
-        settings?.settings?.byok_enabled || settings?.settings?.debug_mode,
-      ),
-  },
-  apiKeys: {
-    labelKey: "sidebar.apiKeys",
-    defaultLabel: "API Keys",
-    icon: KeyRound,
-    enabled: (settings) =>
-      shouldShowModelControls(settings?.installAccess ?? null) ||
-      Boolean(
-        settings?.settings?.byok_enabled || settings?.settings?.debug_mode,
-      ),
-  },
-  home: {
-    labelKey: "sidebar.home",
-    defaultLabel: "Meetings",
-    icon: Home,
-    enabled: () => true,
-  },
-  files: {
-    labelKey: "sidebar.files",
-    defaultLabel: "Files",
-    icon: FileAudio,
-    enabled: () => true,
-  },
-  history: {
-    labelKey: "sidebar.history",
-    defaultLabel: "Transcriptions",
-    icon: History,
-    enabled: () => true,
-  },
-} as const satisfies Record<string, SectionConfig>;
+import {
+  SECTIONS_CONFIG,
+  type SectionConfig,
+  type SidebarSection,
+} from "./sidebarSections";
 
 interface SidebarProps {
   activeSection: SidebarSection;
@@ -108,14 +40,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
     void fetchVersion();
   }, []);
 
-  useEffect(() => {
-    return () => {
-      if (versionTapTimerRef.current !== null) {
-        window.clearTimeout(versionTapTimerRef.current);
-      }
-    };
-  }, []);
-
   const handleVersionTap = () => {
     versionTapCountRef.current += 1;
     if (versionTapTimerRef.current === null) {
@@ -141,9 +65,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
     }
   };
 
-  const availableSections = Object.entries(SECTIONS_CONFIG)
-    .filter(([, config]) => config.enabled({ settings, installAccess }))
-    .map(([id, config]) => ({ id: id as SidebarSection, ...config }));
+  const availableSections = Object.entries(SECTIONS_CONFIG).reduce<
+    Array<{ id: SidebarSection } & SectionConfig>
+  >((sections, [id, config]) => {
+    if (config.enabled({ settings, installAccess })) {
+      sections.push({ id: id as SidebarSection, ...config });
+    }
+
+    return sections;
+  }, []);
 
   return (
     <div className="flex w-full min-w-0 flex-col rounded-[18px] border border-white/6 bg-[rgba(4,9,15,0.45)] px-3 py-4 md:h-full md:w-[214px] md:min-w-[214px]">

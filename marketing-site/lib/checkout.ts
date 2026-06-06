@@ -3,7 +3,7 @@ import {
   buildPendingCheckoutSessionContextKey,
   fetchReusableOpenCheckoutSession,
   insertPendingCheckoutSession,
-} from "./access";
+} from "./access/postgres";
 import { buildCheckoutMetadata } from "./stripe";
 
 export type CheckoutClaimContext = {
@@ -38,7 +38,7 @@ export function buildCheckoutSessionIdempotencyKey(
   ].join("|");
 }
 
-export function buildCheckoutSessionCreateParams(
+function buildCheckoutSessionCreateParams(
   params: CheckoutSessionCreateContext,
 ): Stripe.Checkout.SessionCreateParams {
   const metadata = buildCheckoutMetadata({

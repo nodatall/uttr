@@ -17,7 +17,6 @@ export type {
 export { resolveAccessDecision, refreshAnonymousTrialState } from "./resolve";
 export {
   fetchAnonymousTrialById,
-  fetchAnonymousTrialByInstallId,
   fetchEntitlementByUserId,
   fetchReusableOpenCheckoutSession,
   fetchAuthenticatedUser,

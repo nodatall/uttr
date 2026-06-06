@@ -39,12 +39,7 @@ export const ModelSelect: React.FC<ModelSelectProps> = React.memo(
       [options, value],
     );
     const displayValue = selectedOption?.label ?? value;
-
-    useEffect(() => {
-      if (!isOpen) {
-        setInputValue(displayValue);
-      }
-    }, [displayValue, isOpen]);
+    const visibleInputValue = isOpen ? inputValue : displayValue;
 
     useEffect(() => {
       const handlePointerDown = (event: MouseEvent) => {
@@ -61,7 +56,7 @@ export const ModelSelect: React.FC<ModelSelectProps> = React.memo(
     }, []);
 
     const filteredOptions = useMemo(() => {
-      const query = inputValue.trim().toLowerCase();
+      const query = visibleInputValue.trim().toLowerCase();
       if (!query || query === displayValue.toLowerCase()) {
         return options;
       }
@@ -71,11 +66,12 @@ export const ModelSelect: React.FC<ModelSelectProps> = React.memo(
         const labelText = option.label.toLowerCase();
         return valueText.includes(query) || labelText.includes(query);
       });
-    }, [displayValue, inputValue, options]);
+    }, [displayValue, options, visibleInputValue]);
 
-    useEffect(() => {
-      setHighlightedIndex(0);
-    }, [filteredOptions.length, inputValue]);
+    const boundedHighlightedIndex = Math.min(
+      highlightedIndex,
+      Math.max(filteredOptions.length - 1, 0),
+    );
 
     const handleCreate = (inputValue: string) => {
       const trimmed = inputValue.trim();
@@ -125,7 +121,7 @@ export const ModelSelect: React.FC<ModelSelectProps> = React.memo(
 
       if (event.key === "Enter") {
         event.preventDefault();
-        const highlighted = filteredOptions[highlightedIndex];
+        const highlighted = filteredOptions[boundedHighlightedIndex];
         if (isOpen && highlighted) {
           handleSelect(highlighted);
           return;
@@ -156,15 +152,20 @@ export const ModelSelect: React.FC<ModelSelectProps> = React.memo(
           <input
             ref={inputRef}
             type="text"
-            value={inputValue}
+            value={visibleInputValue}
             placeholder={placeholder}
+            aria-label={placeholder}
             disabled={disabled}
             onBlur={onBlur}
             onChange={(event) => {
               setInputValue(event.target.value);
+              setHighlightedIndex(0);
               setIsOpen(true);
             }}
-            onFocus={() => setIsOpen(true)}
+            onFocus={() => {
+              setInputValue(displayValue);
+              setIsOpen(true);
+            }}
             onKeyDown={handleKeyDown}
             className="h-full min-w-0 flex-1 bg-transparent px-2.5 text-sm text-text outline-none placeholder:text-mid-gray/65"
           />
@@ -210,7 +211,7 @@ export const ModelSelect: React.FC<ModelSelectProps> = React.memo(
                 onClick={() => handleSelect(option)}
                 onMouseEnter={() => setHighlightedIndex(index)}
                 className={`flex w-full min-w-0 items-center gap-2 px-3 py-2 text-left text-sm transition-colors ${
-                  index === highlightedIndex
+                  index === boundedHighlightedIndex
                     ? "bg-logo-primary/14 text-text"
                     : "text-text/90 hover:bg-white/[0.05]"
                 }`}

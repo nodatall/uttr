@@ -93,6 +93,7 @@ const AccessibilityPermissions: React.FC = () => {
           </p>
         </div>
         <button
+          type="button"
           onClick={handleButtonClick}
           className={`min-h-10 ${config.className}`}
         >

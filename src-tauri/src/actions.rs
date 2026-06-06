@@ -1668,6 +1668,14 @@ fn current_ask_selection_messages() -> Vec<utils::AskSelectionMessage> {
         .unwrap_or_default()
 }
 
+fn ask_selection_session_is_current(session_id: u64) -> bool {
+    ASK_SELECTION_CHAT_SESSION
+        .lock()
+        .ok()
+        .and_then(|session| session.as_ref().map(|session| session.id == session_id))
+        .unwrap_or(false)
+}
+
 fn build_ask_selection_prompt(
     selected_text: &str,
     spoken_instruction: &str,
@@ -1884,6 +1892,9 @@ pub async fn answer_ask_selection_follow_up(
 
     match run_ask_selection_prompt(&app_handle, &settings, prompt).await {
         Ok((answer, _prompt_label)) => {
+            if !ask_selection_session_is_current(session.id) {
+                return Err("Ask Selection session is no longer available.".to_string());
+            }
             session
                 .messages
                 .push(ask_selection_message("assistant", answer.clone(), false));
@@ -1904,6 +1915,9 @@ pub async fn answer_ask_selection_follow_up(
             Ok(payload)
         }
         Err(error) => {
+            if !ask_selection_session_is_current(session.id) {
+                return Err("Ask Selection session is no longer available.".to_string());
+            }
             let payload = ask_selection_payload(
                 "error",
                 Some(session.id),
@@ -2812,6 +2826,11 @@ fn handle_transcription_stop(
                         .await
                         {
                             Ok((answer_text, prompt_label)) => {
+                                if !ask_selection_session_is_current(session_id) {
+                                    change_tray_icon(&ah, TrayIconState::Idle);
+                                    return;
+                                }
+
                                 let hm_clone = Arc::clone(&hm);
                                 let ah_for_history = ah.clone();
                                 let transcription_for_history = transcription.clone();
@@ -2864,6 +2883,11 @@ fn handle_transcription_stop(
                             }
                             Err(error) => {
                                 error!("Ask Selection failed: {}", error);
+                                if !ask_selection_session_is_current(session_id) {
+                                    change_tray_icon(&ah, TrayIconState::Idle);
+                                    return;
+                                }
+
                                 let error_messages = vec![ask_selection_message(
                                     "user",
                                     transcription.clone(),
@@ -3155,6 +3179,7 @@ impl ShortcutAction for TranscribeAction {
         let is_edit_mode = self.completion_mode == TranscriptionCompletionMode::EditMode;
         if is_edit_mode {
             clear_ask_selection_session();
+            utils::hide_ask_selection_panel(app);
         }
         if !is_edit_mode && (self.post_process || settings.post_process_enabled) {
             store_active_context_async(&binding_id);
@@ -3332,7 +3357,9 @@ impl ShortcutAction for TranscribeAction {
         let use_incremental = should_use_incremental_transcription(&settings, &tm);
         let is_edit_mode = self.completion_mode == TranscriptionCompletionMode::EditMode;
         change_tray_icon(app, TrayIconState::Transcribing);
-        if !is_edit_mode {
+        if is_edit_mode {
+            show_transcribing_overlay(app);
+        } else {
             spawn_deferred_overlay_state(app, DeferredOverlayState::Transcribing);
         }
         if use_incremental {
@@ -3346,17 +3373,6 @@ impl ShortcutAction for TranscribeAction {
             samples.as_ref().map(|samples| samples.len()).unwrap_or(0),
             stop_time.elapsed().as_millis()
         );
-        if is_edit_mode && samples.as_ref().is_some_and(|samples| !samples.is_empty()) {
-            utils::show_ask_selection_panel(
-                app,
-                ask_selection_payload("thinking", None, Vec::new(), None, None),
-            );
-            log::info!(
-                "[latency] ask selection thinking panel requested after recording stop binding={} elapsed_ms={}",
-                binding_id,
-                stop_time.elapsed().as_millis()
-            );
-        }
         handle_transcription_stop(
             app,
             binding_id,
@@ -3785,7 +3801,8 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
-        ask_selection_message, build_ask_selection_follow_up_prompt, build_ask_selection_prompt,
+        ask_selection_message, ask_selection_session_is_current,
+        build_ask_selection_follow_up_prompt, build_ask_selection_prompt,
         build_live_summary_prompt, clean_ask_selection_response, clean_post_process_response,
         clear_ask_selection_session, current_ask_selection_messages,
         current_ask_selection_session_id, custom_vocabulary_prompt_block,
@@ -3929,10 +3946,12 @@ mod tests {
         );
 
         assert_eq!(current_ask_selection_messages().len(), 1);
+        assert!(ask_selection_session_is_current(session_id));
 
         clear_ask_selection_session();
 
         assert!(current_ask_selection_messages().is_empty());
+        assert!(!ask_selection_session_is_current(session_id));
         assert_ne!(current_ask_selection_session_id(), session_id);
     }
 

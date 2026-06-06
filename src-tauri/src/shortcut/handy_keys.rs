@@ -46,7 +46,7 @@ use crate::utils;
 use super::handler::handle_shortcut_event;
 
 const MODIFIER_ONLY_CHORD_WINDOW: Duration = Duration::from_millis(500);
-const MODIFIER_ONLY_PRESS_DEBOUNCE: Duration = Duration::from_millis(40);
+const MODIFIER_ONLY_PRESS_DEBOUNCE: Duration = MODIFIER_ONLY_CHORD_WINDOW;
 const MODIFIER_ONLY_RELEASE_DEBOUNCE: Duration = Duration::from_millis(100);
 
 /// Commands that can be sent to the hotkey manager thread
@@ -1358,6 +1358,11 @@ mod tests {
             option_fn_hotkey.modifiers,
             &bindings
         ));
+    }
+
+    #[test]
+    fn modifier_only_subset_press_debounce_allows_cold_superset_chord() {
+        assert_eq!(MODIFIER_ONLY_PRESS_DEBOUNCE, MODIFIER_ONLY_CHORD_WINDOW);
     }
 
     #[test]

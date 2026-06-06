@@ -57,7 +57,7 @@ export function readSiteConfig() {
   };
 }
 
-export function readStripeConfig() {
+function readStripeConfig() {
   return {
     stripeSecretKey: readEnv("STRIPE_SECRET_KEY"),
     monthlyPriceId: readEnv("NEXT_PUBLIC_STRIPE_PRICE_ID_MONTHLY"),
@@ -115,11 +115,5 @@ export function readAccessTokenConfig() {
   return {
     installTokenSecret: readSecretEnv("UTTR_INSTALL_TOKEN_SECRET"),
     claimTokenSecret: readSecretEnv("UTTR_CLAIM_TOKEN_SECRET"),
-  };
-}
-
-export function readSessionConfig() {
-  return {
-    sessionSecret: readSecretEnv("UTTR_SESSION_SECRET"),
   };
 }

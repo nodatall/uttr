@@ -5,7 +5,7 @@ export const TRIAL_USAGE_REQUEST_LIMIT = 250;
 export const PRO_USAGE_DAILY_AUDIO_SECONDS_LIMIT_DEFAULT = 5 * 60 * 60;
 export const PRO_USAGE_DAILY_REQUEST_LIMIT_DEFAULT = 500;
 export const PRO_USAGE_BURST_REQUEST_LIMIT_DEFAULT = 60;
-export const PRO_USAGE_BURST_WINDOW_SECONDS_DEFAULT = 10 * 60;
+const PRO_USAGE_BURST_WINDOW_SECONDS_DEFAULT = 10 * 60;
 
 export type UsageLimitReason = "request_limit" | "audio_seconds_limit";
 

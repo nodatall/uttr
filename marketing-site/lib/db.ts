@@ -33,7 +33,7 @@ function readPoolMax() {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 5;
 }
 
-export function getDb(): DbExecutor {
+function getDb(): DbExecutor {
   if (testExecutor) {
     return testExecutor;
   }

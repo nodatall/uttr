@@ -1098,11 +1098,19 @@ pub fn current_ask_selection_payload() -> Option<AskSelectionPayload> {
         .and_then(|current| current.clone())
 }
 
-pub fn hide_ask_selection_panel(app_handle: &AppHandle) {
-    ASK_SELECTION_SESSION_EPOCH.fetch_add(1, Ordering::Relaxed);
+pub fn clear_ask_selection_panel_payload(app_handle: &AppHandle) {
     if let Ok(mut current) = ASK_SELECTION_LAST_PAYLOAD.lock() {
         *current = None;
     }
+
+    if let Some(panel_window) = app_handle.get_webview_window(ASK_SELECTION_LABEL) {
+        let _ = panel_window.emit("ask-selection-state", Option::<AskSelectionPayload>::None);
+    }
+}
+
+pub fn hide_ask_selection_panel(app_handle: &AppHandle) {
+    ASK_SELECTION_SESSION_EPOCH.fetch_add(1, Ordering::Relaxed);
+    clear_ask_selection_panel_payload(app_handle);
 
     #[cfg(target_os = "macos")]
     {

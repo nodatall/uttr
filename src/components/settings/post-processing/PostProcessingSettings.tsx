@@ -1,8 +1,8 @@
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { RefreshCcw } from "lucide-react";
 
-import { SettingContainer, SettingsGroup, Slider } from "@/components/ui";
+import { SettingContainer, Slider } from "@/components/ui";
 import { Button } from "../../ui/Button";
 import { ResetButton } from "../../ui/ResetButton";
 
@@ -152,8 +152,10 @@ const PostProcessingSettingsAdvancedComponent: React.FC = () => {
     (getSetting("custom_vocabulary_terms") as string[] | undefined) ?? [];
   const effectivePreset = preset === "custom" ? "custom" : "strict";
 
-  const [draftSystemPrompt, setDraftSystemPrompt] = useState(systemPrompt);
-  const [draftVocabulary, setDraftVocabulary] = useState(
+  const [draftSystemPrompt, setDraftSystemPrompt] = useState(
+    () => systemPrompt,
+  );
+  const [draftVocabulary, setDraftVocabulary] = useState(() =>
     customVocabularyTerms.join("\n"),
   );
   const isSystemPromptDirty = draftSystemPrompt !== systemPrompt;
@@ -163,14 +165,6 @@ const PostProcessingSettingsAdvancedComponent: React.FC = () => {
   const displayedPrompt =
     effectivePreset === "strict" ? DEFAULT_PROMPT : draftSystemPrompt;
   const isPresetReadOnly = effectivePreset !== "custom";
-
-  useEffect(() => {
-    setDraftSystemPrompt(systemPrompt);
-  }, [systemPrompt]);
-
-  useEffect(() => {
-    setDraftVocabulary(customVocabularyTerms.join("\n"));
-  }, [savedVocabulary]);
 
   const handlePresetSelect = (value: CleaningPromptPreset) => {
     if (value === "custom" && !systemPrompt.trim()) {
@@ -191,6 +185,7 @@ const PostProcessingSettingsAdvancedComponent: React.FC = () => {
         <div className="space-y-2">
           <textarea
             value={draftVocabulary}
+            aria-label="Custom Vocabulary"
             onChange={(e) => setDraftVocabulary(e.target.value)}
             rows={6}
             placeholder={"Zach Latta\nPrime Directive\nFreeFlow"}
@@ -207,14 +202,15 @@ const PostProcessingSettingsAdvancedComponent: React.FC = () => {
             {isVocabularyDirty && (
               <div className="flex gap-2">
                 <Button
-                  onClick={() =>
-                    updateSetting(
+                  onClick={() => {
+                    void updateSetting(
                       "custom_vocabulary_terms",
                       normalizedVocabulary
                         ? normalizedVocabulary.split("\n")
                         : [],
-                    )
-                  }
+                    );
+                    setDraftVocabulary(normalizedVocabulary);
+                  }}
                   variant="primary"
                   size="md"
                   disabled={isUpdating("custom_vocabulary_terms")}
@@ -249,6 +245,7 @@ const PostProcessingSettingsAdvancedComponent: React.FC = () => {
             {PRESET_OPTIONS.map((option) => (
               <button
                 key={option.value}
+                type="button"
                 onClick={() => handlePresetSelect(option.value)}
                 className={`flex flex-1 flex-col items-center px-4 py-2 rounded-md border text-sm font-medium transition-colors ${
                   effectivePreset === option.value
@@ -269,6 +266,7 @@ const PostProcessingSettingsAdvancedComponent: React.FC = () => {
           <div className="space-y-2">
             <textarea
               value={displayedPrompt}
+              aria-label="Post-processing system prompt"
               onChange={(e) => {
                 if (!isPresetReadOnly) {
                   setDraftSystemPrompt(e.target.value);
@@ -286,12 +284,12 @@ const PostProcessingSettingsAdvancedComponent: React.FC = () => {
             {!isPresetReadOnly && isSystemPromptDirty && (
               <div className="flex gap-2 pt-1">
                 <Button
-                  onClick={() =>
-                    updateSetting(
+                  onClick={() => {
+                    void updateSetting(
                       "post_process_system_prompt",
                       draftSystemPrompt,
-                    )
-                  }
+                    );
+                  }}
                   variant="primary"
                   size="md"
                   disabled={isUpdating("post_process_system_prompt")}
@@ -337,28 +335,3 @@ export const PostProcessingSettingsAdvanced = React.memo(
   PostProcessingSettingsAdvancedComponent,
 );
 PostProcessingSettingsAdvanced.displayName = "PostProcessingSettingsAdvanced";
-
-export const PostProcessingSettings: React.FC = () => {
-  const { t } = useTranslation();
-  const { getSetting } = useSettings();
-  const promptPreset =
-    (getSetting("post_process_cleaning_prompt_preset") as string | undefined) ??
-    "strict";
-  const usesCustomPrompt = promptPreset === "custom";
-  const showByokSettings = Boolean(
-    getSetting("byok_enabled") || getSetting("debug_mode"),
-  );
-
-  return (
-    <div className="max-w-3xl w-full mx-auto space-y-6">
-      {usesCustomPrompt && showByokSettings && (
-        <SettingsGroup title={t("settings.postProcessing.api.title")}>
-          <PostProcessingSettingsApi />
-        </SettingsGroup>
-      )}
-      <SettingsGroup title="Advanced">
-        <PostProcessingSettingsAdvanced />
-      </SettingsGroup>
-    </div>
-  );
-};

@@ -10,12 +10,9 @@ import {
 import { toast } from "sonner";
 import { commands } from "@/bindings";
 import WindowDragRegion from "@/components/ui/WindowDragRegion";
+import { useOnboardingCompletion } from "@/components/onboarding/OnboardingCompletionContext";
 import { useSettingsStore } from "@/stores/settingsStore";
 import { Check, Keyboard, Loader2, Mic } from "lucide-react";
-
-interface AccessibilityOnboardingProps {
-  onComplete: () => void;
-}
 
 type PermissionStatus = "checking" | "needed" | "waiting" | "granted";
 
@@ -24,17 +21,16 @@ interface PermissionsState {
   microphone: PermissionStatus;
 }
 
-const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
-  onComplete,
-}) => {
+const useAccessibilityOnboardingController = () => {
   const { t } = useTranslation();
+  const onComplete = useOnboardingCompletion();
   const refreshAudioDevices = useSettingsStore(
     (state) => state.refreshAudioDevices,
   );
   const refreshOutputDevices = useSettingsStore(
     (state) => state.refreshOutputDevices,
   );
-  const [isMacOS, setIsMacOS] = useState<boolean | null>(null);
+  const isMacOS = platform() === "macos";
   const [permissions, setPermissions] = useState<PermissionsState>({
     accessibility: "checking",
     microphone: "checking",
@@ -48,14 +44,26 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
     permissions.accessibility === "granted" &&
     permissions.microphone === "granted";
 
+  const clearPolling = useCallback(() => {
+    if (pollingRef.current) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+  }, []);
+
+  const clearCompletionTimeout = useCallback(() => {
+    if (timeoutRef.current) {
+      clearTimeout(timeoutRef.current);
+      timeoutRef.current = null;
+    }
+  }, []);
+
   // Check platform and permission status on mount
   useEffect(() => {
-    const currentPlatform = platform();
-    const isMac = currentPlatform === "macos";
-    setIsMacOS(isMac);
+    let completionTimeout: ReturnType<typeof setTimeout> | null = null;
 
     // Skip immediately on non-macOS - no permissions needed
-    if (!isMac) {
+    if (!isMacOS) {
       onComplete();
       return;
     }
@@ -90,7 +98,8 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
         // If both already granted, refresh audio devices and skip ahead
         if (accessibilityGranted && microphoneGranted) {
           await Promise.all([refreshAudioDevices(), refreshOutputDevices()]);
-          timeoutRef.current = setTimeout(() => onComplete(), 300);
+          completionTimeout = setTimeout(() => onComplete(), 300);
+          timeoutRef.current = completionTimeout;
         }
       } catch (error) {
         console.error("Failed to check permissions:", error);
@@ -103,7 +112,12 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
     };
 
     checkInitial();
-  }, [onComplete, refreshAudioDevices, refreshOutputDevices, t]);
+    return () => {
+      if (completionTimeout) {
+        clearTimeout(completionTimeout);
+      }
+    };
+  }, [isMacOS, onComplete, refreshAudioDevices, refreshOutputDevices, t]);
 
   // Polling for permissions after user clicks a button
   const startPolling = useCallback(() => {
@@ -137,12 +151,9 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
           return newState;
         });
 
-        // If both granted, stop polling, refresh audio devices, and proceed
+          // If both granted, stop polling, refresh audio devices, and proceed
         if (accessibilityGranted && microphoneGranted) {
-          if (pollingRef.current) {
-            clearInterval(pollingRef.current);
-            pollingRef.current = null;
-          }
+          clearPolling();
           // Now that we have mic permission, refresh audio devices
           await Promise.all([refreshAudioDevices(), refreshOutputDevices()]);
           timeoutRef.current = setTimeout(() => onComplete(), 500);
@@ -156,27 +167,20 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
 
         if (errorCountRef.current >= MAX_POLLING_ERRORS) {
           // Stop polling after too many consecutive errors
-          if (pollingRef.current) {
-            clearInterval(pollingRef.current);
-            pollingRef.current = null;
-          }
+          clearPolling();
           toast.error(t("onboarding.permissions.errors.checkFailed"));
         }
       }
     }, 1000);
-  }, [onComplete, refreshAudioDevices, refreshOutputDevices, t]);
+  }, [clearPolling, onComplete, refreshAudioDevices, refreshOutputDevices, t]);
 
   // Cleanup polling and timeouts on unmount
   useEffect(() => {
     return () => {
-      if (pollingRef.current) {
-        clearInterval(pollingRef.current);
-      }
-      if (timeoutRef.current) {
-        clearTimeout(timeoutRef.current);
-      }
+      clearPolling();
+      clearCompletionTimeout();
     };
-  }, []);
+  }, [clearCompletionTimeout, clearPolling]);
 
   const handleGrantAccessibility = async () => {
     try {
@@ -200,11 +204,28 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
     }
   };
 
+  return {
+    t,
+    permissions,
+    allGranted,
+    handleGrantAccessibility,
+    handleGrantMicrophone,
+  };
+};
+
+const AccessibilityOnboarding: React.FC = () => {
+  const {
+    t,
+    permissions,
+    allGranted,
+    handleGrantAccessibility,
+    handleGrantMicrophone,
+  } = useAccessibilityOnboardingController();
+
   // Still checking platform/initial permissions
   if (
-    isMacOS === null ||
-    (permissions.accessibility === "checking" &&
-      permissions.microphone === "checking")
+    permissions.accessibility === "checking" &&
+    permissions.microphone === "checking"
   ) {
     return (
       <div className="relative h-screen w-screen flex flex-col">
@@ -280,6 +301,7 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
                   </div>
                 ) : (
                   <button
+                    type="button"
                     onClick={handleGrantMicrophone}
                     className="px-4 py-2 rounded-lg bg-logo-primary hover:bg-logo-primary/90 text-white text-sm font-medium transition-colors cursor-pointer"
                   >
@@ -315,6 +337,7 @@ const AccessibilityOnboarding: React.FC<AccessibilityOnboardingProps> = ({
                   </div>
                 ) : (
                   <button
+                    type="button"
                     onClick={handleGrantAccessibility}
                     className="px-4 py-2 rounded-lg bg-logo-primary hover:bg-logo-primary/90 text-white text-sm font-medium transition-colors cursor-pointer"
                   >

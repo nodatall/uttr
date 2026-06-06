@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useReducer, useRef, type FC } from "react";
 import { Toaster, toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { platform } from "@tauri-apps/plugin-os";
@@ -9,21 +9,21 @@ import {
 } from "tauri-plugin-macos-permissions-api";
 import "./App.css";
 import AccessibilityPermissions from "./components/AccessibilityPermissions";
-import Footer from "./components/footer";
-import { AccessibilityOnboarding } from "./components/onboarding";
-import { Sidebar, SidebarSection } from "./components/Sidebar";
-import {
-  ApiKeysSettings,
-  FileTranscriptionSettings,
-  HistorySettings,
-  ModelsSettings,
-} from "./components/settings";
+import AccessibilityOnboarding from "./components/onboarding/AccessibilityOnboarding";
+import { OnboardingCompletionProvider } from "./components/onboarding/OnboardingCompletionContext";
+import { Sidebar } from "./components/Sidebar";
+import type { SidebarSection } from "./components/sidebarSections";
+import { ApiKeysSettings } from "./components/settings/api-keys/ApiKeysSettings";
+import { FileTranscriptionSettings } from "./components/settings/file-transcription/FileTranscriptionSettings";
+import { HistorySettings } from "./components/settings/history/HistorySettings";
+import { ModelsSettings } from "./components/settings/models/ModelsSettings";
 import {
   HomeWorkspace,
+  type SessionWindowStage,
   type SessionWindowState,
 } from "./components/workspace/HomeWorkspace";
 import { SettingsWorkspace } from "./components/workspace/SettingsWorkspace";
-import { RoseThreeLoader } from "./components/shared";
+import RoseThreeLoader from "./components/shared/RoseThreeLoader";
 import { useSettings } from "./hooks/useSettings";
 import { useSettingsStore } from "./stores/settingsStore";
 import { commands, type HistoryEntry } from "@/bindings";
@@ -77,13 +77,21 @@ async function withTimeout<T>(
   ]);
 }
 
-const renderSettingsContent = (
-  section: SidebarSection,
-  historyFocusRequest: HistoryFocusRequest | null,
-  sessionWindowState: SessionWindowState,
-  sessionClock: SessionClockState,
-  onOpenSessionEntry: (entry: HistoryEntry) => void,
-) => {
+interface SettingsContentProps {
+  section: SidebarSection;
+  historyFocusRequest: HistoryFocusRequest | null;
+  sessionWindowState: SessionWindowState;
+  sessionClock: SessionClockState;
+  onOpenSessionEntry: (entry: HistoryEntry) => void;
+}
+
+const SettingsContent: FC<SettingsContentProps> = ({
+  section,
+  historyFocusRequest,
+  sessionWindowState,
+  sessionClock,
+  onOpenSessionEntry,
+}) => {
   switch (section) {
     case "home":
       return (
@@ -126,23 +134,155 @@ type SessionClockState = {
   clockNow: number;
 };
 
-function App() {
+interface AppState {
+  onboardingStep: OnboardingStep | null;
+  currentSection: SidebarSection;
+  historyFocusRequest: HistoryFocusRequest | null;
+  sessionWindowState: SessionWindowState;
+  sessionClock: SessionClockState;
+}
+
+type AppAction =
+  | { type: "onboarding_step"; onboardingStep: OnboardingStep }
+  | { type: "section"; section: SidebarSection }
+  | { type: "open_session_entry"; entry: HistoryEntry }
+  | { type: "clock_tick"; now: number }
+  | { type: "sync_clock_for_stage"; stage: SessionWindowStage; now: number }
+  | { type: "show_history_entry"; entryId: number | null; token: number }
+  | {
+      type: "session_window_state";
+      nextState: SessionWindowState;
+      previousStage: SessionWindowStage;
+      token: number;
+    };
+
+const getInitialAppState = (): AppState => ({
+  onboardingStep: null,
+  currentSection: "home",
+  historyFocusRequest: null,
+  sessionWindowState: getInitialSessionWindowState(),
+  sessionClock: {
+    recordingStartedAt: null,
+    recordingStoppedAt: null,
+    clockNow: Date.now(),
+  },
+});
+
+const getClockForStage = (
+  clock: SessionClockState,
+  stage: SessionWindowStage,
+  now: number,
+): SessionClockState => {
+  if (stage === "active") {
+    return {
+      ...clock,
+      recordingStartedAt: clock.recordingStartedAt ?? now,
+      recordingStoppedAt: null,
+    };
+  }
+
+  if (isProcessingSessionStage(stage) || stage === "complete") {
+    return clock.recordingStartedAt !== null && clock.recordingStoppedAt === null
+      ? { ...clock, recordingStoppedAt: now }
+      : clock;
+  }
+
+  if (!isLiveSessionStage(stage)) {
+    return {
+      ...clock,
+      recordingStartedAt: null,
+      recordingStoppedAt: null,
+    };
+  }
+
+  return clock;
+};
+
+const appReducer = (state: AppState, action: AppAction): AppState => {
+  switch (action.type) {
+    case "onboarding_step":
+      return { ...state, onboardingStep: action.onboardingStep };
+    case "section":
+      return { ...state, currentSection: action.section };
+    case "open_session_entry":
+      return {
+        ...state,
+        currentSection: "home",
+        sessionClock: {
+          ...state.sessionClock,
+          recordingStartedAt: null,
+          recordingStoppedAt: null,
+        },
+        sessionWindowState: {
+          stage: "complete",
+          title: "Session saved",
+          subtitle: "The transcript is ready under Meetings.",
+          progressLabel: "Complete",
+          progressValue: 1,
+          summaryText: action.entry.post_processed_text,
+          rawTranscriptText: action.entry.transcription_text,
+          historyEntryId: action.entry.id,
+        },
+      };
+    case "clock_tick":
+      return {
+        ...state,
+        sessionClock: { ...state.sessionClock, clockNow: action.now },
+      };
+    case "sync_clock_for_stage":
+      return {
+        ...state,
+        sessionClock: getClockForStage(
+          state.sessionClock,
+          action.stage,
+          action.now,
+        ),
+      };
+    case "show_history_entry":
+      return {
+        ...state,
+        currentSection: "history",
+        historyFocusRequest: {
+          entryId: action.entryId,
+          token: action.token,
+        },
+      };
+    case "session_window_state": {
+      const shouldFocusHistory =
+        action.nextState.historyEntryId !== null &&
+        action.nextState.historyEntryId !== undefined;
+      const shouldShowHome =
+        action.previousStage === "idle" &&
+        action.nextState.stage !== "idle" &&
+        action.nextState.stage !== "complete";
+
+      return {
+        ...state,
+        currentSection: shouldShowHome ? "home" : state.currentSection,
+        historyFocusRequest: shouldFocusHistory
+          ? {
+              entryId: action.nextState.historyEntryId ?? null,
+              token: action.token,
+            }
+          : state.historyFocusRequest,
+        sessionWindowState: action.nextState,
+      };
+    }
+  }
+};
+
+function useAppController() {
   const { i18n } = useTranslation();
-  const [onboardingStep, setOnboardingStep] = useState<OnboardingStep | null>(
-    null,
-  );
-  const [currentSection, setCurrentSection] = useState<SidebarSection>("home");
-  const [historyFocusRequest, setHistoryFocusRequest] =
-    useState<HistoryFocusRequest | null>(null);
-  const [sessionWindowState, setSessionWindowState] =
-    useState<SessionWindowState>(getInitialSessionWindowState);
-  const [recordingStartedAt, setRecordingStartedAt] = useState<number | null>(
-    null,
-  );
-  const [recordingStoppedAt, setRecordingStoppedAt] = useState<number | null>(
-    null,
-  );
-  const [clockNow, setClockNow] = useState(() => Date.now());
+  const [
+    {
+      onboardingStep,
+      currentSection,
+      historyFocusRequest,
+      sessionWindowState,
+      sessionClock,
+    },
+    dispatch,
+  ] = useReducer(appReducer, undefined, getInitialAppState);
   const sessionStageRef = useRef(sessionWindowState.stage);
   const { settings, updateSetting } = useSettings();
   const direction = getLanguageDirection(i18n.language);
@@ -159,19 +299,7 @@ function App() {
   const hasCompletedPostOnboardingInit = useRef(false);
 
   const openSessionEntry = useCallback((entry: HistoryEntry) => {
-    setRecordingStartedAt(null);
-    setRecordingStoppedAt(null);
-    setSessionWindowState({
-      stage: "complete",
-      title: "Session saved",
-      subtitle: "The transcript is ready under Meetings.",
-      progressLabel: "Complete",
-      progressValue: 1,
-      summaryText: entry.post_processed_text,
-      rawTranscriptText: entry.transcription_text,
-      historyEntryId: entry.id,
-    });
-    setCurrentSection("home");
+    dispatch({ type: "open_session_entry", entry });
   }, []);
 
   useEffect(() => {
@@ -179,33 +307,19 @@ function App() {
       return;
     }
 
-    const timer = window.setInterval(() => setClockNow(Date.now()), 1000);
+    const timer = window.setInterval(() => {
+      dispatch({ type: "clock_tick", now: Date.now() });
+    }, 1000);
     return () => window.clearInterval(timer);
   }, [sessionWindowState.stage]);
 
   useEffect(() => {
-    const recording = sessionWindowState.stage === "active";
-    const processing = isProcessingSessionStage(sessionWindowState.stage);
-    const complete = sessionWindowState.stage === "complete";
-
-    if (recording) {
-      setRecordingStoppedAt(null);
-      setRecordingStartedAt((startedAt) => startedAt ?? Date.now());
-      return;
-    }
-
-    if (processing || complete) {
-      if (recordingStartedAt !== null && recordingStoppedAt === null) {
-        setRecordingStoppedAt(Date.now());
-      }
-      return;
-    }
-
-    if (!isLiveSessionStage(sessionWindowState.stage)) {
-      setRecordingStartedAt(null);
-      setRecordingStoppedAt(null);
-    }
-  }, [recordingStartedAt, recordingStoppedAt, sessionWindowState.stage]);
+    dispatch({
+      type: "sync_clock_for_stage",
+      stage: sessionWindowState.stage,
+      now: Date.now(),
+    });
+  }, [sessionWindowState.stage]);
 
   useEffect(() => {
     if (hasStartedOnboardingCheck.current) {
@@ -299,8 +413,8 @@ function App() {
   useEffect(() => {
     let unlistenFn: (() => void) | undefined;
     listen<{ entryId?: number | null }>("show-history-entry", (event) => {
-      setCurrentSection("history");
-      setHistoryFocusRequest({
+      dispatch({
+        type: "show_history_entry",
         entryId: event.payload?.entryId ?? null,
         token: Date.now(),
       });
@@ -320,25 +434,12 @@ function App() {
       const previousStage = sessionStageRef.current;
       sessionStageRef.current = nextState.stage;
 
-      setSessionWindowState(nextState);
-
-      if (
-        nextState.historyEntryId !== null &&
-        nextState.historyEntryId !== undefined
-      ) {
-        setHistoryFocusRequest({
-          entryId: nextState.historyEntryId,
-          token: Date.now(),
-        });
-      }
-
-      if (
-        previousStage === "idle" &&
-        nextState.stage !== "idle" &&
-        nextState.stage !== "complete"
-      ) {
-        setCurrentSection("home");
-      }
+      dispatch({
+        type: "session_window_state",
+        nextState,
+        previousStage,
+        token: Date.now(),
+      });
     }).then((unlisten) => {
       unlistenFn = unlisten;
     });
@@ -374,7 +475,10 @@ function App() {
             } else if (!permissions[0] || !permissions[1]) {
               // Missing permissions - show accessibility onboarding
               logFrontendStartup("permissions missing; showing onboarding");
-              setOnboardingStep("accessibility");
+              dispatch({
+                type: "onboarding_step",
+                onboardingStep: "accessibility",
+              });
               return;
             }
             logFrontendStartup("permissions checked");
@@ -385,16 +489,16 @@ function App() {
           }
         }
         logFrontendStartup("onboarding done");
-        setOnboardingStep("done");
+        dispatch({ type: "onboarding_step", onboardingStep: "done" });
       } else {
         // New user - start permissions onboarding
         logFrontendStartup("onboarding required");
-        setOnboardingStep("accessibility");
+        dispatch({ type: "onboarding_step", onboardingStep: "accessibility" });
       }
     } catch (error) {
       console.error("Failed to check onboarding status:", error);
       logFrontendStartup("onboarding check failed");
-      setOnboardingStep("accessibility");
+      dispatch({ type: "onboarding_step", onboardingStep: "accessibility" });
     }
   };
 
@@ -405,9 +509,39 @@ function App() {
         console.warn("Failed to mark onboarding complete:", error);
       })
       .finally(() => {
-        setOnboardingStep("done");
+        dispatch({ type: "onboarding_step", onboardingStep: "done" });
       });
   }, []);
+
+  const selectSection = useCallback((section: SidebarSection) => {
+    dispatch({ type: "section", section });
+  }, []);
+
+  return {
+    direction,
+    onboardingStep,
+    currentSection,
+    historyFocusRequest,
+    sessionWindowState,
+    sessionClock,
+    openSessionEntry,
+    handleAccessibilityComplete,
+    selectSection,
+  };
+}
+
+function App() {
+  const {
+    direction,
+    onboardingStep,
+    currentSection,
+    historyFocusRequest,
+    sessionWindowState,
+    sessionClock,
+    openSessionEntry,
+    handleAccessibilityComplete,
+    selectSection,
+  } = useAppController();
 
   // Still checking onboarding status
   if (onboardingStep === null) {
@@ -422,7 +556,11 @@ function App() {
   }
 
   if (onboardingStep === "accessibility") {
-    return <AccessibilityOnboarding onComplete={handleAccessibilityComplete} />;
+    return (
+      <OnboardingCompletionProvider onComplete={handleAccessibilityComplete}>
+        <AccessibilityOnboarding />
+      </OnboardingCompletionProvider>
+    );
   }
 
   return (
@@ -446,23 +584,19 @@ function App() {
         <div className="flex min-h-0 flex-1 flex-col gap-3 p-3 pt-1 sm:p-4 sm:pt-1 md:flex-row md:gap-4 md:p-5 md:pt-1">
           <Sidebar
             activeSection={currentSection}
-            onSectionChange={setCurrentSection}
+            onSectionChange={selectSection}
           />
           <div className="min-w-0 flex-1 overflow-hidden rounded-[20px] border border-white/6 bg-[rgba(5,10,18,0.56)] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
             <div className="flex h-full flex-col overflow-x-hidden overflow-y-auto uttr-scrollbar">
               <div className="flex flex-col items-center gap-5 px-4 py-5 sm:px-5 sm:py-6 md:gap-6 md:px-6 md:py-7">
                 <AccessibilityPermissions />
-                {renderSettingsContent(
-                  currentSection,
-                  historyFocusRequest,
-                  sessionWindowState,
-                  {
-                    recordingStartedAt,
-                    recordingStoppedAt,
-                    clockNow,
-                  },
-                  openSessionEntry,
-                )}
+                <SettingsContent
+                  section={currentSection}
+                  historyFocusRequest={historyFocusRequest}
+                  sessionWindowState={sessionWindowState}
+                  sessionClock={sessionClock}
+                  onOpenSessionEntry={openSessionEntry}
+                />
               </div>
             </div>
           </div>

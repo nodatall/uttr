@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useReducer } from "react";
 import { useTranslation } from "react-i18next";
 import { AudioPlayer } from "../../ui/AudioPlayer";
 import { Button } from "../../ui/Button";
@@ -19,6 +19,57 @@ interface HistoryFocusRequest {
   entryId: number | null;
   token: number;
 }
+
+interface HistorySettingsState {
+  historyEntries: HistoryEntry[];
+  loading: boolean;
+  highlightedEntryId: number | null;
+  manualActiveTab: HistoryTab;
+  ignoredFocusToken: number | null;
+}
+
+type HistorySettingsAction =
+  | { type: "entries_loaded"; entries: HistoryEntry[] }
+  | { type: "loading_finished" }
+  | { type: "choose_tab"; tab: HistoryTab; ignoredFocusToken: number | null }
+  | { type: "highlight"; entryId: number }
+  | { type: "clear_highlight"; entryId: number };
+
+const historySettingsInitialState: HistorySettingsState = {
+  historyEntries: [],
+  loading: true,
+  highlightedEntryId: null,
+  manualActiveTab: "dictations",
+  ignoredFocusToken: null,
+};
+
+const historySettingsReducer = (
+  state: HistorySettingsState,
+  action: HistorySettingsAction,
+): HistorySettingsState => {
+  switch (action.type) {
+    case "entries_loaded":
+      return { ...state, historyEntries: action.entries, loading: false };
+    case "loading_finished":
+      return { ...state, loading: false };
+    case "choose_tab":
+      return {
+        ...state,
+        manualActiveTab: action.tab,
+        ignoredFocusToken: action.ignoredFocusToken,
+      };
+    case "highlight":
+      return { ...state, highlightedEntryId: action.entryId };
+    case "clear_highlight":
+      return {
+        ...state,
+        highlightedEntryId:
+          state.highlightedEntryId === action.entryId
+            ? null
+            : state.highlightedEntryId,
+      };
+  }
+};
 
 interface OpenRecordingsButtonProps {
   onClick: () => void;
@@ -54,6 +105,40 @@ const formatHistoryPreviewText = (text: string): string => {
   return preview || text.replace(/\s+/g, " ").trim();
 };
 
+const toggleSaved = async (id: number) => {
+  try {
+    await commands.toggleHistoryEntrySaved(id);
+    // No need to reload here - the event listener will handle it
+  } catch (error) {
+    console.error("Failed to toggle saved status:", error);
+  }
+};
+
+const copyToClipboard = async (text: string) => {
+  try {
+    await navigator.clipboard.writeText(text);
+  } catch (error) {
+    console.error("Failed to copy to clipboard:", error);
+  }
+};
+
+const deleteAudioEntry = async (id: number) => {
+  try {
+    await commands.deleteHistoryEntry(id);
+  } catch (error) {
+    console.error("Failed to delete audio entry:", error);
+    throw error;
+  }
+};
+
+const openRecordingsFolder = async () => {
+  try {
+    await commands.openRecordingsFolder();
+  } catch (error) {
+    console.error("Failed to open recordings folder:", error);
+  }
+};
+
 interface HistorySettingsProps {
   focusRequest?: HistoryFocusRequest | null;
   onOpenSessionEntry?: (entry: HistoryEntry) => void;
@@ -61,22 +146,24 @@ interface HistorySettingsProps {
   compact?: boolean;
 }
 
-export const HistorySettings: React.FC<HistorySettingsProps> = ({
+const useHistorySettingsController = ({
   focusRequest = null,
   onOpenSessionEntry,
   mode = "dictations",
   compact = false,
-}) => {
+}: HistorySettingsProps) => {
   const { t } = useTranslation();
   const osType = useOsType();
-  const [historyEntries, setHistoryEntries] = useState<HistoryEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [highlightedEntryId, setHighlightedEntryId] = useState<number | null>(
-    null,
-  );
-  const [activeTab, setActiveTab] = useState<HistoryTab>(
-    mode === "meetings" ? "sessions" : "dictations",
-  );
+  const [
+    {
+      historyEntries,
+      loading,
+      highlightedEntryId,
+      manualActiveTab,
+      ignoredFocusToken,
+    },
+    dispatch,
+  ] = useReducer(historySettingsReducer, historySettingsInitialState);
   const dictationEntries = historyEntries.filter(
     (entry) => entry.recording_source !== "full_system_audio",
   );
@@ -84,6 +171,26 @@ export const HistorySettings: React.FC<HistorySettingsProps> = ({
     (entry) => entry.recording_source === "full_system_audio",
   );
   const showTabs = mode === "all";
+  const focusedEntryId = focusRequest?.entryId ?? null;
+  const focusToken = focusRequest?.token ?? null;
+  const focusedEntry =
+    focusedEntryId !== null
+      ? historyEntries.find((entry) => entry.id === focusedEntryId)
+      : undefined;
+  const focusedEntryTab =
+    mode === "all" &&
+    focusedEntry !== undefined &&
+    focusToken !== ignoredFocusToken
+      ? focusedEntry.recording_source === "full_system_audio"
+        ? "sessions"
+        : "dictations"
+      : null;
+  const activeTab =
+    mode === "meetings"
+      ? "sessions"
+      : mode === "dictations"
+        ? "dictations"
+        : (focusedEntryTab ?? manualActiveTab);
   const activeEntries =
     mode === "meetings"
       ? sessionEntries
@@ -97,7 +204,6 @@ export const HistorySettings: React.FC<HistorySettingsProps> = ({
   const visibleEntries = meetingsAreActive
     ? activeEntries
     : activeEntries.slice(0, MAX_VISIBLE_HISTORY);
-  const focusedEntryId = focusRequest?.entryId ?? null;
   const focusedEntryVisible =
     focusedEntryId !== null &&
     historyEntries.some((entry) => entry.id === focusedEntryId);
@@ -125,12 +231,12 @@ export const HistorySettings: React.FC<HistorySettingsProps> = ({
     try {
       const result = await commands.getHistoryEntries();
       if (result.status === "ok") {
-        setHistoryEntries(result.data);
+        dispatch({ type: "entries_loaded", entries: result.data });
       }
     } catch (error) {
       console.error("Failed to load history entries:", error);
     } finally {
-      setLoading(false);
+      dispatch({ type: "loading_finished" });
     }
   }, []);
 
@@ -159,28 +265,10 @@ export const HistorySettings: React.FC<HistorySettingsProps> = ({
     };
   }, [loadHistoryEntries]);
 
-  useEffect(() => {
-    if (mode !== "all") {
-      setActiveTab(mode === "meetings" ? "sessions" : "dictations");
-    }
-  }, [mode]);
+  const chooseTab = (tab: HistoryTab) => {
+    dispatch({ type: "choose_tab", tab, ignoredFocusToken: focusToken });
+  };
 
-  useEffect(() => {
-    if (focusedEntryId === null || loading) {
-      return;
-    }
-
-    const focusedEntry = historyEntries.find(
-      (entry) => entry.id === focusedEntryId,
-    );
-    if (focusedEntry && mode === "all") {
-      setActiveTab(
-        focusedEntry.recording_source === "full_system_audio"
-          ? "sessions"
-          : "dictations",
-      );
-    }
-  }, [focusedEntryId, historyEntries, loading, mode]);
 
   useEffect(() => {
     if (focusedEntryId === null || loading) {
@@ -196,16 +284,14 @@ export const HistorySettings: React.FC<HistorySettingsProps> = ({
       return;
     }
 
-    setHighlightedEntryId(targetEntryId);
+    dispatch({ type: "highlight", entryId: targetEntryId });
     entryElement.scrollIntoView({
       behavior: "smooth",
       block: "center",
     });
 
     const timeoutId = window.setTimeout(() => {
-      setHighlightedEntryId((current) =>
-        current === targetEntryId ? null : current,
-      );
+      dispatch({ type: "clear_highlight", entryId: targetEntryId });
     }, 3200);
 
     return () => {
@@ -220,23 +306,6 @@ export const HistorySettings: React.FC<HistorySettingsProps> = ({
 
     logFrontendStartup(`history settings visible id=${focusedEntryId}`);
   }, [focusedEntryId, focusedEntryVisible, loading]);
-
-  const toggleSaved = async (id: number) => {
-    try {
-      await commands.toggleHistoryEntrySaved(id);
-      // No need to reload here - the event listener will handle it
-    } catch (error) {
-      console.error("Failed to toggle saved status:", error);
-    }
-  };
-
-  const copyToClipboard = async (text: string) => {
-    try {
-      await navigator.clipboard.writeText(text);
-    } catch (error) {
-      console.error("Failed to copy to clipboard:", error);
-    }
-  };
 
   const getAudioUrl = useCallback(
     async (fileName: string) => {
@@ -261,22 +330,47 @@ export const HistorySettings: React.FC<HistorySettingsProps> = ({
     [osType],
   );
 
-  const deleteAudioEntry = async (id: number) => {
-    try {
-      await commands.deleteHistoryEntry(id);
-    } catch (error) {
-      console.error("Failed to delete audio entry:", error);
-      throw error;
-    }
+  return {
+    t,
+    historyEntries,
+    loading,
+    highlightedEntryId,
+    dictationEntries,
+    sessionEntries,
+    showTabs,
+    activeTab,
+    visibleEntries,
+    meetingsAreActive,
+    containerClass,
+    titleLabel,
+    emptyLabel,
+    compact,
+    chooseTab,
+    getAudioUrl,
+    onOpenSessionEntry,
   };
+};
 
-  const openRecordingsFolder = async () => {
-    try {
-      await commands.openRecordingsFolder();
-    } catch (error) {
-      console.error("Failed to open recordings folder:", error);
-    }
-  };
+export const HistorySettings: React.FC<HistorySettingsProps> = (props) => {
+  const {
+    t,
+    historyEntries,
+    loading,
+    highlightedEntryId,
+    dictationEntries,
+    sessionEntries,
+    showTabs,
+    activeTab,
+    visibleEntries,
+    meetingsAreActive,
+    containerClass,
+    titleLabel,
+    emptyLabel,
+    compact,
+    chooseTab,
+    getAudioUrl,
+    onOpenSessionEntry,
+  } = useHistorySettingsController(props);
 
   if (loading) {
     return (
@@ -364,7 +458,7 @@ export const HistorySettings: React.FC<HistorySettingsProps> = ({
         <div className="flex rounded-full border border-white/8 bg-white/[0.025] p-1 w-fit">
           <button
             type="button"
-            onClick={() => setActiveTab("dictations")}
+            onClick={() => chooseTab("dictations")}
             className={`rounded-full px-3 py-1.5 text-sm font-medium transition ${
               activeTab === "dictations"
                 ? "bg-logo-primary/14 text-logo-primary shadow-[inset_0_0_0_1px_rgba(103,215,163,0.18)]"
@@ -378,7 +472,7 @@ export const HistorySettings: React.FC<HistorySettingsProps> = ({
           </button>
           <button
             type="button"
-            onClick={() => setActiveTab("sessions")}
+            onClick={() => chooseTab("sessions")}
             className={`rounded-full px-3 py-1.5 text-sm font-medium transition ${
               activeTab === "sessions"
                 ? "bg-logo-primary/14 text-logo-primary shadow-[inset_0_0_0_1px_rgba(103,215,163,0.18)]"
@@ -489,6 +583,7 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
         <div className="space-y-2">
           <p className="text-sm font-medium text-text/86">{formattedDate}</p>
           <button
+            type="button"
             onClick={handlePrimaryClick}
             className={`w-full text-left text-[15px] leading-7 text-text/74 transition-colors hover:text-text ${
               isSession ? "cursor-pointer" : "cursor-copy"
@@ -512,6 +607,7 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
         </div>
         <div className="flex items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
           <button
+            type="button"
             onClick={handleCopyText}
             className="rounded-lg p-2 text-text/42 transition-colors hover:bg-white/[0.04] hover:text-text"
             title={t("settings.history.copyToClipboard")}
@@ -523,6 +619,7 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
             )}
           </button>
           <button
+            type="button"
             onClick={onToggleSaved}
             className={`rounded-lg p-2 transition-colors cursor-pointer ${
               entry.saved
@@ -542,6 +639,7 @@ const HistoryEntryComponent: React.FC<HistoryEntryProps> = ({
             />
           </button>
           <button
+            type="button"
             onClick={handleDeleteEntry}
             className="rounded-lg p-2 text-text/42 transition-colors cursor-pointer hover:bg-white/[0.04] hover:text-text"
             title={t("settings.history.delete")}

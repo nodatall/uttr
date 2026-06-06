@@ -80,18 +80,6 @@ function buildPendingCheckoutSessionRow(params: {
   };
 }
 
-export async function fetchAnonymousTrialByInstallId(installId: string) {
-  const rows = await queryRows<AnonymousTrialRow>(
-    `select *
-       from public.anonymous_trials
-      where install_id = $1
-      limit 1`,
-    [installId],
-  );
-
-  return firstOrNull(rows);
-}
-
 export async function fetchAnonymousTrialById(
   id: string,
   executor: DbExecutor = { query: dbQuery },

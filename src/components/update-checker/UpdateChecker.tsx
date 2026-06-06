@@ -1,9 +1,9 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useReducer, useEffect, useRef, useCallback } from "react";
 import { useTranslation } from "react-i18next";
 import { check } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
 import { listen } from "@tauri-apps/api/event";
-import { ProgressBar } from "../shared";
+import ProgressBar from "../shared/ProgressBar";
 import { useSettings } from "../../hooks/useSettings";
 
 const AUTO_UPDATE_CHECK_DELAY_MS = 6000;
@@ -23,14 +23,66 @@ interface UpdateCheckerProps {
   className?: string;
 }
 
+interface UpdateCheckerState {
+  isChecking: boolean;
+  updateAvailable: boolean;
+  isInstalling: boolean;
+  downloadProgress: number;
+  showUpToDate: boolean;
+}
+
+type UpdateCheckerAction =
+  | { type: "checking_started" }
+  | { type: "checking_finished" }
+  | { type: "update_available"; available: boolean }
+  | { type: "show_up_to_date"; show: boolean }
+  | { type: "install_started" }
+  | { type: "install_finished" }
+  | { type: "download_progress"; progress: number }
+  | { type: "disabled" };
+
+const initialUpdateCheckerState: UpdateCheckerState = {
+  isChecking: false,
+  updateAvailable: false,
+  isInstalling: false,
+  downloadProgress: 0,
+  showUpToDate: false,
+};
+
+const updateCheckerReducer = (
+  state: UpdateCheckerState,
+  action: UpdateCheckerAction,
+): UpdateCheckerState => {
+  switch (action.type) {
+    case "checking_started":
+      return { ...state, isChecking: true };
+    case "checking_finished":
+      return { ...state, isChecking: false };
+    case "update_available":
+      return {
+        ...state,
+        updateAvailable: action.available,
+        showUpToDate: action.available ? false : state.showUpToDate,
+      };
+    case "show_up_to_date":
+      return { ...state, showUpToDate: action.show };
+    case "install_started":
+      return { ...state, isInstalling: true, downloadProgress: 0 };
+    case "install_finished":
+      return { ...state, isInstalling: false, downloadProgress: 0 };
+    case "download_progress":
+      return { ...state, downloadProgress: action.progress };
+    case "disabled":
+      return { ...state, ...initialUpdateCheckerState };
+  }
+};
+
 const UpdateChecker: React.FC<UpdateCheckerProps> = ({ className = "" }) => {
   const { t } = useTranslation();
-  // Update checking state
-  const [isChecking, setIsChecking] = useState(false);
-  const [updateAvailable, setUpdateAvailable] = useState(false);
-  const [isInstalling, setIsInstalling] = useState(false);
-  const [downloadProgress, setDownloadProgress] = useState(0);
-  const [showUpToDate, setShowUpToDate] = useState(false);
+  const [
+    { isChecking, updateAvailable, isInstalling, downloadProgress, showUpToDate },
+    dispatch,
+  ] = useReducer(updateCheckerReducer, initialUpdateCheckerState);
 
   const { settings, isLoading } = useSettings();
   const settingsLoaded = !isLoading && settings !== null;
@@ -43,6 +95,55 @@ const UpdateChecker: React.FC<UpdateCheckerProps> = ({ className = "" }) => {
   const downloadedBytesRef = useRef(0);
   const contentLengthRef = useRef(0);
 
+  const clearUpToDateTimeout = useCallback(() => {
+    if (upToDateTimeoutRef.current) {
+      clearTimeout(upToDateTimeoutRef.current);
+      upToDateTimeoutRef.current = undefined;
+    }
+  }, []);
+
+  useEffect(() => clearUpToDateTimeout, [clearUpToDateTimeout]);
+
+  // Update checking functions
+  const checkForUpdates = useCallback(async (manual = false) => {
+    if (!updateChecksEnabled || isCheckingRef.current) return;
+
+    try {
+      isCheckingRef.current = true;
+      isManualCheckRef.current = manual;
+      dispatch({ type: "checking_started" });
+      const update = await runSharedUpdateCheck();
+
+      if (update) {
+        dispatch({ type: "update_available", available: true });
+      } else {
+        dispatch({ type: "update_available", available: false });
+
+        if (isManualCheckRef.current) {
+          dispatch({ type: "show_up_to_date", show: true });
+          clearUpToDateTimeout();
+          upToDateTimeoutRef.current = setTimeout(() => {
+            dispatch({ type: "show_up_to_date", show: false });
+          }, 3000);
+        }
+      }
+    } catch (error) {
+      console.error("Failed to check for updates:", error);
+    } finally {
+      isCheckingRef.current = false;
+      dispatch({ type: "checking_finished" });
+      isManualCheckRef.current = false;
+    }
+  }, [clearUpToDateTimeout, updateChecksEnabled]);
+
+  const handleManualUpdateCheck = useCallback(() => {
+    if (!updateChecksEnabled) return;
+    if (autoCheckTimeoutRef.current) {
+      clearTimeout(autoCheckTimeoutRef.current);
+    }
+    void checkForUpdates(true);
+  }, [checkForUpdates, updateChecksEnabled]);
+
   useEffect(() => {
     // Wait for settings to load before doing anything
     if (!settingsLoaded) return;
@@ -51,15 +152,14 @@ const UpdateChecker: React.FC<UpdateCheckerProps> = ({ className = "" }) => {
       if (upToDateTimeoutRef.current) {
         clearTimeout(upToDateTimeoutRef.current);
       }
-      setIsChecking(false);
-      setUpdateAvailable(false);
-      setShowUpToDate(false);
+      dispatch({ type: "disabled" });
       return;
     }
 
-    autoCheckTimeoutRef.current = setTimeout(() => {
+    const autoCheckTimeout = setTimeout(() => {
       void checkForUpdates();
     }, AUTO_UPDATE_CHECK_DELAY_MS);
+    autoCheckTimeoutRef.current = autoCheckTimeout;
 
     // Listen for update check events
     const updateUnlisten = listen("check-for-updates", () => {
@@ -67,64 +167,26 @@ const UpdateChecker: React.FC<UpdateCheckerProps> = ({ className = "" }) => {
     });
 
     return () => {
-      if (upToDateTimeoutRef.current) {
-        clearTimeout(upToDateTimeoutRef.current);
-      }
-      if (autoCheckTimeoutRef.current) {
-        clearTimeout(autoCheckTimeoutRef.current);
+      clearTimeout(autoCheckTimeout);
+      if (autoCheckTimeoutRef.current === autoCheckTimeout) {
+        autoCheckTimeoutRef.current = undefined;
       }
       updateUnlisten.then((fn) => fn());
     };
-  }, [settingsLoaded, updateChecksEnabled]);
-
-  // Update checking functions
-  const checkForUpdates = async (manual = false) => {
-    if (!updateChecksEnabled || isCheckingRef.current) return;
-
-    try {
-      isCheckingRef.current = true;
-      isManualCheckRef.current = manual;
-      setIsChecking(true);
-      const update = await runSharedUpdateCheck();
-
-      if (update) {
-        setUpdateAvailable(true);
-        setShowUpToDate(false);
-      } else {
-        setUpdateAvailable(false);
-
-        if (isManualCheckRef.current) {
-          setShowUpToDate(true);
-          if (upToDateTimeoutRef.current) {
-            clearTimeout(upToDateTimeoutRef.current);
-          }
-          upToDateTimeoutRef.current = setTimeout(() => {
-            setShowUpToDate(false);
-          }, 3000);
-        }
-      }
-    } catch (error) {
-      console.error("Failed to check for updates:", error);
-    } finally {
-      isCheckingRef.current = false;
-      setIsChecking(false);
-      isManualCheckRef.current = false;
-    }
-  };
-
-  const handleManualUpdateCheck = () => {
-    if (!updateChecksEnabled) return;
-    if (autoCheckTimeoutRef.current) {
-      clearTimeout(autoCheckTimeoutRef.current);
-    }
-    void checkForUpdates(true);
-  };
+  }, [
+    checkForUpdates,
+    autoCheckTimeoutRef,
+    dispatch,
+    handleManualUpdateCheck,
+    settingsLoaded,
+    upToDateTimeoutRef,
+    updateChecksEnabled,
+  ]);
 
   const installUpdate = async () => {
     if (!updateChecksEnabled) return;
     try {
-      setIsInstalling(true);
-      setDownloadProgress(0);
+      dispatch({ type: "install_started" });
       downloadedBytesRef.current = 0;
       contentLengthRef.current = 0;
       const update = await check();
@@ -149,7 +211,10 @@ const UpdateChecker: React.FC<UpdateCheckerProps> = ({ className = "" }) => {
                       100,
                   )
                 : 0;
-            setDownloadProgress(Math.min(progress, 100));
+            dispatch({
+              type: "download_progress",
+              progress: Math.min(progress, 100),
+            });
             break;
         }
       });
@@ -157,8 +222,7 @@ const UpdateChecker: React.FC<UpdateCheckerProps> = ({ className = "" }) => {
     } catch (error) {
       console.error("Failed to install update:", error);
     } finally {
-      setIsInstalling(false);
-      setDownloadProgress(0);
+      dispatch({ type: "install_finished" });
       downloadedBytesRef.current = 0;
       contentLengthRef.current = 0;
     }
@@ -200,6 +264,7 @@ const UpdateChecker: React.FC<UpdateCheckerProps> = ({ className = "" }) => {
     <div className={`flex items-center gap-3 ${className}`}>
       {isUpdateClickable ? (
         <button
+          type="button"
           onClick={getUpdateStatusAction()}
           disabled={isUpdateDisabled}
           className={`transition-colors disabled:opacity-50 tabular-nums ${

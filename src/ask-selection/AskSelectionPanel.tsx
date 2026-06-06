@@ -39,9 +39,10 @@ const DEFAULT_PAYLOAD: AskSelectionPayload = {
 };
 
 const payloadsMatch = (
-  first: AskSelectionPayload,
+  first: AskSelectionPayload | null,
   second: AskSelectionPayload,
 ) =>
+  first !== null &&
   first.state === second.state &&
   (first.text ?? null) === (second.text ?? null) &&
   (first.error ?? null) === (second.error ?? null) &&
@@ -73,20 +74,35 @@ const startPanelDrag = (event: MouseEvent<HTMLElement>) => {
     });
 };
 
-export default function AskSelectionPanel() {
-  const [payload, setPayload] = useState<AskSelectionPayload>(DEFAULT_PAYLOAD);
+const useAskSelectionPanelController = () => {
+  const [payload, setPayload] = useState<AskSelectionPayload | null>(null);
   const [copied, setCopied] = useState(false);
   const [draft, setDraft] = useState("");
   const [isSending, setIsSending] = useState(false);
-  const payloadRef = useRef<AskSelectionPayload>(DEFAULT_PAYLOAD);
+  const payloadRef = useRef<AskSelectionPayload | null>(null);
   const copyResetRef = useRef<number | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
+  const applyPayloadRef = useRef<(nextPayload: AskSelectionPayload | null) => void>(
+    () => {},
+  );
+  const refreshPayloadRef = useRef<() => void>(() => {});
 
   const applyPayload = useCallback(
     (nextPayload: AskSelectionPayload | null) => {
+      if (nextPayload === null) {
+        if (payloadRef.current === null) {
+          return;
+        }
+        payloadRef.current = null;
+        setPayload(null);
+        setCopied(false);
+        setIsSending(false);
+        return;
+      }
+
       const normalizedPayload = {
         ...DEFAULT_PAYLOAD,
-        ...(nextPayload ?? {}),
+        ...nextPayload,
         messages: nextPayload?.messages ?? [],
       };
       if (payloadsMatch(payloadRef.current, normalizedPayload)) {
@@ -109,11 +125,14 @@ export default function AskSelectionPanel() {
       .catch(() => {});
   }, [applyPayload]);
 
+  applyPayloadRef.current = applyPayload;
+  refreshPayloadRef.current = refreshPayload;
+
   useEffect(() => {
-    const unlistenPromise = listen<AskSelectionPayload>(
+    const unlistenPromise = listen<AskSelectionPayload | null>(
       "ask-selection-state",
       (event) => {
-        applyPayload(event.payload);
+        applyPayloadRef.current(event.payload);
       },
     );
 
@@ -125,28 +144,29 @@ export default function AskSelectionPanel() {
 
     const handleVisibilityChange = () => {
       if (!document.hidden) {
-        refreshPayload();
+        refreshPayloadRef.current();
       }
     };
 
-    refreshPayload();
+    refreshPayloadRef.current();
     window.addEventListener("keydown", handleKeyDown);
-    window.addEventListener("focus", refreshPayload);
+    const handleFocus = () => refreshPayloadRef.current();
+    window.addEventListener("focus", handleFocus);
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
     return () => {
       void unlistenPromise.then((unlisten) => unlisten());
       window.removeEventListener("keydown", handleKeyDown);
-      window.removeEventListener("focus", refreshPayload);
+      window.removeEventListener("focus", handleFocus);
       document.removeEventListener("visibilitychange", handleVisibilityChange);
-      if (copyResetRef.current !== null) {
-        window.clearTimeout(copyResetRef.current);
-      }
     };
-  }, [applyPayload, refreshPayload]);
+  }, [applyPayloadRef, copyResetRef, refreshPayloadRef]);
 
   useEffect(() => {
-    if (payload.state !== "thinking" && payload.state !== "recording") {
+    if (
+      payload === null ||
+      (payload.state !== "thinking" && payload.state !== "recording")
+    ) {
       return;
     }
 
@@ -157,14 +177,14 @@ export default function AskSelectionPanel() {
     return () => {
       window.clearInterval(interval);
     };
-  }, [payload.state, refreshPayload]);
+  }, [payload, refreshPayload]);
 
   useEffect(() => {
     messageListRef.current?.scrollTo({
       top: messageListRef.current.scrollHeight,
       behavior: "smooth",
     });
-  }, [payload.messages?.length, payload.state]);
+  }, [payload?.messages?.length, payload?.state]);
 
   const handleCopy = async (text: string | null | undefined) => {
     const cleanText = text?.trim();
@@ -188,18 +208,18 @@ export default function AskSelectionPanel() {
 
   const sendFollowUp = useCallback(async () => {
     const message = draft.trim();
-    const sessionId = payload.sessionId;
+    const sessionId = payload?.sessionId;
     if (!message || !sessionId || isSending) {
       return;
     }
 
     const optimisticMessages = [
-      ...(payload.messages ?? []),
+      ...(payload?.messages ?? []),
       { role: "user", text: message, pending: false },
       { role: "assistant", text: "Thinking...", pending: true },
     ];
     const optimisticPayload: AskSelectionPayload = {
-      ...payload,
+      ...(payload ?? DEFAULT_PAYLOAD),
       state: "thinking",
       messages: optimisticMessages,
     };
@@ -220,7 +240,7 @@ export default function AskSelectionPanel() {
       applyPayload(nextPayload);
     } catch (error) {
       const errorPayload: AskSelectionPayload = {
-        ...payloadRef.current,
+        ...(payloadRef.current ?? DEFAULT_PAYLOAD),
         state: "error",
         error: String(error),
       };
@@ -241,14 +261,52 @@ export default function AskSelectionPanel() {
   };
 
   const statusText = copied ? "Copied" : "";
-  const messages = useMemo(() => payload.messages ?? [], [payload.messages]);
-  const hasError = payload.state === "error";
+  const messages = useMemo(() => payload?.messages ?? [], [payload?.messages]);
+  const hasError = payload?.state === "error";
   const hasMessages = messages.length > 0;
   const hasCompletedAssistantMessage = messages.some(
     (message) => message.role === "assistant" && !message.pending,
   );
   const canChat =
-    Boolean(payload.sessionId) && hasCompletedAssistantMessage && !hasError;
+    Boolean(payload?.sessionId) && hasCompletedAssistantMessage && !hasError;
+
+  return {
+    payload,
+    copied,
+    draft,
+    isSending,
+    messageListRef,
+    messages,
+    hasError,
+    hasMessages,
+    canChat,
+    statusText,
+    setDraft,
+    handleCopy,
+    handleComposerKeyDown,
+  };
+};
+
+export default function AskSelectionPanel() {
+  const {
+    payload,
+    copied,
+    draft,
+    isSending,
+    messageListRef,
+    messages,
+    hasError,
+    hasMessages,
+    canChat,
+    statusText,
+    setDraft,
+    handleCopy,
+    handleComposerKeyDown,
+  } = useAskSelectionPanelController();
+
+  if (payload === null) {
+    return <div className="ask-selection-shell" />;
+  }
 
   return (
     <div className="ask-selection-shell">
@@ -256,9 +314,13 @@ export default function AskSelectionPanel() {
         className="ask-selection-panel"
         aria-label="Ask Selection result"
         data-tauri-drag-region
-        onMouseDown={startPanelDrag}
       >
-        <header className="ask-selection-header" data-tauri-drag-region>
+        <header
+          className="ask-selection-header"
+          data-tauri-drag-region
+          role="presentation"
+          onMouseDown={startPanelDrag}
+        >
           <span
             className={`ask-selection-status ${copied ? "ask-selection-status-visible" : ""}`}
             aria-live="polite"
@@ -276,7 +338,7 @@ export default function AskSelectionPanel() {
         </header>
         <div className="ask-selection-body" ref={messageListRef}>
           {payload.state === "recording" && !hasMessages && (
-            <div className="ask-selection-centered-state" role="status">
+            <output className="ask-selection-centered-state">
               <div className="ask-selection-audio-bars" aria-hidden="true">
                 <span />
                 <span />
@@ -284,16 +346,16 @@ export default function AskSelectionPanel() {
                 <span />
               </div>
               <span>Listening...</span>
-            </div>
+            </output>
           )}
           {payload.state === "thinking" && !hasMessages && (
-            <div className="ask-selection-centered-state" role="status">
+            <output className="ask-selection-centered-state">
               <RoseThreeLoader
                 className="ask-selection-loader"
                 ariaLabel="Thinking"
               />
               <span>Thinking...</span>
-            </div>
+            </output>
           )}
           {hasMessages && (
             <div className="ask-selection-messages">

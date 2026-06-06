@@ -74,14 +74,15 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
   }, [isRecording, shortcutId, stopRecordingSession, t]);
 
   // Set up event listener for handy-keys events
-  useEffect(() => {
-    if (!isRecording) return;
+	  useEffect(() => {
+	    if (!isRecording) return;
 
-    let cleanup = false;
+	    let cleanup = false;
+	    let localUnlisten: (() => void) | null = null;
 
-    const setupListener = async () => {
-      // Listen for key events from backend
-      const unlisten = await listen<HandyKeysEvent>(
+	    const setupListener = async () => {
+	      // Listen for key events from backend
+	      const unlisten = await listen<HandyKeysEvent>(
         "handy-keys-event",
         async (event) => {
           if (cleanup) return;
@@ -119,10 +120,16 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
             }
           }
         },
-      );
+	      );
 
-      unlistenRef.current = unlisten;
-    };
+	      if (cleanup) {
+	        unlisten();
+	        return;
+	      }
+
+	      localUnlisten = unlisten;
+	      unlistenRef.current = unlisten;
+	    };
 
     setupListener();
 
@@ -136,16 +143,15 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
 
     window.addEventListener("keydown", handleKeyDown);
 
-    return () => {
-      cleanup = true;
-      window.removeEventListener("keydown", handleKeyDown);
-      if (unlistenRef.current) {
-        unlistenRef.current();
-        unlistenRef.current = null;
-      }
-      // Stop backend recording on unmount to prevent orphaned recording loops
-      commands.stopHandyKeysRecording().catch(console.error);
-    };
+	    return () => {
+	      cleanup = true;
+	      window.removeEventListener("keydown", handleKeyDown);
+	      if (localUnlisten) {
+	        localUnlisten();
+	      }
+	      // Stop backend recording on unmount to prevent orphaned recording loops
+	      commands.stopHandyKeysRecording().catch(console.error);
+	    };
   }, [
     isRecording,
     shortcutId,
@@ -276,12 +282,14 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
           {formatCurrentKeys()}
         </div>
       ) : (
-        <div
+        <button
+          type="button"
           className={`rounded-md border px-2 py-1 text-sm font-semibold ${
             disabled
               ? "cursor-not-allowed border-mid-gray/40 bg-mid-gray/5 text-text/40"
               : "cursor-pointer border-mid-gray/80 bg-mid-gray/10 hover:border-logo-primary hover:bg-logo-primary/10"
           }`}
+          disabled={disabled}
           onClick={() => {
             if (!disabled) {
               void startRecording();
@@ -289,7 +297,7 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
           }}
         >
           {formatKeyCombination(binding.current_binding, osType)}
-        </div>
+        </button>
       )}
       <ResetButton
         onClick={() => resetBinding(shortcutId)}

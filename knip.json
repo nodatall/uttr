@@ -1,0 +1,17 @@
+{
+  "entry": [
+    "src/main.tsx",
+    "src/ux-review.tsx",
+    "src/overlay/main.tsx",
+    "src/ask-selection/main.tsx",
+    "vite.config.ts",
+    "eslint.config.js",
+    "tailwind.config.js",
+    "playwright.config.ts",
+    "marketing-site/app/**/*.{ts,tsx}",
+    "marketing-site/next.config.{js,mjs,ts}",
+    "marketing-site/postcss.config.{js,mjs,ts}"
+  ],
+  "ignore": ["agents-scratch/**"],
+  "ignoreDependencies": ["@tauri-apps/cli"]
+}

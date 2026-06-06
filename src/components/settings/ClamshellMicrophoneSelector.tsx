@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useSyncExternalStore } from "react";
 import { useTranslation } from "react-i18next";
 import { commands } from "@/bindings";
 import { Dropdown } from "../ui/Dropdown";
@@ -10,6 +10,42 @@ interface ClamshellMicrophoneSelectorProps {
   descriptionMode?: "inline" | "tooltip";
   grouped?: boolean;
 }
+
+let laptopSnapshot = false;
+let laptopCheckStarted = false;
+const laptopSubscribers = new Set<() => void>();
+
+const notifyLaptopSubscribers = () => {
+  laptopSubscribers.forEach((subscriber) => subscriber());
+};
+
+const ensureLaptopCheck = () => {
+  if (laptopCheckStarted) {
+    return;
+  }
+
+  laptopCheckStarted = true;
+  void commands
+    .isLaptop()
+    .then((result) => {
+      laptopSnapshot = result.status === "ok" ? result.data : false;
+    })
+    .catch((error) => {
+      console.error("Failed to check if device is laptop:", error);
+      laptopSnapshot = false;
+    })
+    .finally(notifyLaptopSubscribers);
+};
+
+const subscribeToLaptopSnapshot = (subscriber: () => void) => {
+  laptopSubscribers.add(subscriber);
+  ensureLaptopCheck();
+  return () => {
+    laptopSubscribers.delete(subscriber);
+  };
+};
+
+const getLaptopSnapshot = () => laptopSnapshot;
 
 export const ClamshellMicrophoneSelector: React.FC<ClamshellMicrophoneSelectorProps> =
   React.memo(({ descriptionMode = "tooltip", grouped = false }) => {
@@ -24,25 +60,11 @@ export const ClamshellMicrophoneSelector: React.FC<ClamshellMicrophoneSelectorPr
       refreshAudioDevices,
     } = useSettings();
 
-    const [isLaptop, setIsLaptop] = useState<boolean>(false);
-
-    useEffect(() => {
-      const checkIsLaptop = async () => {
-        try {
-          const result = await commands.isLaptop();
-          if (result.status === "ok") {
-            setIsLaptop(result.data);
-          } else {
-            setIsLaptop(false);
-          }
-        } catch (error) {
-          console.error("Failed to check if device is laptop:", error);
-          setIsLaptop(false);
-        }
-      };
-
-      checkIsLaptop();
-    }, []);
+    const isLaptop = useSyncExternalStore(
+      subscribeToLaptopSnapshot,
+      getLaptopSnapshot,
+      getLaptopSnapshot,
+    );
 
     // Only render on laptops
     if (!isLaptop) {

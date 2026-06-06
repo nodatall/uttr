@@ -11,17 +11,11 @@ interface ButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
   size?: "sm" | "md" | "lg";
 }
 
-export const Button: React.FC<ButtonProps> = ({
-  children,
-  className = "",
-  variant = "primary",
-  size = "md",
-  ...props
-}) => {
-  const baseClasses =
-    "font-medium rounded-xl border focus:outline-none transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer";
+const BUTTON_BASE_CLASSES =
+  "font-medium rounded-xl border focus:outline-none transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer";
 
-  const variantClasses = {
+const BUTTON_VARIANT_CLASSES: Record<NonNullable<ButtonProps["variant"]>, string> =
+  {
     primary:
       "text-white bg-background-ui border-background-ui/70 hover:bg-background-ui/90 hover:border-background-ui focus:ring-1 focus:ring-background-ui/60 shadow-[0_10px_24px_rgba(29,155,100,0.18)]",
     "primary-soft":
@@ -36,15 +30,24 @@ export const Button: React.FC<ButtonProps> = ({
       "text-current border-transparent hover:bg-white/[0.05] hover:border-white/10 focus:bg-white/[0.06]",
   };
 
-  const sizeClasses = {
-    sm: "px-2.5 py-1.5 text-xs",
-    md: "px-4 py-2 text-sm",
-    lg: "px-4 py-2.5 text-base",
-  };
+const BUTTON_SIZE_CLASSES: Record<NonNullable<ButtonProps["size"]>, string> = {
+  sm: "px-2.5 py-1.5 text-xs",
+  md: "px-4 py-2 text-sm",
+  lg: "px-4 py-2.5 text-base",
+};
 
+export const Button: React.FC<ButtonProps> = ({
+  children,
+  className = "",
+  variant = "primary",
+  size = "md",
+  type = "button",
+  ...props
+}) => {
   return (
     <button
-      className={`${baseClasses} ${variantClasses[variant]} ${sizeClasses[size]} ${className}`}
+      type={type}
+      className={`${BUTTON_BASE_CLASSES} ${BUTTON_VARIANT_CLASSES[variant]} ${BUTTON_SIZE_CLASSES[size]} ${className}`}
       {...props}
     >
       {children}

@@ -1,31 +1,20 @@
-export const trialStates = ["new", "trialing", "expired", "linked"] as const;
-export type TrialState = (typeof trialStates)[number];
+export type TrialState = "new" | "trialing" | "expired" | "linked";
 
-export const accessStates = ["blocked", "trialing", "subscribed"] as const;
-export type AccessState = (typeof accessStates)[number];
+export type AccessState = "blocked" | "trialing" | "subscribed";
 
-export const entitlementStates = [
-  "inactive",
-  "active",
-  "past_due",
-  "canceled",
-  "expired",
-] as const;
-export type EntitlementState = (typeof entitlementStates)[number];
+export type EntitlementState =
+  | "inactive"
+  | "active"
+  | "past_due"
+  | "canceled"
+  | "expired";
 
-export const checkoutSessionStatuses = [
-  "open",
-  "completed",
-  "expired",
-] as const;
-export type CheckoutSessionStatus = (typeof checkoutSessionStatuses)[number];
+export type CheckoutSessionStatus = "open" | "completed" | "expired";
 
-export const usageEventSources = [
-  "cloud_default",
-  "cloud_byok",
-  "local_fallback",
-] as const;
-export type UsageEventSource = (typeof usageEventSources)[number];
+export type UsageEventSource =
+  | "cloud_default"
+  | "cloud_byok"
+  | "local_fallback";
 
 export interface ClaimTokenPayload {
   version: 1;
