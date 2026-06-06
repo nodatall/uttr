@@ -872,6 +872,24 @@ fn ensure_file_transcription_history_defaults(settings: &mut AppSettings) -> boo
     changed
 }
 
+fn has_unmigrated_plaintext_api_keys(settings: &AppSettings) -> bool {
+    settings.post_process_api_keys.values().any(|value| {
+        let trimmed = value.trim();
+        !trimmed.is_empty() && trimmed != crate::byok_secrets::STORED_API_KEY_PLACEHOLDER
+    })
+}
+
+fn migrate_plaintext_api_keys_before_settings_write(
+    app: &AppHandle,
+    settings: &mut AppSettings,
+) -> Result<bool, String> {
+    if !has_unmigrated_plaintext_api_keys(settings) {
+        return Ok(false);
+    }
+
+    crate::byok_secrets::migrate_plaintext_api_keys(app, settings)
+}
+
 fn device_fingerprint_hash(app: &AppHandle) -> String {
     let mut hasher = Sha256::new();
 
@@ -1176,6 +1194,15 @@ pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
                 debug!("Found existing settings store");
                 let default_settings = get_default_settings();
                 let mut updated = false;
+                let mut settings_write_blocked = false;
+
+                match migrate_plaintext_api_keys_before_settings_write(app, &mut settings) {
+                    Ok(changed) => updated |= changed,
+                    Err(error) => {
+                        warn!("Failed to migrate plaintext API keys: {}", error);
+                        settings_write_blocked = has_unmigrated_plaintext_api_keys(&settings);
+                    }
+                }
 
                 // Merge default bindings into existing settings
                 for (key, value) in default_settings.bindings {
@@ -1193,7 +1220,7 @@ pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
                     updated = true;
                 }
 
-                if updated {
+                if updated && !settings_write_blocked {
                     debug!("Settings updated with new bindings");
                     store.set("settings", serde_json::to_value(&settings).unwrap());
                     if let Err(e) = store.save() {
@@ -1225,6 +1252,16 @@ pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
 
     let mut changed = false;
 
+    let mut settings_write_blocked = false;
+
+    match migrate_plaintext_api_keys_before_settings_write(app, &mut settings) {
+        Ok(migrated) => changed |= migrated,
+        Err(error) => {
+            warn!("Failed to migrate plaintext API keys: {}", error);
+            settings_write_blocked = has_unmigrated_plaintext_api_keys(&settings);
+        }
+    }
+
     if ensure_post_process_defaults(&mut settings) {
         changed = true;
     }
@@ -1249,7 +1286,7 @@ pub fn load_or_create_app_settings(app: &AppHandle) -> AppSettings {
         changed = true;
     }
 
-    if changed {
+    if changed && !settings_write_blocked {
         store.set("settings", serde_json::to_value(&settings).unwrap());
         if let Err(e) = store.save() {
             warn!("Failed to flush settings to disk: {}", e);
@@ -1283,6 +1320,15 @@ pub fn get_settings(app: &AppHandle) -> AppSettings {
     };
 
     let mut changed = false;
+    let mut settings_write_blocked = false;
+
+    match migrate_plaintext_api_keys_before_settings_write(app, &mut settings) {
+        Ok(migrated) => changed |= migrated,
+        Err(error) => {
+            warn!("Failed to migrate plaintext API keys: {}", error);
+            settings_write_blocked = has_unmigrated_plaintext_api_keys(&settings);
+        }
+    }
 
     let default_settings = get_default_settings();
     for (key, value) in default_settings.bindings {
@@ -1317,7 +1363,7 @@ pub fn get_settings(app: &AppHandle) -> AppSettings {
         changed = true;
     }
 
-    if changed {
+    if changed && !settings_write_blocked {
         store.set("settings", serde_json::to_value(&settings).unwrap());
         if let Err(e) = store.save() {
             warn!("Failed to flush settings to disk: {}", e);
@@ -1327,7 +1373,23 @@ pub fn get_settings(app: &AppHandle) -> AppSettings {
     settings
 }
 
-pub fn write_settings(app: &AppHandle, settings: AppSettings) {
+pub fn write_settings(app: &AppHandle, mut settings: AppSettings) {
+    match migrate_plaintext_api_keys_before_settings_write(app, &mut settings) {
+        Ok(_) => {}
+        Err(error) => {
+            warn!(
+                "Failed to migrate plaintext API keys before settings write: {}",
+                error
+            );
+            if has_unmigrated_plaintext_api_keys(&settings) {
+                warn!(
+                    "Skipping settings write because it would drop unmigrated plaintext API keys"
+                );
+                return;
+            }
+        }
+    }
+
     let store = app
         .store(SETTINGS_STORE_PATH)
         .expect("Failed to initialize store");
