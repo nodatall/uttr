@@ -65,6 +65,26 @@ const languageLabelFallbacks = new Map(
   LANGUAGES.map((language) => [language.value, language.label]),
 );
 
+const displayNamesByLocale = new Map<string, Intl.DisplayNames>();
+if (typeof Intl !== "undefined" && typeof Intl.DisplayNames === "function") {
+  for (const language of LANGUAGES) {
+    if (language.value === "auto") {
+      continue;
+    }
+
+    try {
+      displayNamesByLocale.set(
+        language.value,
+        new Intl.DisplayNames([language.value], {
+          type: "language",
+        }),
+      );
+    } catch {
+      // Fall back to static labels for locales unsupported by the runtime.
+    }
+  }
+}
+
 export const getLocalizedLanguageLabel = (
   languageCode: string,
   autoLabel: string,
@@ -76,10 +96,9 @@ export const getLocalizedLanguageLabel = (
 
   if (typeof Intl !== "undefined" && typeof Intl.DisplayNames === "function") {
     try {
-      const displayNames = new Intl.DisplayNames([displayLocale], {
-        type: "language",
-      });
-      const localizedName = displayNames.of(languageCode);
+      const localizedName = displayNamesByLocale
+        .get(displayLocale)
+        ?.of(languageCode);
       if (localizedName) {
         return localizedName;
       }

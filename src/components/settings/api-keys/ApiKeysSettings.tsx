@@ -30,19 +30,12 @@ export const ApiKeysSettings: React.FC = () => {
   const hasStoredGroqSecret = postProcessApiKeyStatuses.groq ?? false;
   const hasStoredOpenAiSecret = postProcessApiKeyStatuses.openai ?? false;
 
-  useEffect(() => {
-    setGroqApiKeyDraft("");
-  }, [hasStoredGroqSecret]);
-
-  useEffect(() => {
-    setOpenAiApiKeyDraft("");
-  }, [hasStoredOpenAiSecret]);
-
   const isGroqKeyUpdating = isUpdating("post_process_api_key:groq");
   const isOpenAiKeyUpdating = isUpdating("post_process_api_key:openai");
 
   const handleSaveGroqKey = async () => {
     await updatePostProcessApiKey("groq", groqApiKeyDraft.trim());
+    setGroqApiKeyDraft("");
   };
 
   const handleClearGroqKey = async () => {
@@ -52,6 +45,7 @@ export const ApiKeysSettings: React.FC = () => {
 
   const handleSaveOpenAiKey = async () => {
     await updatePostProcessApiKey("openai", openAiApiKeyDraft.trim());
+    setOpenAiApiKeyDraft("");
   };
 
   const handleClearOpenAiKey = async () => {

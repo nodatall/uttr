@@ -137,15 +137,20 @@ const ModelCard: React.FC<ModelCardProps> = ({
     e.stopPropagation();
     onDelete?.(model.id);
   };
+  const interactiveProps = isClickable
+    ? {
+        onClick: handleClick,
+        onKeyDown: (e: React.KeyboardEvent<HTMLDivElement>) => {
+          if (e.key === "Enter") handleClick();
+        },
+        role: "button",
+        tabIndex: 0,
+      }
+    : {};
 
   return (
     <div
-      onClick={handleClick}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" && isClickable) handleClick();
-      }}
-      role={isClickable ? "button" : undefined}
-      tabIndex={isClickable ? 0 : undefined}
+      {...interactiveProps}
       className={[
         baseClasses,
         getVariantClasses(),

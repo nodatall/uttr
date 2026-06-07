@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
 import { readCloudProxyConfig } from "@/lib/env";
 
-export const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
-export const GROQ_UPLOAD_LIMIT_BYTES = 100 * 1024 * 1024;
-export const GROQ_DEFAULT_TRANSLATION_MODEL = "whisper-large-v3";
+const GROQ_BASE_URL = "https://api.groq.com/openai/v1";
+const GROQ_UPLOAD_LIMIT_BYTES = 100 * 1024 * 1024;
+const GROQ_DEFAULT_TRANSLATION_MODEL = "whisper-large-v3";
 const GROQ_ALLOWED_TRANSCRIPTION_MODELS = new Set([
   "whisper-large-v3",
   "whisper-large-v3-turbo",
@@ -117,9 +117,7 @@ async function fetchGroqWithRetry(
   buildInit: () => RequestInit,
   maxAttempts = 3,
 ) {
-  let lastError: unknown = null;
-
-  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+  const attemptFetch = async (attempt: number): Promise<Response> => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 90_000);
 
@@ -142,21 +140,22 @@ async function fetchGroqWithRetry(
       );
       await response.arrayBuffer().catch(() => null);
       await sleep(Math.min(retryAfterMs ?? 250 * 2 ** (attempt - 1), 2_000));
+      return attemptFetch(attempt + 1);
     } catch (error) {
-      lastError = error;
       if (attempt === maxAttempts) {
-        throw error;
+        throw error instanceof Error
+          ? error
+          : new Error("Groq request failed before receiving a response.");
       }
 
       await sleep(250 * 2 ** (attempt - 1));
+      return attemptFetch(attempt + 1);
     } finally {
       clearTimeout(timeout);
     }
-  }
+  };
 
-  throw lastError instanceof Error
-    ? lastError
-    : new Error("Groq request failed before receiving a response.");
+  return attemptFetch(1);
 }
 
 export async function transcribeWithGroq({

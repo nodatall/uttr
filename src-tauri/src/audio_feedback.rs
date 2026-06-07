@@ -94,6 +94,10 @@ fn play_audio_file(
     selected_device: Option<String>,
     volume: f32,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    if crate::audio_toolkit::utils::is_running_under_rosetta() {
+        return Err(crate::audio_toolkit::utils::ROSETTA_COREAUDIO_UNAVAILABLE_MESSAGE.into());
+    }
+
     let stream_builder = if let Some(device_name) = selected_device {
         if device_name == "Default" {
             debug!("Using default device");

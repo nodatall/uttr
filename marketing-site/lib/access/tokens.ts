@@ -7,7 +7,7 @@ import {
 import { readAccessTokenConfig } from "@/lib/env";
 import type { ClaimTokenPayload, InstallTokenPayload } from "./types";
 
-export const INSTALL_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const INSTALL_TOKEN_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 
 function encodeBase64Url(value: string | Buffer) {
   return Buffer.from(value).toString("base64url");

@@ -1,0 +1,442 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ask Selection Chat Panel Mockup</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --background: #0d1117;
+        --surface: rgb(5 10 18 / 94%);
+        --surface-soft: rgb(255 255 255 / 4%);
+        --surface-strong: rgb(255 255 255 / 8%);
+        --border: rgb(255 255 255 / 10%);
+        --border-strong: rgb(255 255 255 / 14%);
+        --text: #e6edf3;
+        --muted: #93a0b3;
+        --primary: #67d7a3;
+        --danger: #faa2ca;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background:
+          linear-gradient(135deg, rgb(255 255 255 / 5%), transparent 30%),
+          var(--background);
+        color: var(--text);
+        font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+      }
+
+      .stage {
+        width: min(920px, calc(100vw - 48px));
+        display: grid;
+        gap: 18px;
+      }
+
+      .panel {
+        width: 760px;
+        height: 520px;
+        max-width: 100%;
+        margin: 0 auto;
+        display: grid;
+        grid-template-rows: 38px 1fr auto;
+        overflow: hidden;
+        border: 1px solid var(--border-strong);
+        border-radius: 20px;
+        background: var(--surface);
+        box-shadow:
+          0 24px 70px rgb(0 0 0 / 48%),
+          inset 0 1px 0 rgb(255 255 255 / 6%);
+        backdrop-filter: blur(18px) saturate(130%);
+      }
+
+      .header {
+        display: flex;
+        align-items: center;
+        justify-content: flex-end;
+        gap: 12px;
+        padding: 0 9px 0 16px;
+        border-bottom: 1px solid rgb(255 255 255 / 7%);
+        cursor: grab;
+      }
+
+      .close {
+        width: 28px;
+        height: 28px;
+        display: inline-grid;
+        place-items: center;
+        border: 0;
+        border-radius: 10px;
+        background: transparent;
+        color: rgb(230 237 243 / 64%);
+        font-size: 19px;
+      }
+
+      .body {
+        min-height: 0;
+        overflow: auto;
+        padding: 18px 18px 20px;
+        scrollbar-width: none;
+      }
+
+      .body::-webkit-scrollbar {
+        width: 0;
+        height: 0;
+      }
+
+      .recording-state,
+      .thinking-state {
+        min-height: 250px;
+        display: grid;
+        place-items: center;
+        text-align: center;
+        color: rgb(230 237 243 / 78%);
+      }
+
+      .pulse {
+        width: 86px;
+        height: 86px;
+        margin: 0 auto 16px;
+        border-radius: 50%;
+        border: 1px solid rgb(103 215 163 / 35%);
+        display: grid;
+        place-items: center;
+        box-shadow:
+          0 0 0 10px rgb(103 215 163 / 6%),
+          0 0 38px rgb(103 215 163 / 20%);
+      }
+
+      .bars {
+        height: 34px;
+        display: flex;
+        align-items: center;
+        gap: 4px;
+      }
+
+      .bars span {
+        width: 5px;
+        height: var(--h);
+        border-radius: 999px;
+        background: var(--primary);
+      }
+
+      .loader {
+        width: 52px;
+        height: 52px;
+        margin: 0 auto 16px;
+        border-radius: 50%;
+        border: 2px solid rgb(103 215 163 / 22%);
+        border-top-color: var(--primary);
+      }
+
+      .messages {
+        display: grid;
+        gap: 14px;
+      }
+
+      .message {
+        max-width: 82%;
+        padding: 12px 14px;
+        border: 1px solid var(--border);
+        border-radius: 16px;
+        background: var(--surface-soft);
+        font-size: 15px;
+        line-height: 1.5;
+        white-space: normal;
+      }
+
+      button.message {
+        appearance: none;
+        text-align: left;
+        cursor: pointer;
+      }
+
+      .message.user {
+        justify-self: end;
+        background: rgb(103 215 163 / 10%);
+        border-color: rgb(103 215 163 / 20%);
+      }
+
+      .message.assistant {
+        justify-self: start;
+      }
+
+      .copy-note {
+        display: none;
+      }
+
+      .composer {
+        position: relative;
+        padding: 12px;
+        border-top: 1px solid rgb(255 255 255 / 7%);
+        background: rgb(6 10 18 / 72%);
+      }
+
+      textarea {
+        width: 100%;
+        min-height: 44px;
+        max-height: 96px;
+        resize: none;
+        border: 1px solid var(--border);
+        border-radius: 14px;
+        padding: 11px 12px;
+        background: var(--surface-soft);
+        color: var(--text);
+        font: inherit;
+        line-height: 1.35;
+        outline: none;
+      }
+
+      .states {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+
+      .state-card {
+        min-height: 104px;
+        padding: 12px;
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        background: rgb(255 255 255 / 3%);
+        display: grid;
+        place-items: center;
+      }
+
+      .mini-state {
+        min-height: 58px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        color: var(--primary);
+        font-weight: 600;
+      }
+
+      .mini-bars {
+        display: flex;
+        align-items: center;
+        gap: 3px;
+      }
+
+      .mini-bars span {
+        width: 4px;
+        height: var(--h);
+        border-radius: 999px;
+        background: var(--primary);
+      }
+
+      .rose-loader {
+        width: 42px;
+        height: 42px;
+        color: var(--primary);
+        filter: drop-shadow(0 0 18px rgb(103 215 163 / 24%));
+        flex: 0 0 auto;
+      }
+
+      .rose-loader-path {
+        fill: none;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 4.6;
+        opacity: 0.1;
+      }
+
+      .rose-loader-dot {
+        fill: currentColor;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="stage">
+      <section class="panel" aria-label="Ask Selection chat panel">
+        <header class="header">
+          <button class="close" aria-label="Close">×</button>
+        </header>
+
+        <div class="body">
+          <div class="messages">
+            <div class="message user">
+              What are the main risks in this paragraph?
+            </div>
+            <button class="message assistant">
+              The core risk is that counselor overload creates demand, but it
+              does not prove this product is the buying priority. The paragraph
+              needs a sharper link to who pays and why they would switch.
+            </button>
+            <div class="message user">Make that more direct.</div>
+            <div class="message assistant">
+              Counselor overload proves the problem is real. It does not prove
+              families will pay for this specific solution.
+            </div>
+          </div>
+        </div>
+
+        <form class="composer">
+          <textarea aria-label="Follow-up message"></textarea>
+        </form>
+      </section>
+
+      <div class="states" aria-label="State examples">
+        <div class="state-card">
+          <div class="mini-state">
+            <div class="mini-bars">
+              <span style="--h: 16px"></span>
+              <span style="--h: 28px"></span>
+              <span style="--h: 21px"></span>
+              <span style="--h: 32px"></span>
+            </div>
+            Listening...
+          </div>
+        </div>
+        <div class="state-card">
+          <div class="mini-state">
+            <svg class="rose-loader" viewBox="0 0 100 100" aria-hidden="true">
+              <g class="rose-loader-orbit">
+                <path class="rose-loader-path" />
+              </g>
+            </svg>
+            Thinking...
+          </div>
+        </div>
+      </div>
+    </main>
+    <script>
+      const ROSE_THREE_CONFIG = {
+        rotate: true,
+        particleCount: 76,
+        trailSpan: 0.31,
+        durationMs: 5300,
+        rotationDurationMs: 28000,
+        pulseDurationMs: 4400,
+        strokeWidth: 4.6,
+        roseA: 9.2,
+        roseABoost: 0.6,
+        roseBreathBase: 0.72,
+        roseBreathBoost: 0.28,
+        roseScale: 3.25,
+      };
+
+      const normalizeProgress = (progress) => ((progress % 1) + 1) % 1;
+
+      const getDetailScale = (time) => {
+        const pulseProgress =
+          (time % ROSE_THREE_CONFIG.pulseDurationMs) /
+          ROSE_THREE_CONFIG.pulseDurationMs;
+        const pulseAngle = pulseProgress * Math.PI * 2;
+
+        return 0.52 + ((Math.sin(pulseAngle + 0.55) + 1) / 2) * 0.48;
+      };
+
+      const getRotation = (time) => {
+        if (!ROSE_THREE_CONFIG.rotate) {
+          return 0;
+        }
+
+        return (
+          -(
+            (time % ROSE_THREE_CONFIG.rotationDurationMs) /
+            ROSE_THREE_CONFIG.rotationDurationMs
+          ) * 360
+        );
+      };
+
+      const getPoint = (progress, detailScale) => {
+        const t = progress * Math.PI * 2;
+        const a =
+          ROSE_THREE_CONFIG.roseA + detailScale * ROSE_THREE_CONFIG.roseABoost;
+        const r =
+          a *
+          (ROSE_THREE_CONFIG.roseBreathBase +
+            detailScale * ROSE_THREE_CONFIG.roseBreathBoost) *
+          Math.cos(3 * t);
+
+        return {
+          x: 50 + Math.cos(t) * r * ROSE_THREE_CONFIG.roseScale,
+          y: 50 + Math.sin(t) * r * ROSE_THREE_CONFIG.roseScale,
+        };
+      };
+
+      const buildPath = (detailScale, steps = 480) =>
+        Array.from({ length: steps + 1 }, (_, index) => {
+          const point = getPoint(index / steps, detailScale);
+          return `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`;
+        }).join(" ");
+
+      const getParticle = (index, progress, detailScale) => {
+        const tailOffset = index / (ROSE_THREE_CONFIG.particleCount - 1);
+        const point = getPoint(
+          normalizeProgress(
+            progress - tailOffset * ROSE_THREE_CONFIG.trailSpan,
+          ),
+          detailScale,
+        );
+        const fade = Math.pow(1 - tailOffset, 0.56);
+
+        return {
+          x: point.x,
+          y: point.y,
+          radius: 0.9 + fade * 2.7,
+          opacity: 0.04 + fade * 0.96,
+        };
+      };
+
+      document.querySelectorAll(".rose-loader").forEach((svg) => {
+        const group = svg.querySelector(".rose-loader-orbit");
+        const path = svg.querySelector(".rose-loader-path");
+        const particles = Array.from(
+          { length: ROSE_THREE_CONFIG.particleCount },
+          () => {
+            const circle = document.createElementNS(
+              "http://www.w3.org/2000/svg",
+              "circle",
+            );
+            circle.setAttribute("class", "rose-loader-dot");
+            group.appendChild(circle);
+            return circle;
+          },
+        );
+        const startedAt = performance.now();
+        const reduceMotion = window.matchMedia(
+          "(prefers-reduced-motion: reduce)",
+        ).matches;
+
+        const render = (now) => {
+          const time = reduceMotion ? 0 : now - startedAt;
+          const progress =
+            (time % ROSE_THREE_CONFIG.durationMs) /
+            ROSE_THREE_CONFIG.durationMs;
+          const detailScale = getDetailScale(time);
+
+          group.setAttribute("transform", `rotate(${getRotation(time)} 50 50)`);
+          path.setAttribute("d", buildPath(detailScale));
+
+          particles.forEach((node, index) => {
+            const particle = getParticle(index, progress, detailScale);
+            node.setAttribute("cx", particle.x.toFixed(2));
+            node.setAttribute("cy", particle.y.toFixed(2));
+            node.setAttribute("r", particle.radius.toFixed(2));
+            node.setAttribute("opacity", particle.opacity.toFixed(3));
+          });
+
+          if (!reduceMotion) {
+            requestAnimationFrame(render);
+          }
+        };
+
+        requestAnimationFrame(render);
+      });
+    </script>
+  </body>
+</html>

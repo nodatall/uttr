@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useReducer, useState } from "react";
 import { createAuthClient, type AuthSession } from "@/lib/auth/client";
 import { getDownloadUrl } from "@/lib/download";
 import {
@@ -13,6 +13,70 @@ type AuthMode = "signin" | "signup";
 type ClaimFlowProps = {
   initialClaimToken: string | null;
   initialSource: string;
+};
+
+type ClaimStatus = "idle" | "auth" | "link" | "checkout";
+
+type ClaimState = {
+  email: string;
+  password: string;
+  authMode: AuthMode;
+  status: ClaimStatus;
+  error: string | null;
+  signedInEmail: string | null;
+  activeSession: AuthSession | null;
+};
+
+type ClaimAction =
+  | { type: "email"; email: string }
+  | { type: "password"; password: string }
+  | { type: "auth_started"; mode: AuthMode }
+  | { type: "session_loaded"; session: AuthSession }
+  | { type: "checkout_started"; status: "link" | "checkout" }
+  | { type: "error"; message: string }
+  | { type: "different_account" };
+
+const claimInitialState: ClaimState = {
+  email: "",
+  password: "",
+  authMode: "signup",
+  status: "idle",
+  error: null,
+  signedInEmail: null,
+  activeSession: null,
+};
+
+const claimReducer = (state: ClaimState, action: ClaimAction): ClaimState => {
+  switch (action.type) {
+    case "email":
+      return { ...state, email: action.email };
+    case "password":
+      return { ...state, password: action.password };
+    case "auth_started":
+      return { ...state, authMode: action.mode, status: "auth", error: null };
+    case "session_loaded":
+      return {
+        ...state,
+        activeSession: action.session,
+        signedInEmail: action.session.user.email ?? null,
+        status: "idle",
+        error: null,
+      };
+    case "checkout_started":
+      return { ...state, status: action.status, error: null };
+    case "error":
+      return { ...state, status: "idle", error: action.message };
+    case "different_account":
+      return {
+        ...state,
+        activeSession: null,
+        signedInEmail: null,
+        email: "",
+        password: "",
+        status: "idle",
+        error: null,
+      };
+  }
 };
 
 async function continueCheckoutFlow({
@@ -85,15 +149,10 @@ export function ClaimFlow({
 }: ClaimFlowProps) {
   const downloadUrl = getDownloadUrl();
   const [auth] = useState(() => createAuthClient());
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [authMode, setAuthMode] = useState<AuthMode>("signup");
-  const [status, setStatus] = useState<"idle" | "auth" | "link" | "checkout">(
-    "idle",
-  );
-  const [error, setError] = useState<string | null>(null);
-  const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
-  const [activeSession, setActiveSession] = useState<AuthSession | null>(null);
+  const [
+    { email, password, authMode, status, error, signedInEmail, activeSession },
+    dispatch,
+  ] = useReducer(claimReducer, claimInitialState);
   const canSubmitCredentials =
     status === "idle" && email.trim().length > 0 && password.length > 0;
 
@@ -101,9 +160,17 @@ export function ClaimFlow({
     session: AuthSession,
     fallbackEmail: string,
   ) => {
-    setActiveSession(session);
-    setSignedInEmail(session.user.email ?? fallbackEmail);
-    setStatus(initialClaimToken ? "link" : "checkout");
+    dispatch({
+      type: "session_loaded",
+      session: {
+        ...session,
+        user: { ...session.user, email: session.user.email ?? fallbackEmail },
+      },
+    });
+    dispatch({
+      type: "checkout_started",
+      status: initialClaimToken ? "link" : "checkout",
+    });
     await continueCheckoutFlow({
       initialClaimToken,
       initialSource,
@@ -118,10 +185,7 @@ export function ClaimFlow({
         return;
       }
 
-      setActiveSession(session);
-      setSignedInEmail(session.user.email ?? null);
-      setError(null);
-      setStatus("idle");
+      dispatch({ type: "session_loaded", session });
     });
 
     return () => {
@@ -134,9 +198,7 @@ export function ClaimFlow({
       return;
     }
 
-    setAuthMode(mode);
-    setStatus("auth");
-    setError(null);
+    dispatch({ type: "auth_started", mode });
 
     try {
       const session =
@@ -154,19 +216,23 @@ export function ClaimFlow({
     } catch (err) {
       const message =
         err instanceof Error ? err.message : "Authentication failed.";
-      setError(message);
-      setStatus("idle");
+      dispatch({ type: "error", message });
     }
   };
 
   const continueWithCurrentAccount = async () => {
     if (!activeSession) {
-      setError("Sign in or create an account before checkout.");
+      dispatch({
+        type: "error",
+        message: "Sign in or create an account before checkout.",
+      });
       return;
     }
 
-    setError(null);
-    setStatus(initialClaimToken ? "link" : "checkout");
+    dispatch({
+      type: "checkout_started",
+      status: initialClaimToken ? "link" : "checkout",
+    });
 
     try {
       await continueCheckoutFlow({
@@ -175,19 +241,13 @@ export function ClaimFlow({
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Checkout failed.";
-      setError(message);
-      setStatus("idle");
+      dispatch({ type: "error", message });
     }
   };
 
   const handleDifferentAccount = async () => {
     await auth.signOut();
-    setActiveSession(null);
-    setSignedInEmail(null);
-    setEmail("");
-    setPassword("");
-    setStatus("idle");
-    setError(null);
+    dispatch({ type: "different_account" });
   };
 
   if (!initialClaimToken) {
@@ -248,7 +308,9 @@ export function ClaimFlow({
               type="email"
               autoComplete="email"
               value={email}
-              onChange={(event) => setEmail(event.target.value)}
+              onChange={(event) =>
+                dispatch({ type: "email", email: event.target.value })
+              }
               className="w-full rounded-2xl border border-white/15 bg-black/20 px-4 py-3 text-cosmic-50 outline-none ring-0 transition placeholder:text-cosmic-400 focus:border-white/35"
               placeholder="you@example.com"
             />
@@ -262,7 +324,9 @@ export function ClaimFlow({
                 authMode === "signup" ? "new-password" : "current-password"
               }
               value={password}
-              onChange={(event) => setPassword(event.target.value)}
+              onChange={(event) =>
+                dispatch({ type: "password", password: event.target.value })
+              }
               className="w-full rounded-2xl border border-white/15 bg-black/20 px-4 py-3 text-cosmic-50 outline-none ring-0 transition placeholder:text-cosmic-400 focus:border-white/35"
               placeholder="Use at least 6 characters"
             />

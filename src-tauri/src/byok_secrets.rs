@@ -11,7 +11,7 @@ use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::fs;
 use std::panic::{catch_unwind, AssertUnwindSafe};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
@@ -92,28 +92,26 @@ fn env_provider_api_key(provider_id: &str) -> Option<String> {
     }
 }
 
-fn secret_store_key_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("Failed to resolve app data directory: {}", error))?
-        .join(SECRET_STORE_KEY_FILE))
-}
-
-fn secret_store_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(app
-        .path()
-        .app_data_dir()
-        .map_err(|error| format!("Failed to resolve app data directory: {}", error))?
-        .join(SECRET_STORE_FILE))
-}
-
 fn legacy_stronghold_vault_path(app: &AppHandle) -> Result<PathBuf, String> {
     Ok(app
         .path()
         .app_data_dir()
         .map_err(|error| format!("Failed to resolve app data directory: {}", error))?
         .join(LEGACY_STRONGHOLD_VAULT_FILE_NAME))
+}
+
+fn app_data_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    app.path()
+        .app_data_dir()
+        .map_err(|error| format!("Failed to resolve app data directory: {}", error))
+}
+
+fn secret_store_key_path_in_dir(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join(SECRET_STORE_KEY_FILE)
+}
+
+fn secret_store_path_in_dir(app_data_dir: &Path) -> PathBuf {
+    app_data_dir.join(SECRET_STORE_FILE)
 }
 
 fn derive_legacy_stronghold_password(settings: &AppSettings) -> Vec<u8> {
@@ -189,8 +187,8 @@ fn write_private_file(path: &PathBuf, contents: &[u8]) -> Result<(), String> {
         .map_err(|error| format!("Failed to write secret store file: {}", error))
 }
 
-fn load_or_create_store_key(app: &AppHandle) -> Result<[u8; 32], String> {
-    let key_path = secret_store_key_path(app)?;
+fn load_or_create_store_key_in_dir(app_data_dir: &Path) -> Result<[u8; 32], String> {
+    let key_path = secret_store_key_path_in_dir(app_data_dir);
     if key_path.exists() {
         let encoded = fs::read_to_string(&key_path)
             .map_err(|error| format!("Failed to read secret store key: {}", error))?;
@@ -211,15 +209,15 @@ fn load_or_create_store_key(app: &AppHandle) -> Result<[u8; 32], String> {
     Ok(key)
 }
 
-fn cipher_for_app(app: &AppHandle) -> Result<Aes256Gcm, String> {
-    let key = load_or_create_store_key(app)?;
+fn cipher_for_app_data_dir(app_data_dir: &Path) -> Result<Aes256Gcm, String> {
+    let key = load_or_create_store_key_in_dir(app_data_dir)?;
     Aes256Gcm::new_from_slice(&key)
         .map_err(|error| format!("Failed to initialize secret cipher: {}", error))
 }
 
 #[allow(deprecated)]
-fn read_secret_payload(app: &AppHandle) -> Result<SecretPayload, String> {
-    let store_path = secret_store_path(app)?;
+fn read_secret_payload_in_dir(app_data_dir: &Path) -> Result<SecretPayload, String> {
+    let store_path = secret_store_path_in_dir(app_data_dir);
     if !store_path.exists() {
         return Ok(SecretPayload::default());
     }
@@ -241,7 +239,7 @@ fn read_secret_payload(app: &AppHandle) -> Result<SecretPayload, String> {
     let ciphertext = BASE64
         .decode(store.ciphertext)
         .map_err(|error| format!("Failed to decode API key secret payload: {}", error))?;
-    let plaintext = cipher_for_app(app)?
+    let plaintext = cipher_for_app_data_dir(app_data_dir)?
         .decrypt(Nonce::from_slice(&nonce_bytes), ciphertext.as_ref())
         .map_err(|error| format!("Failed to decrypt API key secret store: {}", error))?;
 
@@ -250,13 +248,13 @@ fn read_secret_payload(app: &AppHandle) -> Result<SecretPayload, String> {
 }
 
 #[allow(deprecated)]
-fn write_secret_payload(app: &AppHandle, payload: &SecretPayload) -> Result<(), String> {
+fn write_secret_payload_in_dir(app_data_dir: &Path, payload: &SecretPayload) -> Result<(), String> {
     let mut nonce = [0u8; 12];
     OsRng.fill_bytes(&mut nonce);
 
     let plaintext = serde_json::to_vec(payload)
         .map_err(|error| format!("Failed to encode API key secret payload: {}", error))?;
-    let ciphertext = cipher_for_app(app)?
+    let ciphertext = cipher_for_app_data_dir(app_data_dir)?
         .encrypt(Nonce::from_slice(&nonce), plaintext.as_ref())
         .map_err(|error| format!("Failed to encrypt API key secret store: {}", error))?;
     let store = EncryptedSecretStore {
@@ -267,11 +265,18 @@ fn write_secret_payload(app: &AppHandle, payload: &SecretPayload) -> Result<(), 
     let store_json = serde_json::to_vec_pretty(&store)
         .map_err(|error| format!("Failed to encode API key secret store: {}", error))?;
 
-    write_private_file(&secret_store_path(app)?, &store_json)
+    write_private_file(&secret_store_path_in_dir(app_data_dir), &store_json)
 }
 
 fn stored_provider_api_key(app: &AppHandle, provider_id: &str) -> Result<Option<String>, String> {
-    Ok(read_secret_payload(app)?
+    stored_provider_api_key_in_dir(&app_data_dir(app)?, provider_id)
+}
+
+fn stored_provider_api_key_in_dir(
+    app_data_dir: &Path,
+    provider_id: &str,
+) -> Result<Option<String>, String> {
+    Ok(read_secret_payload_in_dir(app_data_dir)?
         .provider_api_keys
         .get(provider_id)
         .map(|value| value.trim())
@@ -314,22 +319,34 @@ pub fn save_provider_api_key(
     provider_id: &str,
     api_key: &str,
 ) -> Result<(), String> {
+    save_provider_api_key_in_dir(&app_data_dir(app)?, provider_id, api_key)
+}
+
+fn save_provider_api_key_in_dir(
+    app_data_dir: &Path,
+    provider_id: &str,
+    api_key: &str,
+) -> Result<(), String> {
     let trimmed = api_key.trim();
     if trimmed.is_empty() {
-        return clear_provider_api_key(app, provider_id);
+        return clear_provider_api_key_in_dir(app_data_dir, provider_id);
     }
 
-    let mut payload = read_secret_payload(app)?;
+    let mut payload = read_secret_payload_in_dir(app_data_dir)?;
     payload
         .provider_api_keys
         .insert(provider_id.to_string(), trimmed.to_string());
-    write_secret_payload(app, &payload)
+    write_secret_payload_in_dir(app_data_dir, &payload)
 }
 
 pub fn clear_provider_api_key(app: &AppHandle, provider_id: &str) -> Result<(), String> {
-    let mut payload = read_secret_payload(app)?;
+    clear_provider_api_key_in_dir(&app_data_dir(app)?, provider_id)
+}
+
+fn clear_provider_api_key_in_dir(app_data_dir: &Path, provider_id: &str) -> Result<(), String> {
+    let mut payload = read_secret_payload_in_dir(app_data_dir)?;
     payload.provider_api_keys.remove(provider_id);
-    write_secret_payload(app, &payload)
+    write_secret_payload_in_dir(app_data_dir, &payload)
 }
 
 pub fn has_any_transcription_api_key(app: &AppHandle, settings: &AppSettings) -> bool {
@@ -353,6 +370,13 @@ pub fn migrate_plaintext_api_keys(
     app: &AppHandle,
     settings: &mut AppSettings,
 ) -> Result<bool, String> {
+    migrate_plaintext_api_keys_in_dir(&app_data_dir(app)?, settings)
+}
+
+fn migrate_plaintext_api_keys_in_dir(
+    app_data_dir: &Path,
+    settings: &mut AppSettings,
+) -> Result<bool, String> {
     let mut changed = false;
 
     for (provider_id, api_key) in settings.post_process_api_keys.clone() {
@@ -362,7 +386,7 @@ pub fn migrate_plaintext_api_keys(
         }
 
         if trimmed != STORED_API_KEY_PLACEHOLDER {
-            save_provider_api_key(app, &provider_id, trimmed)?;
+            save_provider_api_key_in_dir(app_data_dir, &provider_id, trimmed)?;
         }
         settings
             .post_process_api_keys
@@ -449,6 +473,7 @@ pub fn redact_api_keys_for_renderer(app: &AppHandle, settings: &mut AppSettings)
 mod tests {
     use super::*;
     use crate::settings::get_default_settings;
+    use tempfile::TempDir;
 
     #[test]
     fn settings_groq_api_key_uses_non_empty_legacy_plaintext_value() {
@@ -525,6 +550,51 @@ mod tests {
 
         assert_eq!(settings_openai_api_key(&settings), None);
         assert_eq!(settings_groq_api_key(&settings), None);
+    }
+
+    #[test]
+    fn plaintext_api_key_migration_moves_keys_to_secret_store_before_serializing_settings() {
+        let temp_dir = TempDir::new().unwrap();
+        let mut settings = get_default_settings();
+        settings
+            .post_process_api_keys
+            .insert("groq".to_string(), " gsk_upgrade_plaintext ".to_string());
+        settings
+            .post_process_api_keys
+            .insert("openai".to_string(), " sk_upgrade_plaintext ".to_string());
+
+        assert!(migrate_plaintext_api_keys_in_dir(temp_dir.path(), &mut settings).unwrap());
+
+        assert_eq!(
+            stored_provider_api_key_in_dir(temp_dir.path(), "groq")
+                .unwrap()
+                .as_deref(),
+            Some("gsk_upgrade_plaintext")
+        );
+        assert_eq!(
+            stored_provider_api_key_in_dir(temp_dir.path(), "openai")
+                .unwrap()
+                .as_deref(),
+            Some("sk_upgrade_plaintext")
+        );
+        assert_eq!(
+            settings
+                .post_process_api_keys
+                .get("groq")
+                .map(String::as_str),
+            Some("")
+        );
+        assert_eq!(
+            settings
+                .post_process_api_keys
+                .get("openai")
+                .map(String::as_str),
+            Some("")
+        );
+
+        let serialized_settings = serde_json::to_string(&settings).unwrap();
+        assert!(!serialized_settings.contains("gsk_upgrade_plaintext"));
+        assert!(!serialized_settings.contains("sk_upgrade_plaintext"));
     }
 
     #[test]

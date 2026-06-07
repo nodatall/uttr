@@ -15,6 +15,15 @@ interface ProgressBarProps {
   showLabel?: boolean;
 }
 
+const PROGRESS_SIZE_CLASSES: Record<
+  NonNullable<ProgressBarProps["size"]>,
+  string
+> = {
+  small: "w-16 h-1",
+  medium: "w-20 h-1.5",
+  large: "w-24 h-2",
+};
+
 const ProgressBar: React.FC<ProgressBarProps> = ({
   progress,
   className = "",
@@ -22,13 +31,7 @@ const ProgressBar: React.FC<ProgressBarProps> = ({
   showSpeed = false,
   showLabel = false,
 }) => {
-  const sizeClasses = {
-    small: "w-16 h-1",
-    medium: "w-20 h-1.5",
-    large: "w-24 h-2",
-  };
-
-  const progressClasses = sizeClasses[size];
+  const progressClasses = PROGRESS_SIZE_CLASSES[size];
 
   if (progress.length === 0) {
     return null;

@@ -478,6 +478,7 @@ pub struct TranscriptionManager {
     loading_condvar: Arc<Condvar>,
     incremental_session: Arc<Mutex<Option<IncrementalSession>>>,
     cancel_requested: Arc<AtomicBool>,
+    cancel_generation: Arc<AtomicU64>,
 }
 
 impl TranscriptionManager {
@@ -499,6 +500,7 @@ impl TranscriptionManager {
             loading_condvar: Arc::new(Condvar::new()),
             incremental_session: Arc::new(Mutex::new(None)),
             cancel_requested: Arc::new(AtomicBool::new(false)),
+            cancel_generation: Arc::new(AtomicU64::new(0)),
         };
 
         // Start the idle watcher
@@ -2231,6 +2233,7 @@ impl TranscriptionManager {
     }
 
     pub fn request_cancel(&self) {
+        self.cancel_generation.fetch_add(1, Ordering::Relaxed);
         self.cancel_requested.store(true, Ordering::Relaxed);
         self.cancel_incremental_session();
     }
@@ -2241,6 +2244,10 @@ impl TranscriptionManager {
 
     pub fn is_cancel_requested(&self) -> bool {
         self.cancel_requested.load(Ordering::Relaxed)
+    }
+
+    pub fn cancel_generation(&self) -> u64 {
+        self.cancel_generation.load(Ordering::Relaxed)
     }
 
     pub async fn transcribe(&self, audio: Vec<f32>) -> Result<String> {

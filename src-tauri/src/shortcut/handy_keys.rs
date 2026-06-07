@@ -44,8 +44,8 @@ use crate::transcription_coordinator::{is_transcribe_binding, transcribe_binding
 
 use super::handler::handle_shortcut_event;
 
-const MODIFIER_ONLY_STALE_TIMEOUT: Duration = Duration::from_millis(750);
 const MODIFIER_ONLY_CHORD_WINDOW: Duration = Duration::from_millis(500);
+const MODIFIER_ONLY_PRESS_DEBOUNCE: Duration = Duration::from_millis(50);
 const MODIFIER_ONLY_RELEASE_DEBOUNCE: Duration = Duration::from_millis(100);
 
 /// Commands that can be sent to the hotkey manager thread
@@ -101,6 +101,13 @@ struct ActivePushToTalkGuard {
 struct PendingModifierOnlyRelease {
     hotkey_string: String,
     due_at: Instant,
+    force: bool,
+}
+
+#[derive(Clone)]
+struct PendingModifierOnlyPress {
+    hotkey_string: String,
+    due_at: Instant,
 }
 
 #[derive(Default)]
@@ -120,7 +127,7 @@ impl ModifierOnlyTracker {
             return;
         }
 
-        let Some(changed_family) = modifier_family_index(event.changed_modifier) else {
+        let Some(changed_family) = self.modifier_family_index_for_event(event) else {
             return;
         };
 
@@ -128,9 +135,12 @@ impl ModifierOnlyTracker {
             if family == changed_family || !self.active[family] {
                 continue;
             }
+            if changed_family == 4 && family == 1 {
+                continue;
+            }
 
             let is_stale = self.last_pressed_at[family].is_some_and(|pressed_at| {
-                now.duration_since(pressed_at) > MODIFIER_ONLY_STALE_TIMEOUT
+                now.duration_since(pressed_at) > MODIFIER_ONLY_CHORD_WINDOW
             });
             if is_stale {
                 self.active[family] = false;
@@ -139,7 +149,7 @@ impl ModifierOnlyTracker {
     }
 
     fn apply(&mut self, event: &KeyEvent, now: Instant) {
-        let Some(family) = modifier_family_index(event.changed_modifier) else {
+        let Some(family) = self.modifier_family_index_for_event(event) else {
             return;
         };
 
@@ -172,15 +182,48 @@ impl ModifierOnlyTracker {
     }
 
     fn modifier_only_press_is_fresh(&self, hotkey: Hotkey, now: Instant) -> bool {
-        modifier_family_signature(hotkey.modifiers)
+        let required_families = modifier_family_signature(hotkey.modifiers);
+        let allows_held_option_prefix = required_families[1] && required_families[4];
+
+        required_families
             .into_iter()
             .enumerate()
             .all(|(family, required)| {
                 !required
+                    || (allows_held_option_prefix && family == 1)
                     || self.last_pressed_at[family].is_some_and(|pressed_at| {
                         now.duration_since(pressed_at) <= MODIFIER_ONLY_CHORD_WINDOW
                     })
             })
+    }
+
+    fn modifier_family_index_for_event(&self, event: &KeyEvent) -> Option<usize> {
+        if self.ctrl_right_event_represents_option_fn(event) {
+            return Some(4);
+        }
+
+        modifier_family_index(event.changed_modifier)
+    }
+
+    fn changed_modifier_for_event(&self, event: &KeyEvent) -> Option<handy_keys::Modifiers> {
+        if self.ctrl_right_event_represents_option_fn(event) {
+            return Some(handy_keys::Modifiers::FN);
+        }
+
+        event.changed_modifier
+    }
+
+    fn ctrl_right_event_represents_option_fn(&self, event: &KeyEvent) -> bool {
+        event.key.is_none()
+            && event
+                .changed_modifier
+                .is_some_and(|modifier| modifier.contains(handy_keys::Modifiers::CTRL_RIGHT))
+            && (self.active[1]
+                || event.modifiers.intersects(
+                    handy_keys::Modifiers::OPT
+                        | handy_keys::Modifiers::OPT_LEFT
+                        | handy_keys::Modifiers::OPT_RIGHT,
+                ))
     }
 }
 
@@ -234,6 +277,8 @@ impl HandyKeysState {
         let mut pressed_modifier_only: HashSet<String> = HashSet::new();
         let mut modifier_only_tracker = ModifierOnlyTracker::default();
         let mut active_push_to_talk: HashMap<String, ActivePushToTalkGuard> = HashMap::new();
+        let mut pending_modifier_only_presses: HashMap<String, PendingModifierOnlyPress> =
+            HashMap::new();
         let mut pending_modifier_only_releases: HashMap<String, PendingModifierOnlyRelease> =
             HashMap::new();
 
@@ -259,6 +304,8 @@ impl HandyKeysState {
 
             if let Some(listener) = raw_listener.as_ref() {
                 while let Some(event) = listener.try_recv() {
+                    let effective_changed_modifier =
+                        modifier_only_tracker.changed_modifier_for_event(&event);
                     let modifier_only_modifiers = if event.key.is_none() {
                         let now = Instant::now();
                         modifier_only_tracker.clear_stale_before_modifier_press(
@@ -271,6 +318,18 @@ impl HandyKeysState {
                     } else {
                         modifier_only_tracker.modifiers()
                     };
+                    if event.key.is_none() {
+                        warn!(
+                            "[ask-hotkey] raw_modifier changed={:?} effective_changed={:?} down={} tracked={:?} pressed={:?} pending_presses={:?} pending_releases={:?}",
+                            event.changed_modifier,
+                            effective_changed_modifier,
+                            event.is_key_down,
+                            modifier_only_modifiers,
+                            pressed_modifier_only,
+                            pending_modifier_only_presses.keys().collect::<Vec<_>>(),
+                            pending_modifier_only_releases.keys().collect::<Vec<_>>()
+                        );
+                    }
 
                     Self::dispatch_modifier_only_events(
                         &app,
@@ -278,9 +337,21 @@ impl HandyKeysState {
                         &mut pressed_modifier_only,
                         &modifier_only_tracker,
                         &mut active_push_to_talk,
+                        &mut pending_modifier_only_presses,
                         &mut pending_modifier_only_releases,
                         modifier_only_modifiers,
+                        effective_changed_modifier,
                         &event,
+                    );
+                    Self::process_pending_modifier_only_presses(
+                        &app,
+                        &modifier_only_bindings,
+                        &mut pressed_modifier_only,
+                        &mut active_push_to_talk,
+                        &mut pending_modifier_only_presses,
+                        &pending_modifier_only_releases,
+                        modifier_only_tracker.modifiers(),
+                        Instant::now(),
                     );
                     Self::process_pending_modifier_only_releases(
                         &app,
@@ -296,6 +367,7 @@ impl HandyKeysState {
                         &mut active_push_to_talk,
                         &pending_modifier_only_releases,
                         modifier_only_modifiers,
+                        effective_changed_modifier,
                         &event,
                     );
                 }
@@ -310,7 +382,16 @@ impl HandyKeysState {
                 modifier_only_tracker.modifiers(),
                 Instant::now(),
             );
-
+            Self::process_pending_modifier_only_presses(
+                &app,
+                &modifier_only_bindings,
+                &mut pressed_modifier_only,
+                &mut active_push_to_talk,
+                &mut pending_modifier_only_presses,
+                &pending_modifier_only_releases,
+                modifier_only_tracker.modifiers(),
+                Instant::now(),
+            );
             // Check for commands (non-blocking with timeout)
             match cmd_rx.recv_timeout(std::time::Duration::from_millis(10)) {
                 Ok(cmd) => match cmd {
@@ -326,6 +407,7 @@ impl HandyKeysState {
                             &mut modifier_only_bindings,
                             &mut pressed_modifier_only,
                             &mut active_push_to_talk,
+                            &mut pending_modifier_only_presses,
                             &binding_id,
                             &hotkey_string,
                         );
@@ -342,6 +424,7 @@ impl HandyKeysState {
                             &mut modifier_only_bindings,
                             &mut pressed_modifier_only,
                             &mut active_push_to_talk,
+                            &mut pending_modifier_only_presses,
                             &mut pending_modifier_only_releases,
                             &binding_id,
                         );
@@ -373,6 +456,7 @@ impl HandyKeysState {
         modifier_only_bindings: &mut HashMap<String, (Hotkey, String)>,
         pressed_modifier_only: &mut HashSet<String>,
         active_push_to_talk: &mut HashMap<String, ActivePushToTalkGuard>,
+        pending_modifier_only_presses: &mut HashMap<String, PendingModifierOnlyPress>,
         binding_id: &str,
         hotkey_string: &str,
     ) -> Result<(), String> {
@@ -384,6 +468,7 @@ impl HandyKeysState {
         if modifier_only_bindings.remove(binding_id).is_some() {
             pressed_modifier_only.remove(binding_id);
             active_push_to_talk.remove(binding_id);
+            pending_modifier_only_presses.remove(binding_id);
         }
 
         if let Some(existing_id) = binding_to_hotkey.remove(binding_id) {
@@ -392,6 +477,7 @@ impl HandyKeysState {
                 .map_err(|e| format!("Failed to replace existing hotkey: {}", e))?;
             hotkey_to_binding.remove(&existing_id);
             active_push_to_talk.remove(binding_id);
+            pending_modifier_only_presses.remove(binding_id);
         }
 
         if hotkey.key.is_none() {
@@ -401,6 +487,7 @@ impl HandyKeysState {
             );
             pressed_modifier_only.remove(binding_id);
             active_push_to_talk.remove(binding_id);
+            pending_modifier_only_presses.remove(binding_id);
             debug!(
                 "Registered handy-keys modifier-only shortcut: {} -> {}",
                 binding_id, normalized_hotkey_string
@@ -415,6 +502,7 @@ impl HandyKeysState {
         binding_to_hotkey.insert(binding_id.to_string(), id);
         hotkey_to_binding.insert(id, (binding_id.to_string(), normalized_hotkey_string));
         active_push_to_talk.remove(binding_id);
+        pending_modifier_only_presses.remove(binding_id);
 
         debug!(
             "Registered handy-keys shortcut: {} -> {:?}",
@@ -431,12 +519,14 @@ impl HandyKeysState {
         modifier_only_bindings: &mut HashMap<String, (Hotkey, String)>,
         pressed_modifier_only: &mut HashSet<String>,
         active_push_to_talk: &mut HashMap<String, ActivePushToTalkGuard>,
+        pending_modifier_only_presses: &mut HashMap<String, PendingModifierOnlyPress>,
         pending_modifier_only_releases: &mut HashMap<String, PendingModifierOnlyRelease>,
         binding_id: &str,
     ) -> Result<(), String> {
         if modifier_only_bindings.remove(binding_id).is_some() {
             pressed_modifier_only.remove(binding_id);
             active_push_to_talk.remove(binding_id);
+            pending_modifier_only_presses.remove(binding_id);
             pending_modifier_only_releases.remove(binding_id);
             debug!(
                 "Unregistered handy-keys modifier-only shortcut: {}",
@@ -451,6 +541,7 @@ impl HandyKeysState {
                 .map_err(|e| format!("Failed to unregister hotkey: {}", e))?;
             hotkey_to_binding.remove(&id);
             active_push_to_talk.remove(binding_id);
+            pending_modifier_only_presses.remove(binding_id);
             pending_modifier_only_releases.remove(binding_id);
             debug!("Unregistered handy-keys shortcut: {}", binding_id);
         }
@@ -463,8 +554,10 @@ impl HandyKeysState {
         pressed_modifier_only: &mut HashSet<String>,
         modifier_only_tracker: &ModifierOnlyTracker,
         active_push_to_talk: &mut HashMap<String, ActivePushToTalkGuard>,
+        pending_modifier_only_presses: &mut HashMap<String, PendingModifierOnlyPress>,
         pending_modifier_only_releases: &mut HashMap<String, PendingModifierOnlyRelease>,
         modifier_only_modifiers: handy_keys::Modifiers,
+        effective_changed_modifier: Option<handy_keys::Modifiers>,
         event: &KeyEvent,
     ) {
         if event.key.is_some() {
@@ -476,6 +569,7 @@ impl HandyKeysState {
                 *hotkey,
                 event,
                 modifier_only_modifiers,
+                effective_changed_modifier,
                 pressed_modifier_only.contains(binding_id),
             ) {
                 Some(true) => {
@@ -487,6 +581,34 @@ impl HandyKeysState {
                         );
                         continue;
                     }
+                    if modifier_only_press_has_registered_superset(
+                        binding_id,
+                        hotkey.modifiers,
+                        modifier_only_bindings,
+                    ) {
+                        pending_modifier_only_presses.insert(
+                            binding_id.clone(),
+                            PendingModifierOnlyPress {
+                                hotkey_string: hotkey_string.clone(),
+                                due_at: Instant::now() + MODIFIER_ONLY_PRESS_DEBOUNCE,
+                            },
+                        );
+                        warn!(
+                            "[ask-hotkey] pending_press binding={} hotkey={} debounce_ms={}",
+                            binding_id,
+                            hotkey_string,
+                            MODIFIER_ONLY_PRESS_DEBOUNCE.as_millis()
+                        );
+                        debug!(
+                            "Debouncing handy-keys modifier-only press: binding={}, hotkey={}",
+                            binding_id, hotkey_string
+                        );
+                        continue;
+                    }
+                    cancel_shadowed_modifier_only_presses(
+                        pending_modifier_only_presses,
+                        hotkey.modifiers,
+                    );
                     pressed_modifier_only.insert(binding_id.clone());
                     Self::update_push_to_talk_guard(
                         app,
@@ -499,7 +621,19 @@ impl HandyKeysState {
                         "handy-keys modifier-only event: binding={}, hotkey={}, state=Pressed",
                         binding_id, hotkey_string
                     );
+                    warn!(
+                        "[ask-hotkey] dispatch_modifier_press binding={} hotkey={}",
+                        binding_id, hotkey_string
+                    );
                     handle_shortcut_event(app, binding_id, hotkey_string, true);
+                    cancel_shadowed_modifier_only_bindings(
+                        app,
+                        modifier_only_bindings,
+                        pressed_modifier_only,
+                        active_push_to_talk,
+                        pending_modifier_only_releases,
+                        hotkey.modifiers,
+                    );
                 }
                 Some(false) => {
                     pending_modifier_only_releases.insert(
@@ -507,7 +641,22 @@ impl HandyKeysState {
                         PendingModifierOnlyRelease {
                             hotkey_string: hotkey_string.clone(),
                             due_at: Instant::now() + MODIFIER_ONLY_RELEASE_DEBOUNCE,
+                            force: modifier_only_release_changed_required_modifier(
+                                *hotkey,
+                                effective_changed_modifier,
+                            ),
                         },
+                    );
+                    pending_modifier_only_presses.remove(binding_id);
+                    warn!(
+                        "[ask-hotkey] pending_release binding={} hotkey={} force={} debounce_ms={}",
+                        binding_id,
+                        hotkey_string,
+                        modifier_only_release_changed_required_modifier(
+                            *hotkey,
+                            effective_changed_modifier,
+                        ),
+                        MODIFIER_ONLY_RELEASE_DEBOUNCE.as_millis()
                     );
                     debug!(
                         "Debouncing handy-keys modifier-only release: binding={}, hotkey={}",
@@ -537,7 +686,9 @@ impl HandyKeysState {
                 continue;
             };
 
-            if modifier_families_match_exact(hotkey.modifiers, modifier_only_modifiers) {
+            if !pending.force
+                && modifier_families_match_exact(hotkey.modifiers, modifier_only_modifiers)
+            {
                 cancelled_releases.push(binding_id.clone());
                 continue;
             }
@@ -549,6 +700,10 @@ impl HandyKeysState {
 
         for binding_id in cancelled_releases {
             pending_modifier_only_releases.remove(&binding_id);
+            warn!(
+                "[ask-hotkey] cancel_pending_release binding={} active_modifiers={:?}",
+                binding_id, modifier_only_modifiers
+            );
             debug!(
                 "Cancelled handy-keys modifier-only release debounce: binding={}",
                 binding_id
@@ -563,7 +718,90 @@ impl HandyKeysState {
                 "handy-keys modifier-only event: binding={}, hotkey={}, state=Released",
                 binding_id, hotkey_string
             );
+            warn!(
+                "[ask-hotkey] complete_pending_release binding={} hotkey={} active_modifiers={:?}",
+                binding_id, hotkey_string, modifier_only_modifiers
+            );
             handle_shortcut_event(app, &binding_id, &hotkey_string, false);
+        }
+    }
+
+    fn process_pending_modifier_only_presses(
+        app: &AppHandle,
+        modifier_only_bindings: &HashMap<String, (Hotkey, String)>,
+        pressed_modifier_only: &mut HashSet<String>,
+        active_push_to_talk: &mut HashMap<String, ActivePushToTalkGuard>,
+        pending_modifier_only_presses: &mut HashMap<String, PendingModifierOnlyPress>,
+        pending_modifier_only_releases: &HashMap<String, PendingModifierOnlyRelease>,
+        modifier_only_modifiers: handy_keys::Modifiers,
+        now: Instant,
+    ) {
+        let mut completed_presses = Vec::new();
+        let mut cancelled_presses = Vec::new();
+
+        for (binding_id, pending) in pending_modifier_only_presses.iter() {
+            let Some((hotkey, _)) = modifier_only_bindings.get(binding_id) else {
+                cancelled_presses.push(binding_id.clone());
+                continue;
+            };
+
+            if pressed_modifier_only.contains(binding_id) {
+                cancelled_presses.push(binding_id.clone());
+                continue;
+            }
+
+            if modifier_only_press_is_shadowed_by_active_or_releasing_superset(
+                binding_id,
+                hotkey.modifiers,
+                modifier_only_bindings,
+                pressed_modifier_only,
+                pending_modifier_only_releases,
+            ) {
+                cancelled_presses.push(binding_id.clone());
+                continue;
+            }
+
+            if !modifier_families_match_exact(hotkey.modifiers, modifier_only_modifiers) {
+                cancelled_presses.push(binding_id.clone());
+                continue;
+            }
+
+            if now >= pending.due_at {
+                completed_presses.push((binding_id.clone(), pending.hotkey_string.clone()));
+            }
+        }
+
+        for binding_id in cancelled_presses {
+            pending_modifier_only_presses.remove(&binding_id);
+            warn!(
+                "[ask-hotkey] cancel_pending_press binding={} active_modifiers={:?}",
+                binding_id, modifier_only_modifiers
+            );
+            debug!(
+                "Cancelled handy-keys modifier-only press debounce: binding={}",
+                binding_id
+            );
+        }
+
+        for (binding_id, hotkey_string) in completed_presses {
+            pending_modifier_only_presses.remove(&binding_id);
+            pressed_modifier_only.insert(binding_id.clone());
+            Self::update_push_to_talk_guard(
+                app,
+                active_push_to_talk,
+                &binding_id,
+                &hotkey_string,
+                true,
+            );
+            debug!(
+                "handy-keys modifier-only event: binding={}, hotkey={}, state=Pressed",
+                binding_id, hotkey_string
+            );
+            warn!(
+                "[ask-hotkey] complete_pending_press binding={} hotkey={} active_modifiers={:?}",
+                binding_id, hotkey_string, modifier_only_modifiers
+            );
+            handle_shortcut_event(app, &binding_id, &hotkey_string, true);
         }
     }
 
@@ -607,6 +845,7 @@ impl HandyKeysState {
         active_push_to_talk: &mut HashMap<String, ActivePushToTalkGuard>,
         pending_modifier_only_releases: &HashMap<String, PendingModifierOnlyRelease>,
         modifier_only_modifiers: handy_keys::Modifiers,
+        effective_changed_modifier: Option<handy_keys::Modifiers>,
         event: &KeyEvent,
     ) {
         let mut released_bindings = Vec::new();
@@ -616,7 +855,12 @@ impl HandyKeysState {
             {
                 continue;
             }
-            if push_to_talk_guard_should_release(guard.hotkey, modifier_only_modifiers, event) {
+            if push_to_talk_guard_should_release(
+                guard.hotkey,
+                modifier_only_modifiers,
+                effective_changed_modifier,
+                event,
+            ) {
                 released_bindings.push((binding_id.clone(), guard.hotkey_string.to_string()));
             }
         }
@@ -900,6 +1144,115 @@ fn modifier_families_match_exact(
     modifier_family_signature(expected) == modifier_family_signature(actual)
 }
 
+fn modifier_family_signature_is_strict_subset(
+    subset: handy_keys::Modifiers,
+    superset: handy_keys::Modifiers,
+) -> bool {
+    let subset = modifier_family_signature(subset);
+    let superset = modifier_family_signature(superset);
+    let mut has_extra = false;
+
+    for index in 0..subset.len() {
+        if subset[index] && !superset[index] {
+            return false;
+        }
+        if !subset[index] && superset[index] {
+            has_extra = true;
+        }
+    }
+
+    has_extra
+}
+
+fn modifier_only_press_has_registered_superset(
+    binding_id: &str,
+    modifiers: handy_keys::Modifiers,
+    modifier_only_bindings: &HashMap<String, (Hotkey, String)>,
+) -> bool {
+    modifier_only_bindings
+        .iter()
+        .any(|(other_id, (other_hotkey, _))| {
+            other_id != binding_id
+                && modifier_family_signature_is_strict_subset(modifiers, other_hotkey.modifiers)
+        })
+}
+
+fn modifier_only_press_is_shadowed_by_active_or_releasing_superset(
+    binding_id: &str,
+    modifiers: handy_keys::Modifiers,
+    modifier_only_bindings: &HashMap<String, (Hotkey, String)>,
+    pressed_modifier_only: &HashSet<String>,
+    pending_modifier_only_releases: &HashMap<String, PendingModifierOnlyRelease>,
+) -> bool {
+    modifier_only_bindings
+        .iter()
+        .any(|(other_id, (other_hotkey, _))| {
+            other_id != binding_id
+                && modifier_family_signature_is_strict_subset(modifiers, other_hotkey.modifiers)
+                && (pressed_modifier_only.contains(other_id)
+                    || pending_modifier_only_releases.contains_key(other_id))
+        })
+}
+
+fn cancel_shadowed_modifier_only_presses(
+    pending_modifier_only_presses: &mut HashMap<String, PendingModifierOnlyPress>,
+    active_modifiers: handy_keys::Modifiers,
+) {
+    let shadowed: Vec<String> = pending_modifier_only_presses
+        .iter()
+        .filter_map(|(binding_id, pending)| {
+            let Ok(hotkey) = pending.hotkey_string.parse::<Hotkey>() else {
+                return Some(binding_id.clone());
+            };
+            modifier_family_signature_is_strict_subset(hotkey.modifiers, active_modifiers)
+                .then(|| binding_id.clone())
+        })
+        .collect();
+
+    for binding_id in shadowed {
+        pending_modifier_only_presses.remove(&binding_id);
+        debug!(
+            "Cancelled shadowed handy-keys modifier-only press debounce: binding={}",
+            binding_id
+        );
+    }
+}
+
+fn cancel_shadowed_modifier_only_bindings(
+    app: &AppHandle,
+    modifier_only_bindings: &HashMap<String, (Hotkey, String)>,
+    pressed_modifier_only: &mut HashSet<String>,
+    active_push_to_talk: &mut HashMap<String, ActivePushToTalkGuard>,
+    pending_modifier_only_releases: &mut HashMap<String, PendingModifierOnlyRelease>,
+    active_modifiers: handy_keys::Modifiers,
+) {
+    let shadowed: Vec<String> = pressed_modifier_only
+        .iter()
+        .filter_map(|binding_id| {
+            let (hotkey, _) = modifier_only_bindings.get(binding_id)?;
+            modifier_family_signature_is_strict_subset(hotkey.modifiers, active_modifiers)
+                .then(|| binding_id.clone())
+        })
+        .collect();
+
+    for binding_id in shadowed {
+        pressed_modifier_only.remove(&binding_id);
+        active_push_to_talk.remove(&binding_id);
+        pending_modifier_only_releases.remove(&binding_id);
+        debug!(
+            "Cancelled shadowed handy-keys modifier-only press: binding={}",
+            binding_id
+        );
+        if let Some((_, hotkey_string)) = modifier_only_bindings.get(&binding_id) {
+            warn!(
+                "[ask-hotkey] release_shadowed_binding binding={} hotkey={} active_modifiers={:?}",
+                binding_id, hotkey_string, active_modifiers
+            );
+            handle_shortcut_event(app, &binding_id, hotkey_string, false);
+        }
+    }
+}
+
 /// Validate a shortcut string for the HandyKeys implementation.
 /// HandyKeys is more permissive: allows modifier-only combos and the fn key.
 pub fn validate_shortcut(raw: &str) -> Result<(), String> {
@@ -988,6 +1341,7 @@ fn modifier_only_transition(
     hotkey: Hotkey,
     event: &KeyEvent,
     active_modifiers: handy_keys::Modifiers,
+    effective_changed_modifier: Option<handy_keys::Modifiers>,
     was_active: bool,
 ) -> Option<bool> {
     if hotkey.key.is_some() || event.key.is_some() {
@@ -997,16 +1351,37 @@ fn modifier_only_transition(
     let is_active = modifier_families_match_exact(hotkey.modifiers, active_modifiers);
     if !was_active && event.is_key_down && is_active {
         Some(true)
-    } else if was_active && !event.is_key_down && !is_active {
+    } else if was_active
+        && !event.is_key_down
+        && !is_active
+        && modifier_only_release_changed_required_modifier(hotkey, effective_changed_modifier)
+    {
         Some(false)
     } else {
         None
     }
 }
 
+fn modifier_only_release_changed_required_modifier(
+    hotkey: Hotkey,
+    effective_changed_modifier: Option<handy_keys::Modifiers>,
+) -> bool {
+    if hotkey.key.is_some() {
+        return false;
+    }
+
+    let Some(changed_modifier) = effective_changed_modifier else {
+        return false;
+    };
+
+    let required = modifier_family_signature(hotkey.modifiers);
+    modifier_family_index(Some(changed_modifier)).is_some_and(|index| required[index])
+}
+
 fn push_to_talk_guard_should_release(
     hotkey: Hotkey,
     modifier_only_modifiers: handy_keys::Modifiers,
+    effective_changed_modifier: Option<handy_keys::Modifiers>,
     event: &KeyEvent,
 ) -> bool {
     if hotkey.key.is_none() {
@@ -1017,12 +1392,275 @@ fn push_to_talk_guard_should_release(
         return true;
     }
 
-    hotkey.key == event.key && !event.is_key_down
+    if hotkey.key == event.key && !event.is_key_down {
+        return true;
+    }
+
+    let Some(changed_modifier) = effective_changed_modifier else {
+        return false;
+    };
+    let required = modifier_family_signature(hotkey.modifiers);
+    !event.is_key_down
+        && modifier_family_index(Some(changed_modifier)).is_some_and(|index| required[index])
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct ModifierOnlyScenario {
+        bindings: Vec<(String, Hotkey, String)>,
+        tracker: ModifierOnlyTracker,
+        pressed: HashSet<String>,
+        active_push_to_talk: HashMap<String, ActivePushToTalkGuard>,
+        pending_presses: HashMap<String, PendingModifierOnlyPress>,
+        pending_releases: HashMap<String, PendingModifierOnlyRelease>,
+        now: Instant,
+        events: Vec<(String, bool)>,
+    }
+
+    impl ModifierOnlyScenario {
+        fn new(binding_order: &[&str]) -> Self {
+            let mut bindings = Vec::new();
+            for binding_id in binding_order {
+                match *binding_id {
+                    "transcribe" => bindings.push((
+                        "transcribe".to_string(),
+                        "fn".parse().unwrap(),
+                        "fn".to_string(),
+                    )),
+                    "edit_mode" => bindings.push((
+                        "edit_mode".to_string(),
+                        "option+fn".parse().unwrap(),
+                        "option+fn".to_string(),
+                    )),
+                    _ => panic!("unknown binding id: {}", binding_id),
+                }
+            }
+
+            Self {
+                bindings,
+                tracker: ModifierOnlyTracker::default(),
+                pressed: HashSet::new(),
+                active_push_to_talk: HashMap::new(),
+                pending_presses: HashMap::new(),
+                pending_releases: HashMap::new(),
+                now: Instant::now(),
+                events: Vec::new(),
+            }
+        }
+
+        fn binding_map(&self) -> HashMap<String, (Hotkey, String)> {
+            self.bindings
+                .iter()
+                .map(|(binding_id, hotkey, hotkey_string)| {
+                    (binding_id.clone(), (*hotkey, hotkey_string.clone()))
+                })
+                .collect()
+        }
+
+        fn send_modifier(&mut self, changed_modifier: handy_keys::Modifiers, is_key_down: bool) {
+            let event = KeyEvent {
+                modifiers: self.tracker.modifiers(),
+                key: None,
+                is_key_down,
+                changed_modifier: Some(changed_modifier),
+            };
+            let effective_changed_modifier = self.tracker.changed_modifier_for_event(&event);
+            self.tracker.clear_stale_before_modifier_press(
+                &event,
+                self.now,
+                self.pressed.is_empty(),
+            );
+            self.tracker.apply(&event, self.now);
+            let active_modifiers = self.tracker.modifiers();
+            let modifier_only_bindings = self.binding_map();
+
+            for (binding_id, hotkey, hotkey_string) in self.bindings.clone() {
+                match modifier_only_transition(
+                    hotkey,
+                    &event,
+                    active_modifiers,
+                    effective_changed_modifier,
+                    self.pressed.contains(&binding_id),
+                ) {
+                    Some(true) => {
+                        if !self.tracker.modifier_only_press_is_fresh(hotkey, self.now) {
+                            continue;
+                        }
+
+                        if modifier_only_press_has_registered_superset(
+                            &binding_id,
+                            hotkey.modifiers,
+                            &modifier_only_bindings,
+                        ) {
+                            self.pending_presses.insert(
+                                binding_id,
+                                PendingModifierOnlyPress {
+                                    hotkey_string,
+                                    due_at: self.now + MODIFIER_ONLY_PRESS_DEBOUNCE,
+                                },
+                            );
+                            continue;
+                        }
+
+                        self.cancel_shadowed_presses(hotkey.modifiers);
+                        self.pressed.insert(binding_id.clone());
+                        self.events.push((binding_id, true));
+                        self.cancel_shadowed_bindings(hotkey.modifiers);
+                    }
+                    Some(false) => {
+                        self.pending_releases.insert(
+                            binding_id.clone(),
+                            PendingModifierOnlyRelease {
+                                hotkey_string,
+                                due_at: self.now + MODIFIER_ONLY_RELEASE_DEBOUNCE,
+                                force: modifier_only_release_changed_required_modifier(
+                                    hotkey,
+                                    effective_changed_modifier,
+                                ),
+                            },
+                        );
+                        self.pending_presses.remove(&binding_id);
+                    }
+                    None => {}
+                }
+            }
+
+            self.process_pending_presses();
+            self.process_pending_releases();
+        }
+
+        fn advance(&mut self, duration: Duration) {
+            self.now += duration;
+            self.process_pending_releases();
+            self.process_pending_presses();
+        }
+
+        fn cancel_shadowed_presses(&mut self, active_modifiers: handy_keys::Modifiers) {
+            let shadowed: Vec<String> = self
+                .pending_presses
+                .iter()
+                .filter_map(|(binding_id, pending)| {
+                    let hotkey = pending.hotkey_string.parse::<Hotkey>().ok()?;
+                    modifier_family_signature_is_strict_subset(hotkey.modifiers, active_modifiers)
+                        .then(|| binding_id.clone())
+                })
+                .collect();
+
+            for binding_id in shadowed {
+                self.pending_presses.remove(&binding_id);
+            }
+        }
+
+        fn cancel_shadowed_bindings(&mut self, active_modifiers: handy_keys::Modifiers) {
+            let modifier_only_bindings = self.binding_map();
+            let shadowed: Vec<String> = self
+                .pressed
+                .iter()
+                .filter_map(|binding_id| {
+                    let (hotkey, _) = modifier_only_bindings.get(binding_id)?;
+                    modifier_family_signature_is_strict_subset(hotkey.modifiers, active_modifiers)
+                        .then(|| binding_id.clone())
+                })
+                .collect();
+
+            for binding_id in shadowed {
+                self.pressed.remove(&binding_id);
+                self.active_push_to_talk.remove(&binding_id);
+                self.pending_releases.remove(&binding_id);
+                self.events.push((binding_id, false));
+            }
+        }
+
+        fn process_pending_presses(&mut self) {
+            let modifier_only_bindings = self.binding_map();
+            let active_modifiers = self.tracker.modifiers();
+            let mut completed_presses = Vec::new();
+            let mut cancelled_presses = Vec::new();
+
+            for (binding_id, pending) in self.pending_presses.iter() {
+                let Some((hotkey, _)) = modifier_only_bindings.get(binding_id) else {
+                    cancelled_presses.push(binding_id.clone());
+                    continue;
+                };
+
+                if self.pressed.contains(binding_id)
+                    || modifier_only_press_is_shadowed_by_active_or_releasing_superset(
+                        binding_id,
+                        hotkey.modifiers,
+                        &modifier_only_bindings,
+                        &self.pressed,
+                        &self.pending_releases,
+                    )
+                    || !modifier_families_match_exact(hotkey.modifiers, active_modifiers)
+                {
+                    cancelled_presses.push(binding_id.clone());
+                    continue;
+                }
+
+                if self.now >= pending.due_at {
+                    completed_presses.push((binding_id.clone(), pending.hotkey_string.clone()));
+                }
+            }
+
+            for binding_id in cancelled_presses {
+                self.pending_presses.remove(&binding_id);
+            }
+
+            for (binding_id, _) in completed_presses {
+                self.pending_presses.remove(&binding_id);
+                self.pressed.insert(binding_id.clone());
+                self.events.push((binding_id, true));
+            }
+        }
+
+        fn process_pending_releases(&mut self) {
+            let modifier_only_bindings = self.binding_map();
+            let active_modifiers = self.tracker.modifiers();
+            let mut completed_releases = Vec::new();
+            let mut cancelled_releases = Vec::new();
+
+            for (binding_id, pending) in self.pending_releases.iter() {
+                let Some((hotkey, _)) = modifier_only_bindings.get(binding_id) else {
+                    cancelled_releases.push(binding_id.clone());
+                    continue;
+                };
+
+                if !pending.force
+                    && modifier_families_match_exact(hotkey.modifiers, active_modifiers)
+                {
+                    cancelled_releases.push(binding_id.clone());
+                    continue;
+                }
+
+                if self.now >= pending.due_at {
+                    completed_releases.push(binding_id.clone());
+                }
+            }
+
+            for binding_id in cancelled_releases {
+                self.pending_releases.remove(&binding_id);
+            }
+
+            for binding_id in completed_releases {
+                self.pending_releases.remove(&binding_id);
+                self.pressed.remove(&binding_id);
+                self.events.push((binding_id, false));
+            }
+        }
+
+        fn assert_no_plain_transcribe_press(&self) {
+            assert!(
+                !self
+                    .events
+                    .iter()
+                    .any(|(binding_id, is_pressed)| binding_id == "transcribe" && *is_pressed),
+                "plain fn transcribe dispatched unexpectedly: {:?}",
+                self.events
+            );
+        }
+    }
 
     #[test]
     fn modifier_only_transition_starts_fn_binding_on_press() {
@@ -1035,7 +1673,13 @@ mod tests {
         };
 
         assert_eq!(
-            modifier_only_transition(hotkey, &event, event.modifiers, false),
+            modifier_only_transition(
+                hotkey,
+                &event,
+                event.modifiers,
+                event.changed_modifier,
+                false
+            ),
             Some(true)
         );
     }
@@ -1051,9 +1695,47 @@ mod tests {
         };
 
         assert_eq!(
-            modifier_only_transition(hotkey, &event, event.modifiers, true),
+            modifier_only_transition(
+                hotkey,
+                &event,
+                event.modifiers,
+                event.changed_modifier,
+                true
+            ),
             Some(false)
         );
+    }
+
+    #[test]
+    fn modifier_only_release_forces_when_required_modifier_goes_up() {
+        let hotkey: Hotkey = "option+fn".parse().unwrap();
+        let event = KeyEvent {
+            modifiers: handy_keys::Modifiers::OPT,
+            key: None,
+            is_key_down: false,
+            changed_modifier: Some(handy_keys::Modifiers::FN),
+        };
+
+        assert!(modifier_only_release_changed_required_modifier(
+            hotkey,
+            event.changed_modifier
+        ));
+    }
+
+    #[test]
+    fn modifier_only_release_does_not_force_for_unrelated_modifier() {
+        let hotkey: Hotkey = "option+fn".parse().unwrap();
+        let event = KeyEvent {
+            modifiers: handy_keys::Modifiers::OPT | handy_keys::Modifiers::FN,
+            key: None,
+            is_key_down: false,
+            changed_modifier: Some(handy_keys::Modifiers::CMD),
+        };
+
+        assert!(!modifier_only_release_changed_required_modifier(
+            hotkey,
+            event.changed_modifier
+        ));
     }
 
     #[test]
@@ -1067,7 +1749,13 @@ mod tests {
         };
 
         assert_eq!(
-            modifier_only_transition(hotkey, &event, event.modifiers, false),
+            modifier_only_transition(
+                hotkey,
+                &event,
+                event.modifiers,
+                event.changed_modifier,
+                false
+            ),
             None
         );
     }
@@ -1083,7 +1771,13 @@ mod tests {
         };
 
         assert_eq!(
-            modifier_only_transition(hotkey, &event, event.modifiers, false),
+            modifier_only_transition(
+                hotkey,
+                &event,
+                event.modifiers,
+                event.changed_modifier,
+                false
+            ),
             None
         );
     }
@@ -1099,8 +1793,381 @@ mod tests {
         };
 
         assert_eq!(
-            modifier_only_transition(hotkey, &event, event.modifiers, false),
+            modifier_only_transition(
+                hotkey,
+                &event,
+                event.modifiers,
+                event.changed_modifier,
+                false
+            ),
             Some(true)
+        );
+    }
+
+    #[test]
+    fn modifier_family_signature_detects_strict_superset_chord() {
+        let fn_hotkey: Hotkey = "fn".parse().unwrap();
+        let option_fn_hotkey: Hotkey = "option+fn".parse().unwrap();
+
+        assert!(modifier_family_signature_is_strict_subset(
+            fn_hotkey.modifiers,
+            option_fn_hotkey.modifiers
+        ));
+        assert!(!modifier_family_signature_is_strict_subset(
+            option_fn_hotkey.modifiers,
+            fn_hotkey.modifiers
+        ));
+    }
+
+    #[test]
+    fn modifier_only_press_detects_registered_superset_chord() {
+        let fn_hotkey: Hotkey = "fn".parse().unwrap();
+        let option_fn_hotkey: Hotkey = "option+fn".parse().unwrap();
+        let mut bindings = HashMap::new();
+        bindings.insert("transcribe".to_string(), (fn_hotkey, "fn".to_string()));
+        bindings.insert(
+            "edit_mode".to_string(),
+            (option_fn_hotkey, "option+fn".to_string()),
+        );
+
+        assert!(modifier_only_press_has_registered_superset(
+            "transcribe",
+            fn_hotkey.modifiers,
+            &bindings
+        ));
+        assert!(!modifier_only_press_has_registered_superset(
+            "edit_mode",
+            option_fn_hotkey.modifiers,
+            &bindings
+        ));
+    }
+
+    #[test]
+    fn modifier_only_subset_press_is_shadowed_by_active_superset() {
+        let fn_hotkey: Hotkey = "fn".parse().unwrap();
+        let option_fn_hotkey: Hotkey = "option+fn".parse().unwrap();
+        let mut bindings = HashMap::new();
+        bindings.insert("transcribe".to_string(), (fn_hotkey, "fn".to_string()));
+        bindings.insert(
+            "edit_mode".to_string(),
+            (option_fn_hotkey, "option+fn".to_string()),
+        );
+        let pressed = HashSet::from(["edit_mode".to_string()]);
+        let pending_releases = HashMap::new();
+
+        assert!(
+            modifier_only_press_is_shadowed_by_active_or_releasing_superset(
+                "transcribe",
+                fn_hotkey.modifiers,
+                &bindings,
+                &pressed,
+                &pending_releases
+            )
+        );
+    }
+
+    #[test]
+    fn modifier_only_subset_press_is_shadowed_by_releasing_superset() {
+        let fn_hotkey: Hotkey = "fn".parse().unwrap();
+        let option_fn_hotkey: Hotkey = "option+fn".parse().unwrap();
+        let mut bindings = HashMap::new();
+        bindings.insert("transcribe".to_string(), (fn_hotkey, "fn".to_string()));
+        bindings.insert(
+            "edit_mode".to_string(),
+            (option_fn_hotkey, "option+fn".to_string()),
+        );
+        let pressed = HashSet::new();
+        let pending_releases = HashMap::from([(
+            "edit_mode".to_string(),
+            PendingModifierOnlyRelease {
+                hotkey_string: "option+fn".to_string(),
+                due_at: Instant::now(),
+                force: true,
+            },
+        )]);
+
+        assert!(
+            modifier_only_press_is_shadowed_by_active_or_releasing_superset(
+                "transcribe",
+                fn_hotkey.modifiers,
+                &bindings,
+                &pressed,
+                &pending_releases
+            )
+        );
+    }
+
+    #[test]
+    fn modifier_only_subset_press_is_not_shadowed_by_idle_superset() {
+        let fn_hotkey: Hotkey = "fn".parse().unwrap();
+        let option_fn_hotkey: Hotkey = "option+fn".parse().unwrap();
+        let mut bindings = HashMap::new();
+        bindings.insert("transcribe".to_string(), (fn_hotkey, "fn".to_string()));
+        bindings.insert(
+            "edit_mode".to_string(),
+            (option_fn_hotkey, "option+fn".to_string()),
+        );
+        let pressed = HashSet::new();
+        let pending_releases = HashMap::new();
+
+        assert!(
+            !modifier_only_press_is_shadowed_by_active_or_releasing_superset(
+                "transcribe",
+                fn_hotkey.modifiers,
+                &bindings,
+                &pressed,
+                &pending_releases
+            )
+        );
+    }
+
+    #[test]
+    fn modifier_only_subset_press_debounce_stays_short_for_fast_transcribe_feedback() {
+        assert!(MODIFIER_ONLY_PRESS_DEBOUNCE <= Duration::from_millis(60));
+        assert!(MODIFIER_ONLY_PRESS_DEBOUNCE < MODIFIER_ONLY_CHORD_WINDOW);
+    }
+
+    #[test]
+    fn shadowed_modifier_only_press_is_cancelled_by_more_specific_chord() {
+        let mut pending = HashMap::new();
+        pending.insert(
+            "transcribe".to_string(),
+            PendingModifierOnlyPress {
+                hotkey_string: "fn".to_string(),
+                due_at: Instant::now(),
+            },
+        );
+
+        cancel_shadowed_modifier_only_presses(
+            &mut pending,
+            handy_keys::Modifiers::OPT | handy_keys::Modifiers::FN,
+        );
+
+        assert!(pending.is_empty());
+    }
+
+    #[test]
+    fn unshadowed_modifier_only_press_stays_pending() {
+        let mut pending = HashMap::new();
+        pending.insert(
+            "transcribe".to_string(),
+            PendingModifierOnlyPress {
+                hotkey_string: "fn".to_string(),
+                due_at: Instant::now(),
+            },
+        );
+
+        cancel_shadowed_modifier_only_presses(&mut pending, handy_keys::Modifiers::FN);
+
+        assert!(pending.contains_key("transcribe"));
+    }
+
+    #[test]
+    fn ask_selection_chord_never_dispatches_plain_fn_across_press_and_release_orders() {
+        let binding_orders = [["transcribe", "edit_mode"], ["edit_mode", "transcribe"]];
+        let press_orders = [
+            [handy_keys::Modifiers::OPT, handy_keys::Modifiers::FN],
+            [handy_keys::Modifiers::FN, handy_keys::Modifiers::OPT],
+        ];
+        let release_orders = [
+            [handy_keys::Modifiers::OPT, handy_keys::Modifiers::FN],
+            [handy_keys::Modifiers::FN, handy_keys::Modifiers::OPT],
+        ];
+
+        for binding_order in binding_orders {
+            for press_order in press_orders {
+                for release_order in release_orders {
+                    let mut scenario = ModifierOnlyScenario::new(&binding_order);
+                    scenario.send_modifier(press_order[0], true);
+                    scenario.advance(Duration::from_millis(20));
+                    scenario.send_modifier(press_order[1], true);
+                    scenario.advance(Duration::from_millis(120));
+                    scenario.send_modifier(release_order[0], false);
+                    scenario.advance(Duration::from_millis(20));
+                    scenario.send_modifier(release_order[1], false);
+                    scenario.advance(Duration::from_millis(600));
+
+                    scenario.assert_no_plain_transcribe_press();
+                    assert!(
+                        scenario
+                            .events
+                            .iter()
+                            .any(|(binding_id, is_pressed)| binding_id == "edit_mode"
+                                && *is_pressed),
+                        "edit_mode did not dispatch for binding_order={:?}, press_order={:?}, release_order={:?}; events={:?}",
+                        binding_order,
+                        press_order,
+                        release_order,
+                        scenario.events
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_ask_selection_chords_do_not_fall_back_to_plain_fn() {
+        let mut scenario = ModifierOnlyScenario::new(&["transcribe", "edit_mode"]);
+
+        for _ in 0..25 {
+            scenario.send_modifier(handy_keys::Modifiers::OPT, true);
+            scenario.advance(Duration::from_millis(15));
+            scenario.send_modifier(handy_keys::Modifiers::FN, true);
+            scenario.advance(Duration::from_millis(90));
+            scenario.send_modifier(handy_keys::Modifiers::OPT, false);
+            scenario.advance(Duration::from_millis(15));
+            scenario.send_modifier(handy_keys::Modifiers::FN, false);
+            scenario.advance(Duration::from_millis(250));
+        }
+
+        scenario.assert_no_plain_transcribe_press();
+        assert_eq!(
+            scenario
+                .events
+                .iter()
+                .filter(|(binding_id, is_pressed)| binding_id == "edit_mode" && *is_pressed)
+                .count(),
+            25
+        );
+    }
+
+    #[test]
+    fn late_superset_chord_replaces_already_started_plain_fn() {
+        let mut scenario = ModifierOnlyScenario::new(&["transcribe", "edit_mode"]);
+
+        scenario.send_modifier(handy_keys::Modifiers::FN, true);
+        scenario.advance(MODIFIER_ONLY_PRESS_DEBOUNCE + Duration::from_millis(25));
+        assert!(
+            scenario
+                .events
+                .iter()
+                .any(|(binding_id, is_pressed)| binding_id == "transcribe" && *is_pressed),
+            "plain fn should start quickly for responsive transcription feedback"
+        );
+
+        scenario.send_modifier(handy_keys::Modifiers::OPT, true);
+        scenario.advance(Duration::from_millis(120));
+        scenario.send_modifier(handy_keys::Modifiers::OPT, false);
+        scenario.advance(Duration::from_millis(20));
+        scenario.send_modifier(handy_keys::Modifiers::FN, false);
+        scenario.advance(Duration::from_millis(600));
+
+        assert!(
+            scenario
+                .events
+                .iter()
+                .any(|(binding_id, is_pressed)| binding_id == "transcribe" && !*is_pressed),
+            "late ask-selection chord should cancel the already-started plain fn path: {:?}",
+            scenario.events
+        );
+        assert!(
+            scenario
+                .events
+                .iter()
+                .any(|(binding_id, is_pressed)| binding_id == "edit_mode" && *is_pressed),
+            "late ask-selection chord should start edit_mode: {:?}",
+            scenario.events
+        );
+        let edit_mode_press = scenario
+            .events
+            .iter()
+            .position(|(binding_id, is_pressed)| binding_id == "edit_mode" && *is_pressed)
+            .expect("edit_mode press should be present");
+        let transcribe_release = scenario
+            .events
+            .iter()
+            .position(|(binding_id, is_pressed)| binding_id == "transcribe" && !*is_pressed)
+            .expect("transcribe release should be present");
+        assert!(
+            edit_mode_press < transcribe_release,
+            "edit_mode must claim the recording before transcribe release stops it: {:?}",
+            scenario.events
+        );
+    }
+
+    #[test]
+    fn held_option_then_fn_still_dispatches_ask_selection_after_chord_window() {
+        let mut scenario = ModifierOnlyScenario::new(&["transcribe", "edit_mode"]);
+
+        scenario.send_modifier(handy_keys::Modifiers::OPT, true);
+        scenario.advance(MODIFIER_ONLY_CHORD_WINDOW + Duration::from_millis(250));
+        scenario.send_modifier(handy_keys::Modifiers::FN, true);
+        scenario.advance(Duration::from_millis(120));
+        scenario.send_modifier(handy_keys::Modifiers::FN, false);
+        scenario.advance(Duration::from_millis(20));
+        scenario.send_modifier(handy_keys::Modifiers::OPT, false);
+        scenario.advance(Duration::from_millis(600));
+
+        scenario.assert_no_plain_transcribe_press();
+        assert!(
+            scenario
+                .events
+                .iter()
+                .any(|(binding_id, is_pressed)| binding_id == "edit_mode" && *is_pressed),
+            "held option then fn should dispatch edit_mode; events={:?}",
+            scenario.events
+        );
+    }
+
+    #[test]
+    fn option_then_right_control_reported_fn_dispatches_ask_selection() {
+        let mut scenario = ModifierOnlyScenario::new(&["transcribe", "edit_mode"]);
+
+        scenario.send_modifier(handy_keys::Modifiers::OPT_LEFT, true);
+        scenario.advance(Duration::from_millis(20));
+        scenario.send_modifier(handy_keys::Modifiers::CTRL_RIGHT, true);
+        scenario.advance(Duration::from_millis(120));
+        scenario.send_modifier(handy_keys::Modifiers::CTRL_RIGHT, false);
+        scenario.advance(Duration::from_millis(20));
+        scenario.send_modifier(handy_keys::Modifiers::OPT_LEFT, false);
+        scenario.advance(Duration::from_millis(600));
+
+        scenario.assert_no_plain_transcribe_press();
+        assert!(
+            scenario
+                .events
+                .iter()
+                .any(|(binding_id, is_pressed)| binding_id == "edit_mode" && *is_pressed),
+            "option+right-control reported Fn should dispatch edit_mode; events={:?}",
+            scenario.events
+        );
+    }
+
+    #[test]
+    fn ask_selection_after_normal_fn_transcription_does_not_paste() {
+        let mut scenario = ModifierOnlyScenario::new(&["transcribe", "edit_mode"]);
+
+        scenario.send_modifier(handy_keys::Modifiers::FN, true);
+        scenario.advance(MODIFIER_ONLY_PRESS_DEBOUNCE + Duration::from_millis(1));
+        scenario.send_modifier(handy_keys::Modifiers::FN, false);
+        scenario.advance(MODIFIER_ONLY_RELEASE_DEBOUNCE + Duration::from_millis(1));
+
+        assert!(
+            scenario
+                .events
+                .iter()
+                .any(|(binding_id, is_pressed)| binding_id == "transcribe" && *is_pressed),
+            "normal fn transcribe did not dispatch before ask-selection sequence"
+        );
+
+        scenario.events.clear();
+        scenario.send_modifier(handy_keys::Modifiers::OPT, true);
+        scenario.advance(Duration::from_millis(20));
+        scenario.send_modifier(handy_keys::Modifiers::FN, true);
+        scenario.advance(Duration::from_millis(120));
+        scenario.send_modifier(handy_keys::Modifiers::OPT, false);
+        scenario.advance(Duration::from_millis(20));
+        scenario.send_modifier(handy_keys::Modifiers::FN, false);
+        scenario.advance(Duration::from_millis(600));
+
+        scenario.assert_no_plain_transcribe_press();
+        assert!(
+            scenario
+                .events
+                .iter()
+                .any(|(binding_id, is_pressed)| binding_id == "edit_mode" && *is_pressed),
+            "edit_mode did not dispatch after normal fn transcription; events={:?}",
+            scenario.events
         );
     }
 
@@ -1110,7 +2177,28 @@ mod tests {
         let now = Instant::now();
         tracker.active[3] = true;
         tracker.last_pressed_at[3] =
-            Some(now - MODIFIER_ONLY_STALE_TIMEOUT - Duration::from_millis(1));
+            Some(now - MODIFIER_ONLY_CHORD_WINDOW - Duration::from_secs(1));
+
+        let event = KeyEvent {
+            modifiers: handy_keys::Modifiers::CMD_LEFT | handy_keys::Modifiers::FN,
+            key: None,
+            is_key_down: true,
+            changed_modifier: Some(handy_keys::Modifiers::FN),
+        };
+
+        tracker.clear_stale_before_modifier_press(&event, now, true);
+        tracker.apply(&event, now);
+
+        assert_eq!(tracker.modifiers(), handy_keys::Modifiers::FN);
+    }
+
+    #[test]
+    fn modifier_only_tracker_recovers_unfresh_command_before_fn_press() {
+        let mut tracker = ModifierOnlyTracker::default();
+        let now = Instant::now();
+        tracker.active[3] = true;
+        tracker.last_pressed_at[3] =
+            Some(now - MODIFIER_ONLY_CHORD_WINDOW - Duration::from_millis(1));
 
         let event = KeyEvent {
             modifiers: handy_keys::Modifiers::CMD_LEFT | handy_keys::Modifiers::FN,
@@ -1146,6 +2234,32 @@ mod tests {
         assert_eq!(
             tracker.modifiers(),
             handy_keys::Modifiers::CMD | handy_keys::Modifiers::FN
+        );
+        assert!(tracker.modifier_only_press_is_fresh(hotkey, now));
+    }
+
+    #[test]
+    fn modifier_only_tracker_keeps_held_option_before_fn_after_chord_window() {
+        let mut tracker = ModifierOnlyTracker::default();
+        let now = Instant::now();
+        let hotkey: Hotkey = "option+fn".parse().unwrap();
+        tracker.active[1] = true;
+        tracker.last_pressed_at[1] =
+            Some(now - MODIFIER_ONLY_CHORD_WINDOW - Duration::from_millis(250));
+
+        let event = KeyEvent {
+            modifiers: handy_keys::Modifiers::OPT_LEFT | handy_keys::Modifiers::FN,
+            key: None,
+            is_key_down: true,
+            changed_modifier: Some(handy_keys::Modifiers::FN),
+        };
+
+        tracker.clear_stale_before_modifier_press(&event, now, true);
+        tracker.apply(&event, now);
+
+        assert_eq!(
+            tracker.modifiers(),
+            handy_keys::Modifiers::OPT | handy_keys::Modifiers::FN
         );
         assert!(tracker.modifier_only_press_is_fresh(hotkey, now));
     }
@@ -1212,6 +2326,7 @@ mod tests {
         assert!(push_to_talk_guard_should_release(
             hotkey,
             handy_keys::Modifiers::empty(),
+            event.changed_modifier,
             &event
         ));
     }
@@ -1229,6 +2344,7 @@ mod tests {
         assert!(push_to_talk_guard_should_release(
             hotkey,
             handy_keys::Modifiers::empty(),
+            event.changed_modifier,
             &event
         ));
     }
@@ -1246,6 +2362,7 @@ mod tests {
         assert!(!push_to_talk_guard_should_release(
             hotkey,
             handy_keys::Modifiers::empty(),
+            event.changed_modifier,
             &event
         ));
     }
@@ -1263,6 +2380,7 @@ mod tests {
         assert!(!push_to_talk_guard_should_release(
             hotkey,
             handy_keys::Modifiers::FN,
+            event.changed_modifier,
             &event
         ));
     }
@@ -1280,6 +2398,7 @@ mod tests {
         assert!(push_to_talk_guard_should_release(
             hotkey,
             handy_keys::Modifiers::empty(),
+            event.changed_modifier,
             &event
         ));
     }

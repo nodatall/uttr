@@ -200,8 +200,8 @@
             "description": "用于录制和转录语音的键盘快捷键。"
           },
           "edit_mode": {
-            "name": "Edit Mode Shortcut",
-            "description": "Transforms selected text using a spoken instruction."
+            "name": "Ask Selection Shortcut",
+            "description": "Ask a spoken question about selected text."
           },
           "cancel": {
             "name": "取消快捷键",

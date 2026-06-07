@@ -200,8 +200,8 @@
             "description": "El atajo de teclado para grabar y transcribir tu voz."
           },
           "edit_mode": {
-            "name": "Edit Mode Shortcut",
-            "description": "Transforms selected text using a spoken instruction."
+            "name": "Ask Selection Shortcut",
+            "description": "Ask a spoken question about selected text."
           },
           "cancel": {
             "name": "Atajo de Cancelar",

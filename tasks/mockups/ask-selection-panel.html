@@ -1,0 +1,513 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Ask Selection Panel Mockup</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --background: #0d1117;
+        --background-deep: #060a12;
+        --surface: rgba(5, 10, 18, 0.94);
+        --surface-soft: rgba(255, 255, 255, 0.04);
+        --surface-strong: rgba(255, 255, 255, 0.08);
+        --border: rgba(255, 255, 255, 0.1);
+        --border-strong: rgba(255, 255, 255, 0.14);
+        --text: #e6edf3;
+        --muted: #93a0b3;
+        --primary: #67d7a3;
+        --shadow: 0 22px 60px rgba(0, 0, 0, 0.46);
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background:
+          radial-gradient(
+            circle at 50% 0%,
+            rgba(103, 215, 163, 0.08),
+            transparent 28rem
+          ),
+          var(--background);
+        color: var(--text);
+        font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .stage {
+        min-height: 100vh;
+        padding: 48px;
+        display: grid;
+        grid-template-columns: minmax(420px, 1fr) 460px;
+        gap: 36px;
+        align-items: center;
+      }
+
+      .app-surface {
+        min-height: 620px;
+        border: 1px solid var(--border);
+        border-radius: 20px;
+        background: rgba(6, 10, 18, 0.78);
+        box-shadow: var(--shadow);
+        overflow: visible;
+        position: relative;
+      }
+
+      .fake-toolbar {
+        height: 52px;
+        border-radius: 20px 20px 0 0;
+        border-bottom: 1px solid var(--border);
+        background: rgba(255, 255, 255, 0.03);
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 0 16px;
+      }
+
+      .dot {
+        width: 11px;
+        height: 11px;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.18);
+      }
+
+      .document {
+        padding: 46px 58px;
+        max-width: 720px;
+      }
+
+      .document h1 {
+        margin: 0 0 22px;
+        font-size: 28px;
+        line-height: 1.2;
+        font-weight: 650;
+        letter-spacing: 0;
+      }
+
+      .document p {
+        margin: 0 0 16px;
+        color: rgba(230, 237, 243, 0.8);
+        font-size: 16px;
+        line-height: 1.62;
+      }
+
+      .selection {
+        color: var(--text);
+        background: rgba(103, 215, 163, 0.18);
+        box-shadow: 0 0 0 2px rgba(103, 215, 163, 0.12);
+        border-radius: 4px;
+      }
+
+      .cursor {
+        position: absolute;
+        left: 408px;
+        top: 286px;
+        width: 18px;
+        height: 18px;
+        pointer-events: none;
+      }
+
+      .cursor::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        border-radius: 999px;
+        background: var(--primary);
+        box-shadow: 0 0 0 6px rgba(103, 215, 163, 0.12);
+      }
+
+      .cursor::after {
+        content: "";
+        position: absolute;
+        left: 13px;
+        top: 12px;
+        width: 30px;
+        height: 1px;
+        transform: rotate(42deg);
+        transform-origin: left;
+        background: rgba(103, 215, 163, 0.5);
+      }
+
+      .anchored-panel {
+        position: absolute;
+        left: 436px;
+        top: 306px;
+      }
+
+      .right-column {
+        display: grid;
+        gap: 18px;
+      }
+
+      .state-label {
+        margin: 0 0 8px;
+        color: var(--muted);
+        font-size: 11px;
+        font-weight: 650;
+        letter-spacing: 0.18em;
+        text-transform: uppercase;
+      }
+
+      .ask-panel {
+        width: min(420px, calc(100vw - 32px));
+        max-height: 260px;
+        border: 1px solid var(--border-strong);
+        border-radius: 18px;
+        background: var(--surface);
+        box-shadow:
+          var(--shadow),
+          inset 0 1px 0 rgba(255, 255, 255, 0.06);
+        backdrop-filter: blur(18px) saturate(130%);
+        overflow: hidden;
+      }
+
+      .ask-panel-header {
+        height: 34px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0 8px;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+      }
+
+      .panel-status {
+        min-width: 0;
+        padding-left: 8px;
+        color: var(--primary);
+        font-size: 12px;
+        font-weight: 650;
+        opacity: 0;
+      }
+
+      .panel-status-visible {
+        opacity: 1;
+      }
+
+      .close-button {
+        width: 28px;
+        height: 28px;
+        border: 0;
+        border-radius: 10px;
+        background: transparent;
+        color: rgba(230, 237, 243, 0.62);
+        font-size: 18px;
+        line-height: 1;
+        cursor: pointer;
+      }
+
+      .close-button:hover {
+        background: var(--surface-soft);
+        color: var(--text);
+      }
+
+      .ask-panel-body {
+        padding: 15px 16px 16px;
+        color: var(--text);
+        font-size: 15px;
+        line-height: 1.52;
+        overflow: auto;
+      }
+
+      .ask-panel-body p {
+        margin: 0;
+      }
+
+      .result-text {
+        cursor: pointer;
+      }
+
+      .loading-row {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        color: rgba(230, 237, 243, 0.74);
+      }
+
+      .rose-loader {
+        width: 42px;
+        height: 42px;
+        color: var(--primary);
+        filter: drop-shadow(0 0 18px rgba(103, 215, 163, 0.24));
+        flex: 0 0 auto;
+      }
+
+      .rose-loader-path {
+        fill: none;
+        stroke: currentColor;
+        stroke-linecap: round;
+        stroke-linejoin: round;
+        stroke-width: 4.6;
+        opacity: 0.1;
+      }
+
+      .rose-loader-dot {
+        fill: currentColor;
+      }
+
+      .copied {
+        color: var(--primary);
+        font-weight: 600;
+      }
+
+      @media (max-width: 980px) {
+        .stage {
+          grid-template-columns: 1fr;
+          padding: 24px;
+        }
+
+        .anchored-panel {
+          left: 96px;
+          top: 352px;
+        }
+
+        .cursor {
+          left: 68px;
+          top: 332px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="stage">
+      <section class="app-surface" aria-label="Example target app">
+        <div class="fake-toolbar">
+          <span class="dot"></span>
+          <span class="dot"></span>
+          <span class="dot"></span>
+        </div>
+        <article class="document">
+          <h1>Meeting notes</h1>
+          <p>
+            The team discussed whether the new summarizer should update every
+            ten seconds or wait for longer chunks. The main concern was that
+            very frequent updates could feel jumpy.
+          </p>
+          <p>
+            <span class="selection"
+              >The preferred behavior is to keep the transcript live, but only
+              update the visible summary when there is a meaningful new
+              point.</span
+            >
+          </p>
+          <p>
+            This gives the app a calmer feel while preserving the useful live
+            context.
+          </p>
+        </article>
+        <div class="cursor" aria-hidden="true"></div>
+        <div class="anchored-panel">
+          <div
+            class="ask-panel"
+            role="dialog"
+            aria-label="Ask Selection result"
+          >
+            <div class="ask-panel-header">
+              <span class="panel-status" aria-hidden="true"></span>
+              <button class="close-button" aria-label="Close">×</button>
+            </div>
+            <div class="ask-panel-body">
+              <p class="result-text">
+                Keep the transcript updating continuously, but refresh the
+                summary only when the conversation adds a meaningful point. That
+                should make the meeting view feel live without constantly
+                rewriting itself.
+              </p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <aside class="right-column" aria-label="Panel states">
+        <section>
+          <p class="state-label">Loading</p>
+          <div class="ask-panel">
+            <div class="ask-panel-header">
+              <span class="panel-status" aria-hidden="true"></span>
+              <button class="close-button" aria-label="Close">×</button>
+            </div>
+            <div class="ask-panel-body">
+              <div class="loading-row">
+                <svg
+                  class="rose-loader"
+                  viewBox="0 0 100 100"
+                  role="img"
+                  aria-label="Thinking"
+                >
+                  <g class="rose-loader-orbit">
+                    <path class="rose-loader-path" />
+                  </g>
+                </svg>
+                <span>Thinking…</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <p class="state-label">Result</p>
+          <div class="ask-panel">
+            <div class="ask-panel-header">
+              <span class="panel-status" aria-hidden="true"></span>
+              <button class="close-button" aria-label="Close">×</button>
+            </div>
+            <div class="ask-panel-body">
+              <p class="result-text">
+                Use the selected paragraph as the source. The answer should be
+                concise, readable, and copied when the user clicks the panel
+                text.
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section>
+          <p class="state-label">Copied</p>
+          <div class="ask-panel">
+            <div class="ask-panel-header">
+              <span class="panel-status panel-status-visible">Copied</span>
+              <button class="close-button" aria-label="Close">×</button>
+            </div>
+            <div class="ask-panel-body">
+              <p class="result-text">
+                Use the selected paragraph as the source. The answer should be
+                concise, readable, and copied when the user clicks the panel
+                text.
+              </p>
+            </div>
+          </div>
+        </section>
+      </aside>
+    </main>
+    <script>
+      const ROSE_THREE_CONFIG = {
+        rotate: true,
+        particleCount: 76,
+        trailSpan: 0.31,
+        durationMs: 5300,
+        rotationDurationMs: 28000,
+        pulseDurationMs: 4400,
+        strokeWidth: 4.6,
+        roseA: 9.2,
+        roseABoost: 0.6,
+        roseBreathBase: 0.72,
+        roseBreathBoost: 0.28,
+        roseScale: 3.25,
+      };
+
+      const normalizeProgress = (progress) => ((progress % 1) + 1) % 1;
+
+      const getDetailScale = (time) => {
+        const pulseProgress =
+          (time % ROSE_THREE_CONFIG.pulseDurationMs) /
+          ROSE_THREE_CONFIG.pulseDurationMs;
+        const pulseAngle = pulseProgress * Math.PI * 2;
+
+        return 0.52 + ((Math.sin(pulseAngle + 0.55) + 1) / 2) * 0.48;
+      };
+
+      const getRotation = (time) => {
+        if (!ROSE_THREE_CONFIG.rotate) {
+          return 0;
+        }
+
+        return (
+          -(
+            (time % ROSE_THREE_CONFIG.rotationDurationMs) /
+            ROSE_THREE_CONFIG.rotationDurationMs
+          ) * 360
+        );
+      };
+
+      const getPoint = (progress, detailScale) => {
+        const t = progress * Math.PI * 2;
+        const a =
+          ROSE_THREE_CONFIG.roseA + detailScale * ROSE_THREE_CONFIG.roseABoost;
+        const r =
+          a *
+          (ROSE_THREE_CONFIG.roseBreathBase +
+            detailScale * ROSE_THREE_CONFIG.roseBreathBoost) *
+          Math.cos(3 * t);
+
+        return {
+          x: 50 + Math.cos(t) * r * ROSE_THREE_CONFIG.roseScale,
+          y: 50 + Math.sin(t) * r * ROSE_THREE_CONFIG.roseScale,
+        };
+      };
+
+      const buildPath = (detailScale, steps = 480) =>
+        Array.from({ length: steps + 1 }, (_, index) => {
+          const point = getPoint(index / steps, detailScale);
+          return `${index === 0 ? "M" : "L"} ${point.x.toFixed(2)} ${point.y.toFixed(2)}`;
+        }).join(" ");
+
+      const getParticle = (index, progress, detailScale) => {
+        const tailOffset = index / (ROSE_THREE_CONFIG.particleCount - 1);
+        const point = getPoint(
+          normalizeProgress(
+            progress - tailOffset * ROSE_THREE_CONFIG.trailSpan,
+          ),
+          detailScale,
+        );
+        const fade = Math.pow(1 - tailOffset, 0.56);
+
+        return {
+          x: point.x,
+          y: point.y,
+          radius: 0.9 + fade * 2.7,
+          opacity: 0.04 + fade * 0.96,
+        };
+      };
+
+      document.querySelectorAll(".rose-loader").forEach((svg) => {
+        const group = svg.querySelector(".rose-loader-orbit");
+        const path = svg.querySelector(".rose-loader-path");
+        const particles = Array.from(
+          { length: ROSE_THREE_CONFIG.particleCount },
+          () => {
+            const circle = document.createElementNS(
+              "http://www.w3.org/2000/svg",
+              "circle",
+            );
+            circle.setAttribute("class", "rose-loader-dot");
+            group.appendChild(circle);
+            return circle;
+          },
+        );
+        const startedAt = performance.now();
+        const reduceMotion = window.matchMedia(
+          "(prefers-reduced-motion: reduce)",
+        ).matches;
+
+        const render = (now) => {
+          const time = reduceMotion ? 0 : now - startedAt;
+          const progress =
+            (time % ROSE_THREE_CONFIG.durationMs) /
+            ROSE_THREE_CONFIG.durationMs;
+          const detailScale = getDetailScale(time);
+
+          group.setAttribute("transform", `rotate(${getRotation(time)} 50 50)`);
+          path.setAttribute("d", buildPath(detailScale));
+
+          particles.forEach((node, index) => {
+            const particle = getParticle(index, progress, detailScale);
+            node.setAttribute("cx", particle.x.toFixed(2));
+            node.setAttribute("cy", particle.y.toFixed(2));
+            node.setAttribute("r", particle.radius.toFixed(2));
+            node.setAttribute("opacity", particle.opacity.toFixed(3));
+          });
+
+          if (!reduceMotion) {
+            requestAnimationFrame(render);
+          }
+        };
+
+        requestAnimationFrame(render);
+      });
+    </script>
+  </body>
+</html>

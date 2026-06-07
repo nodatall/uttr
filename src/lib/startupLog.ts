@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 const startupOrigin = performance.now();
 
-export function startupElapsedMs() {
+function startupElapsedMs() {
   return Math.round(performance.now() - startupOrigin);
 }
 

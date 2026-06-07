@@ -36,6 +36,10 @@ pub fn handle_shortcut_event(
 
     // Transcribe bindings are handled by the coordinator.
     if is_transcribe_binding(binding_id) {
+        warn!(
+            "[ask-hotkey] handle_shortcut_event binding={} hotkey={} pressed={}",
+            binding_id, hotkey_string, is_pressed
+        );
         if let Some(coordinator) = app.try_state::<TranscriptionCoordinator>() {
             coordinator.send_input(
                 binding_id,

@@ -78,6 +78,7 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
     if (!isRecording) return;
 
     let cleanup = false;
+    let localUnlisten: (() => void) | null = null;
 
     const setupListener = async () => {
       // Listen for key events from backend
@@ -121,6 +122,12 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
         },
       );
 
+      if (cleanup) {
+        unlisten();
+        return;
+      }
+
+      localUnlisten = unlisten;
       unlistenRef.current = unlisten;
     };
 
@@ -139,9 +146,8 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
     return () => {
       cleanup = true;
       window.removeEventListener("keydown", handleKeyDown);
-      if (unlistenRef.current) {
-        unlistenRef.current();
-        unlistenRef.current = null;
+      if (localUnlisten) {
+        localUnlisten();
       }
       // Stop backend recording on unmount to prevent orphaned recording loops
       commands.stopHandyKeysRecording().catch(console.error);
@@ -276,12 +282,14 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
           {formatCurrentKeys()}
         </div>
       ) : (
-        <div
+        <button
+          type="button"
           className={`rounded-md border px-2 py-1 text-sm font-semibold ${
             disabled
               ? "cursor-not-allowed border-mid-gray/40 bg-mid-gray/5 text-text/40"
               : "cursor-pointer border-mid-gray/80 bg-mid-gray/10 hover:border-logo-primary hover:bg-logo-primary/10"
           }`}
+          disabled={disabled}
           onClick={() => {
             if (!disabled) {
               void startRecording();
@@ -289,7 +297,7 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
           }}
         >
           {formatKeyCombination(binding.current_binding, osType)}
-        </div>
+        </button>
       )}
       <ResetButton
         onClick={() => resetBinding(shortcutId)}

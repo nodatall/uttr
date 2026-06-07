@@ -10,6 +10,8 @@ use crate::byok_secrets;
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::full_system_audio::{
     FullSystemAudioSessionManager, FullSystemSessionStopResult,
+    FullSystemSessionTranscriptionSamples, FullSystemTranscriptionSource,
+    FullSystemTranscriptionSourceSamples,
 };
 use crate::managers::history::HistoryManager;
 use crate::managers::model::is_cloud_model_id;
@@ -56,6 +58,24 @@ const FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL: u64 =
 const FULL_SYSTEM_SUMMARY_MODEL_FALLBACK: &str = "gpt-4o-mini";
 const FULL_SYSTEM_SUMMARY_SYSTEM_PROMPT: &str = "You are the live meeting summarizer inside Uttr, a macOS transcription app. Update meeting notes from transcript text only. Return valid JSON only with current_gist and expanded key_points.";
 
+#[derive(Debug, Clone, Default)]
+struct FullSystemLiveChunk {
+    mixed_samples: Vec<f32>,
+    source_samples: Vec<FullSystemTranscriptionSourceSamples>,
+}
+
+impl FullSystemLiveChunk {
+    fn is_empty(&self) -> bool {
+        self.mixed_samples.is_empty() && self.source_samples.is_empty()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LabeledTranscriptSegment {
+    source: FullSystemTranscriptionSource,
+    text: String,
+}
+
 #[derive(Clone, Copy)]
 enum DeferredOverlayState {
     Transcribing,
@@ -101,6 +121,9 @@ struct FullSystemLiveRuntime {
     summary_disabled: AtomicBool,
     recorded_samples: Mutex<Vec<f32>>,
     pending_samples: Mutex<Vec<f32>>,
+    pending_microphone_samples: Mutex<Vec<f32>>,
+    pending_system_audio_samples: Mutex<Vec<f32>>,
+    last_transcript_source: Mutex<Option<FullSystemTranscriptionSource>>,
 }
 
 impl FullSystemLiveRuntime {
@@ -115,6 +138,9 @@ impl FullSystemLiveRuntime {
             summary_disabled: AtomicBool::new(false),
             recorded_samples: Mutex::new(Vec::new()),
             pending_samples: Mutex::new(Vec::new()),
+            pending_microphone_samples: Mutex::new(Vec::new()),
+            pending_system_audio_samples: Mutex::new(Vec::new()),
+            last_transcript_source: Mutex::new(None),
         }
     }
 }
@@ -140,6 +166,17 @@ static ACTIVE_APP_CONTEXT: Lazy<Mutex<HashMap<String, AppContextSnapshot>>> =
 static ACTIVE_APP_CONTEXT_REQUESTS: Lazy<Mutex<HashMap<String, u64>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static APP_CONTEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+static ASK_SELECTION_CHAT_SESSION: Lazy<Mutex<Option<AskSelectionChatSession>>> =
+    Lazy::new(|| Mutex::new(None));
+static ASK_SELECTION_CHAT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone)]
+struct AskSelectionChatSession {
+    id: u64,
+    selected_text: Option<String>,
+    context: AppContextSnapshot,
+    messages: Vec<utils::AskSelectionMessage>,
+}
 
 /// Drop guard that notifies the [`TranscriptionCoordinator`] when the
 /// transcription pipeline finishes — whether it completes normally or panics.
@@ -630,6 +667,32 @@ fn store_active_context_async(binding_id: &str) {
     });
 }
 
+fn store_active_context_snapshot(binding_id: &str, snapshot: AppContextSnapshot) {
+    ACTIVE_APP_CONTEXT_REQUESTS
+        .lock()
+        .unwrap()
+        .remove(binding_id);
+    ACTIVE_APP_CONTEXT
+        .lock()
+        .unwrap()
+        .insert(binding_id.to_string(), snapshot);
+}
+
+fn capture_ask_selection_start_context() -> AppContextSnapshot {
+    let started = Instant::now();
+    let snapshot = collect_text_context();
+
+    debug!(
+        "Captured Ask Selection start AX context in {}ms selected_text={}",
+        started.elapsed().as_millis(),
+        snapshot
+            .selected_text
+            .as_deref()
+            .is_some_and(|text| !text.trim().is_empty())
+    );
+    snapshot
+}
+
 fn custom_vocabulary_prompt_block(terms: &[String]) -> Option<String> {
     let terms = normalize_custom_vocabulary_terms(terms);
     if terms.is_empty() {
@@ -1029,6 +1092,61 @@ fn start_transcription_session(app: &AppHandle, binding_id: &str, started: bool)
     );
 }
 
+pub fn promote_active_transcription_to_edit_mode(
+    app: &AppHandle,
+    from_binding_id: &str,
+    to_binding_id: &str,
+) -> bool {
+    if from_binding_id == to_binding_id || to_binding_id != "edit_mode" {
+        warn!(
+            "[ask-hotkey] promote_rejected invalid_target from={} to={}",
+            from_binding_id, to_binding_id
+        );
+        return false;
+    }
+
+    let settings = get_settings(app);
+    if !settings.edit_mode_enabled {
+        warn!(
+            "[ask-hotkey] promote_rejected edit_mode_disabled from={} to={}",
+            from_binding_id, to_binding_id
+        );
+        return false;
+    }
+
+    let rm = app.state::<Arc<AudioRecordingManager>>();
+    if !rm.transfer_recording_binding(from_binding_id, to_binding_id) {
+        warn!(
+            "[ask-hotkey] promote_rejected audio_owner_mismatch from={} to={}",
+            from_binding_id, to_binding_id
+        );
+        return false;
+    }
+
+    clear_ask_selection_session();
+    utils::hide_ask_selection_panel(app);
+    let context_start = Instant::now();
+    let snapshot = capture_ask_selection_start_context();
+    store_active_context_snapshot(to_binding_id, snapshot);
+
+    if let Some(tm) = app.try_state::<Arc<TranscriptionManager>>() {
+        tm.cancel_incremental_session();
+    }
+
+    log::info!(
+        "[latency] promoted active transcription to edit_mode from_binding={} elapsed_ms={}",
+        from_binding_id,
+        context_start.elapsed().as_millis()
+    );
+    warn!(
+        "[ask-hotkey] promoted_active_recording from={} to={} context_elapsed_ms={}",
+        from_binding_id,
+        to_binding_id,
+        context_start.elapsed().as_millis()
+    );
+    true
+}
+
 fn focus_workspace_window(app: &AppHandle) {
     if let Some(main_window) = app.get_webview_window("main") {
         if let Err(e) = main_window.show() {
@@ -1134,15 +1252,90 @@ fn emit_idle_session_window_state(app: &AppHandle) {
     );
 }
 
-fn append_live_text(existing: &mut String, incoming: &str) {
+fn full_system_source_label(source: FullSystemTranscriptionSource) -> &'static str {
+    match source {
+        FullSystemTranscriptionSource::Microphone => "Me",
+        FullSystemTranscriptionSource::SystemAudio => "Them",
+    }
+}
+
+fn full_system_source_transcription_id(source: FullSystemTranscriptionSource) -> &'static str {
+    match source {
+        FullSystemTranscriptionSource::Microphone => "full_system_audio_microphone",
+        FullSystemTranscriptionSource::SystemAudio => "full_system_audio_system",
+    }
+}
+
+#[cfg(test)]
+fn format_labeled_transcript_segments(segments: &[LabeledTranscriptSegment]) -> String {
+    let mut output = String::new();
+    let mut last_source = None;
+
+    for segment in segments {
+        append_labeled_live_text(&mut output, &mut last_source, segment.source, &segment.text);
+    }
+
+    output
+}
+
+fn append_labeled_live_text(
+    existing: &mut String,
+    last_source: &mut Option<FullSystemTranscriptionSource>,
+    source: FullSystemTranscriptionSource,
+    incoming: &str,
+) {
     let incoming = incoming.trim();
     if incoming.is_empty() {
         return;
     }
-    if !existing.trim().is_empty() {
-        existing.push(' ');
+
+    if existing.trim().is_empty() {
+        existing.push_str(full_system_source_label(source));
+        existing.push_str(": ");
+        existing.push_str(incoming);
+        *last_source = Some(source);
+        return;
     }
-    existing.push_str(incoming);
+
+    if *last_source == Some(source) {
+        existing.push(' ');
+        existing.push_str(incoming);
+    } else {
+        existing.push_str("\n\n");
+        existing.push_str(full_system_source_label(source));
+        existing.push_str(": ");
+        existing.push_str(incoming);
+        *last_source = Some(source);
+    }
+}
+
+fn drain_front_up_to(samples: &mut Vec<f32>, max_len: usize) -> Vec<f32> {
+    let len = samples.len().min(max_len);
+    if len == 0 {
+        Vec::new()
+    } else {
+        samples.drain(..len).collect()
+    }
+}
+
+fn source_samples_from_buffers(
+    microphone_samples: Vec<f32>,
+    system_audio_samples: Vec<f32>,
+) -> Vec<FullSystemTranscriptionSourceSamples> {
+    let mut source_samples = Vec::new();
+    if !microphone_samples.is_empty() {
+        source_samples.push(FullSystemTranscriptionSourceSamples {
+            source: FullSystemTranscriptionSource::Microphone,
+            samples: microphone_samples,
+        });
+    }
+    if !system_audio_samples.is_empty() {
+        source_samples.push(FullSystemTranscriptionSourceSamples {
+            source: FullSystemTranscriptionSource::SystemAudio,
+            samples: system_audio_samples,
+        });
+    }
+    source_samples
 }
 
 fn emit_live_session_summary_state(
@@ -1462,19 +1655,101 @@ async fn summarize_live_session(
     })
 }
 
-const EDIT_MODE_SYSTEM_PROMPT: &str = "You transform selected text using a spoken instruction. Return only the replacement text. Preserve the user's meaning unless the instruction explicitly asks for a change. Do not explain, quote, wrap in markdown, or include labels.";
+const ASK_SELECTION_SYSTEM_PROMPT: &str = "You answer a spoken request. If selected text is provided, use it as context; otherwise answer the request directly like a chat question. Return only the answer. Do not replace, rewrite, or quote selected text unless the request asks for that. Do not explain your process, wrap in markdown fences, or include labels.";
 
-fn build_edit_mode_prompt(
+fn ask_selection_message(
+    role: impl Into<String>,
+    text: impl Into<String>,
+    pending: bool,
+) -> utils::AskSelectionMessage {
+    utils::AskSelectionMessage {
+        role: role.into(),
+        text: text.into(),
+        pending,
+    }
+}
+
+fn ask_selection_payload(
+    state: &str,
+    session_id: Option<u64>,
+    messages: Vec<utils::AskSelectionMessage>,
+    text: Option<String>,
+    error: Option<String>,
+) -> utils::AskSelectionPayload {
+    utils::AskSelectionPayload {
+        state: state.to_string(),
+        text,
+        error,
+        session_id,
+        messages,
+    }
+}
+
+fn current_ask_selection_session_id() -> u64 {
+    ASK_SELECTION_CHAT_SESSION
+        .lock()
+        .ok()
+        .and_then(|session| session.as_ref().map(|session| session.id))
+        .unwrap_or_else(|| ASK_SELECTION_CHAT_SESSION_ID.fetch_add(1, Ordering::Relaxed))
+}
+
+pub fn clear_ask_selection_session() {
+    if let Ok(mut session) = ASK_SELECTION_CHAT_SESSION.lock() {
+        *session = None;
+    }
+}
+
+fn update_ask_selection_session(
+    session_id: u64,
+    selected_text: Option<String>,
+    context: AppContextSnapshot,
+    messages: Vec<utils::AskSelectionMessage>,
+) {
+    if let Ok(mut session) = ASK_SELECTION_CHAT_SESSION.lock() {
+        *session = Some(AskSelectionChatSession {
+            id: session_id,
+            selected_text,
+            context,
+            messages,
+        });
+    }
+}
+
+fn current_ask_selection_messages() -> Vec<utils::AskSelectionMessage> {
+    ASK_SELECTION_CHAT_SESSION
+        .lock()
+        .ok()
+        .and_then(|session| session.as_ref().map(|session| session.messages.clone()))
+        .unwrap_or_default()
+}
+
+fn ask_selection_session_is_current(session_id: u64) -> bool {
+    ASK_SELECTION_CHAT_SESSION
+        .lock()
+        .ok()
+        .and_then(|session| session.as_ref().map(|session| session.id == session_id))
+        .unwrap_or(false)
+}
+
+fn build_ask_selection_prompt(
     selected_text: &str,
     spoken_instruction: &str,
     context: &AppContextSnapshot,
     custom_vocabulary_terms: &[String],
 ) -> String {
-    let mut prompt = format!(
-        "# Task\nTransform the selected text according to the spoken instruction. Return only the replacement text inside <uttr_edit_output>...</uttr_edit_output>.\n\n# Spoken instruction\n{}\n\n# Selected text\n{}",
-        spoken_instruction.trim(),
-        selected_text
-    );
+    let selected_text = selected_text.trim();
+    let mut prompt = if selected_text.is_empty() {
+        format!(
+            "# Task\nAnswer the spoken request directly as a chat question. No selected text was provided. Return only the answer inside <uttr_ask_output>...</uttr_ask_output>.\n\n# Spoken request\n{}",
+            spoken_instruction.trim()
+        )
+    } else {
+        format!(
+            "# Task\nAnswer the spoken request using the selected text as context. Return only the answer inside <uttr_ask_output>...</uttr_ask_output>. Do not modify the user's selected text or produce replacement text unless the spoken request explicitly asks for a rewrite.\n\n# Spoken request\n{}\n\n# Selected text\n{}",
+            spoken_instruction.trim(),
+            selected_text
+        )
+    };
 
     if let Some(block) = app_context_prompt_block(context) {
         prompt.push_str("\n\n# Context\n");
@@ -1485,52 +1760,119 @@ fn build_edit_mode_prompt(
         prompt.push_str(&block);
     }
 
-    prompt.push_str("\n\n# Output format\n<uttr_edit_output>\n...\n</uttr_edit_output>");
+    prompt.push_str("\n\n# Output format\n<uttr_ask_output>\n...\n</uttr_ask_output>");
     prompt
 }
 
-fn clean_edit_mode_response(content: &str) -> String {
-    if let Some(output) = extract_tagged_output(content, "uttr_edit_output") {
+fn render_ask_selection_conversation(messages: &[utils::AskSelectionMessage]) -> String {
+    messages
+        .iter()
+        .filter(|message| !message.pending && !message.text.trim().is_empty())
+        .map(|message| {
+            let role = match message.role.as_str() {
+                "assistant" => "Assistant",
+                "user" => "User",
+                _ => "Message",
+            };
+            format!("{}: {}", role, message.text.trim())
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn build_ask_selection_follow_up_prompt(
+    selected_text: &str,
+    messages: &[utils::AskSelectionMessage],
+    follow_up: &str,
+    context: &AppContextSnapshot,
+    custom_vocabulary_terms: &[String],
+) -> String {
+    let conversation = render_ask_selection_conversation(messages);
+    let selected_text = selected_text.trim();
+    let mut prompt = if selected_text.is_empty() {
+        format!(
+            "# Task\nAnswer the latest follow-up using the prior Ask Selection chat as context. No selected text was provided. Return only the answer inside <uttr_ask_output>...</uttr_ask_output>.\n\n# Latest follow-up\n{}",
+            follow_up.trim()
+        )
+    } else {
+        format!(
+            "# Task\nAnswer the latest follow-up using the selected text and prior Ask Selection chat as context. Return only the answer inside <uttr_ask_output>...</uttr_ask_output>. Do not invent facts outside the selected text unless the user asks a general question.\n\n# Latest follow-up\n{}\n\n# Selected text\n{}",
+            follow_up.trim(),
+            selected_text
+        )
+    };
+
+    if !conversation.trim().is_empty() {
+        prompt.push_str("\n\n# Prior chat\n");
+        prompt.push_str(&conversation);
+    }
+    if let Some(block) = app_context_prompt_block(context) {
+        prompt.push_str("\n\n# Context\n");
+        prompt.push_str(&block);
+    }
+    if let Some(block) = custom_vocabulary_prompt_block(custom_vocabulary_terms) {
+        prompt.push_str("\n\n# Custom vocabulary\n");
+        prompt.push_str(&block);
+    }
+
+    prompt.push_str("\n\n# Output format\n<uttr_ask_output>\n...\n</uttr_ask_output>");
+    prompt
+}
+
+fn clean_ask_selection_response(content: &str) -> String {
+    if let Some(output) = extract_tagged_output(content, "uttr_ask_output") {
         return strip_wrapping_code_fence(&trim_chat_stop_tokens(&output));
     }
 
     clean_post_process_response(content)
 }
 
-async fn transform_edit_mode_text(
+async fn run_ask_selection_prompt(
     app_handle: &AppHandle,
     settings: &AppSettings,
-    selected_text: &str,
-    spoken_instruction: &str,
-    context: &AppContextSnapshot,
+    prompt: String,
 ) -> Result<(String, String), String> {
-    let prompt = build_edit_mode_prompt(
-        selected_text,
-        spoken_instruction,
-        context,
-        &settings.custom_vocabulary_terms,
-    );
+    let provider_error =
+        match run_ask_selection_provider_prompt(app_handle, settings, prompt.clone()).await {
+            Ok(result) => return Ok(result),
+            Err(error) => {
+                warn!(
+                    "Ask Selection provider route failed; falling back to Codex app-server: {}",
+                    error
+                );
+                error
+            }
+        };
 
-    match summary_client::transform_with_codex_app(
-        prompt.clone(),
-        EDIT_MODE_SYSTEM_PROMPT.to_string(),
-    )
-    .await
+    match summary_client::transform_with_codex_app(prompt, ASK_SELECTION_SYSTEM_PROMPT.to_string())
+        .await
     {
         Ok(output) => {
-            let output = clean_edit_mode_response(&output);
+            let output = clean_ask_selection_response(&output);
             if output.trim().is_empty() {
-                return Err("Codex returned an empty edit.".to_string());
+                return Err("Codex returned an empty Ask Selection answer.".to_string());
             }
-            return Ok((output, "Edit Mode via Codex app-server".to_string()));
+            Ok((output, "Ask Selection via Codex app-server".to_string()))
         }
-        Err(error) => summary_client::summarize_codex_unavailable(&error),
+        Err(error) => {
+            summary_client::summarize_codex_unavailable(&error);
+            Err(format!(
+                "Ask Selection provider and Codex fallback both failed. Provider: {}. Codex fallback: {}",
+                provider_error, error
+            ))
+        }
     }
+}
 
+async fn run_ask_selection_provider_prompt(
+    app_handle: &AppHandle,
+    settings: &AppSettings,
+    prompt: String,
+) -> Result<(String, String), String> {
     let provider = settings
         .active_post_process_provider()
         .cloned()
-        .ok_or_else(|| "Edit Mode fallback needs a post-processing provider.".to_string())?;
+        .ok_or_else(|| "Ask Selection needs a post-processing provider.".to_string())?;
 
     let api_key =
         match crate::byok_secrets::load_provider_api_key(app_handle, settings, &provider.id) {
@@ -1547,26 +1889,135 @@ async fn transform_edit_mode_text(
 
     let model = resolve_post_process_model(&provider, settings, &api_key)
         .await
-        .ok_or_else(|| {
-            "Edit Mode fallback could not resolve a post-processing model.".to_string()
-        })?;
+        .ok_or_else(|| "Ask Selection could not resolve a post-processing model.".to_string())?;
 
     crate::llm_client::send_chat_completion(
         &provider,
         api_key,
         &model,
         prompt,
-        Some(EDIT_MODE_SYSTEM_PROMPT),
+        Some(ASK_SELECTION_SYSTEM_PROMPT),
     )
     .await?
     .map(|content| {
         (
-            clean_edit_mode_response(&content),
-            format!("Edit Mode via {}", provider.label),
+            clean_ask_selection_response(&content),
+            format!("Ask Selection via {}", provider.label),
         )
     })
     .filter(|(output, _)| !output.trim().is_empty())
-    .ok_or_else(|| "Edit Mode fallback returned an empty edit.".to_string())
+    .ok_or_else(|| "Ask Selection provider returned an empty answer.".to_string())
+}
+
+async fn answer_ask_selection(
+    app_handle: &AppHandle,
+    settings: &AppSettings,
+    selected_text: &str,
+    spoken_instruction: &str,
+    context: &AppContextSnapshot,
+) -> Result<(String, String), String> {
+    let prompt = build_ask_selection_prompt(
+        selected_text,
+        spoken_instruction,
+        context,
+        &settings.custom_vocabulary_terms,
+    );
+
+    run_ask_selection_prompt(app_handle, settings, prompt).await
+}
+
+pub async fn answer_ask_selection_follow_up(
+    app_handle: AppHandle,
+    session_id: u64,
+    message: String,
+) -> Result<utils::AskSelectionPayload, String> {
+    let follow_up = message.trim().to_string();
+    if follow_up.is_empty() {
+        return Err("Ask Selection follow-up cannot be empty.".to_string());
+    }
+
+    let mut session = ASK_SELECTION_CHAT_SESSION
+        .lock()
+        .ok()
+        .and_then(|session| session.clone())
+        .ok_or_else(|| "Ask Selection session is no longer available.".to_string())?;
+    if session.id != session_id {
+        return Err(
+            "Ask Selection session is stale. Start a new Ask Selection request.".to_string(),
+        );
+    }
+    let selected_text = session
+        .selected_text
+        .clone()
+        .filter(|text| !text.trim().is_empty());
+
+    session
+        .messages
+        .push(ask_selection_message("user", follow_up.clone(), false));
+    let pending_messages = {
+        let mut messages = session.messages.clone();
+        messages.push(ask_selection_message("assistant", "Thinking...", true));
+        messages
+    };
+    update_ask_selection_session(
+        session.id,
+        selected_text.clone(),
+        session.context.clone(),
+        pending_messages.clone(),
+    );
+    utils::update_ask_selection_panel(
+        &app_handle,
+        ask_selection_payload("thinking", Some(session.id), pending_messages, None, None),
+    );
+
+    let settings = get_settings(&app_handle);
+    let prompt = build_ask_selection_follow_up_prompt(
+        selected_text.as_deref().unwrap_or(""),
+        &session.messages,
+        &follow_up,
+        &session.context,
+        &settings.custom_vocabulary_terms,
+    );
+
+    match run_ask_selection_prompt(&app_handle, &settings, prompt).await {
+        Ok((answer, _prompt_label)) => {
+            if !ask_selection_session_is_current(session.id) {
+                return Err("Ask Selection session is no longer available.".to_string());
+            }
+            session
+                .messages
+                .push(ask_selection_message("assistant", answer.clone(), false));
+            update_ask_selection_session(
+                session.id,
+                selected_text,
+                session.context,
+                session.messages.clone(),
+            );
+            let payload = ask_selection_payload(
+                "result",
+                Some(session.id),
+                session.messages,
+                Some(answer),
+                None,
+            );
+            utils::update_ask_selection_panel(&app_handle, payload.clone());
+            Ok(payload)
+        }
+        Err(error) => {
+            if !ask_selection_session_is_current(session.id) {
+                return Err("Ask Selection session is no longer available.".to_string());
+            }
+            let payload = ask_selection_payload(
+                "error",
+                Some(session.id),
+                session.messages,
+                None,
+                Some(error.clone()),
+            );
+            utils::update_ask_selection_panel(&app_handle, payload.clone());
+            Err(error)
+        }
+    }
 }
 
 fn friendly_live_summary_error(error: &str) -> String {
@@ -1618,11 +2069,11 @@ async fn transcribe_and_summarize_live_chunk(
     app: &AppHandle,
     runtime: &Arc<FullSystemLiveRuntime>,
     tm: &Arc<TranscriptionManager>,
-    chunk_samples: Vec<f32>,
+    chunk: FullSystemLiveChunk,
     is_final_chunk: bool,
     record_samples: bool,
 ) {
-    if chunk_samples.is_empty() {
+    if chunk.is_empty() {
         return;
     }
 
@@ -1631,7 +2082,7 @@ async fn transcribe_and_summarize_live_chunk(
             .recorded_samples
             .lock()
             .unwrap()
-            .extend_from_slice(&chunk_samples);
+            .extend_from_slice(&chunk.mixed_samples);
     }
 
     let chunk_index = runtime.chunk_count.load(Ordering::Relaxed) + 1;
@@ -1665,50 +2116,56 @@ async fn transcribe_and_summarize_live_chunk(
         );
     }
 
-    let transcription = match tm
-        .transcribe_with_source(chunk_samples, Some("full_system_audio"))
-        .await
-    {
-        Ok(text) => text,
-        Err(error) => {
-            warn!(
-                "Live full-system chunk {} transcription failed: {}",
-                chunk_index, error
-            );
-            *runtime.summary_error.lock().unwrap() = Some(format!(
-                "Live transcription failed for chunk {}: {}",
-                chunk_index, error
-            ));
-            if is_final_chunk {
-                emit_session_window_state(
-                    app,
-                    SessionWindowStatePayload {
-                        stage: "processing".to_string(),
-                        title: "Preparing summary".to_string(),
-                        subtitle: "Unable to transcribe the final audio chunk.".to_string(),
-                        progress_label: "Processing".to_string(),
-                        progress_value: 0.88,
-                        summary_text: runtime.summary_error.lock().unwrap().clone(),
-                        raw_transcript_text: None,
-                        history_entry_id: None,
-                    },
+    let transcription_segments =
+        match transcribe_full_system_live_chunk_sources(tm, chunk, chunk_index).await {
+            Ok(segments) => segments,
+            Err(error) => {
+                warn!(
+                    "Live full-system chunk {} transcription failed: {}",
+                    chunk_index, error
                 );
-            } else if !runtime.stop_requested.load(Ordering::Relaxed) {
-                emit_live_session_summary_state(
-                    app,
-                    runtime.chunk_count.load(Ordering::Relaxed),
-                    runtime.summary_text.lock().unwrap().clone(),
-                    runtime.summary_error.lock().unwrap().clone(),
-                );
+                *runtime.summary_error.lock().unwrap() = Some(format!(
+                    "Live transcription failed for chunk {}: {}",
+                    chunk_index, error
+                ));
+                if is_final_chunk {
+                    emit_session_window_state(
+                        app,
+                        SessionWindowStatePayload {
+                            stage: "processing".to_string(),
+                            title: "Preparing summary".to_string(),
+                            subtitle: "Unable to transcribe the final audio chunk.".to_string(),
+                            progress_label: "Processing".to_string(),
+                            progress_value: 0.88,
+                            summary_text: runtime.summary_error.lock().unwrap().clone(),
+                            raw_transcript_text: None,
+                            history_entry_id: None,
+                        },
+                    );
+                } else if !runtime.stop_requested.load(Ordering::Relaxed) {
+                    emit_live_session_summary_state(
+                        app,
+                        runtime.chunk_count.load(Ordering::Relaxed),
+                        runtime.summary_text.lock().unwrap().clone(),
+                        runtime.summary_error.lock().unwrap().clone(),
+                    );
+                }
+                return;
             }
-            return;
-        }
-    };
+        };
 
-    if !transcription.trim().is_empty() {
+    if !transcription_segments.is_empty() {
         let transcript_so_far = {
             let mut transcript = runtime.transcript_text.lock().unwrap();
-            append_live_text(&mut transcript, &transcription);
+            let mut last_source = runtime.last_transcript_source.lock().unwrap();
+            for segment in &transcription_segments {
+                append_labeled_live_text(
+                    &mut transcript,
+                    &mut *last_source,
+                    segment.source,
+                    &segment.text,
+                );
+            }
             transcript.clone()
         };
 
@@ -1842,6 +2299,73 @@ async fn transcribe_and_summarize_live_chunk(
     }
 }
 
+async fn transcribe_full_system_live_chunk_sources(
+    tm: &Arc<TranscriptionManager>,
+    chunk: FullSystemLiveChunk,
+    chunk_index: u64,
+) -> Result<Vec<LabeledTranscriptSegment>, anyhow::Error> {
+    let mut segments = Vec::new();
+
+    if chunk.source_samples.is_empty() {
+        let transcription = tm
+            .transcribe_with_source(chunk.mixed_samples, Some("full_system_audio"))
+            .await?;
+        if !transcription.trim().is_empty() {
+            return Ok(vec![LabeledTranscriptSegment {
+                source: FullSystemTranscriptionSource::SystemAudio,
+                text: transcription,
+            }]);
+        }
+        return Ok(Vec::new());
+    }
+
+    for source_samples in chunk.source_samples {
+        if source_samples.samples.is_empty() || is_effectively_silent_audio(&source_samples.samples)
+        {
+            if let Some((rms, peak)) = silent_audio_levels(&source_samples.samples) {
+                debug!(
+                    "Skipping quiet full-system source chunk source={} chunk={} rms={:.6} peak={:.6}",
+                    full_system_source_label(source_samples.source),
+                    chunk_index,
+                    rms,
+                    peak
+                );
+            }
+            continue;
+        }
+
+        let source_label = full_system_source_label(source_samples.source);
+        let source_id = full_system_source_transcription_id(source_samples.source);
+        let sample_count = source_samples.samples.len();
+        let started = Instant::now();
+        log::info!(
+            "[latency] full-system source transcription begin chunk={} source={} sample_count={}",
+            chunk_index,
+            source_label,
+            sample_count
+        );
+        let text = tm
+            .transcribe_with_source(source_samples.samples, Some(source_id))
+            .await?;
+        log::info!(
+            "[latency] full-system source transcription complete chunk={} source={} sample_count={} elapsed_ms={}",
+            chunk_index,
+            source_label,
+            sample_count,
+            started.elapsed().as_millis()
+        );
+
+        if !text.trim().is_empty() {
+            segments.push(LabeledTranscriptSegment {
+                source: source_samples.source,
+                text,
+            });
+        }
+    }
+
+    Ok(segments)
+}
+
 fn start_full_system_live_session(app: &AppHandle, binding_id: &str) {
     let runtime = Arc::new(FullSystemLiveRuntime::new());
     let worker_runtime = Arc::clone(&runtime);
@@ -1852,18 +2376,44 @@ fn start_full_system_live_session(app: &AppHandle, binding_id: &str) {
 
     let worker_handle = tauri::async_runtime::spawn(async move {
         let mut buffered = Vec::<f32>::new();
+        let mut buffered_microphone = Vec::<f32>::new();
+        let mut buffered_system_audio = Vec::<f32>::new();
 
         while !worker_runtime.stop_requested.load(Ordering::Relaxed) {
-            if let Some(delta) = full_system_audio.drain_session_delta(&worker_binding) {
-                if !delta.is_empty() {
-                    buffered.extend_from_slice(&delta);
+            if let Some(delta) = full_system_audio.drain_session_delta_sources(&worker_binding) {
+                if let Some(mixed) = delta.mixed {
+                    if !mixed.is_empty() {
+                        buffered.extend_from_slice(&mixed);
+                    }
+                }
+                for source_samples in delta.sources {
+                    match source_samples.source {
+                        FullSystemTranscriptionSource::Microphone => {
+                            buffered_microphone.extend_from_slice(&source_samples.samples);
+                        }
+                        FullSystemTranscriptionSource::SystemAudio => {
+                            buffered_system_audio.extend_from_slice(&source_samples.samples);
+                        }
+                    }
                 }
             }
 
             while buffered.len() >= FULL_SYSTEM_LIVE_CHUNK_SAMPLES
                 && !worker_runtime.stop_requested.load(Ordering::Relaxed)
             {
-                let chunk: Vec<f32> = buffered.drain(..FULL_SYSTEM_LIVE_CHUNK_SAMPLES).collect();
+                let mixed_samples: Vec<f32> =
+                    buffered.drain(..FULL_SYSTEM_LIVE_CHUNK_SAMPLES).collect();
+                let microphone_samples =
+                    drain_front_up_to(&mut buffered_microphone, FULL_SYSTEM_LIVE_CHUNK_SAMPLES);
+                let system_audio_samples =
+                    drain_front_up_to(&mut buffered_system_audio, FULL_SYSTEM_LIVE_CHUNK_SAMPLES);
+                let chunk = FullSystemLiveChunk {
+                    mixed_samples,
+                    source_samples: source_samples_from_buffers(
+                        microphone_samples,
+                        system_audio_samples,
+                    ),
+                };
                 transcribe_and_summarize_live_chunk(
                     &worker_app,
                     &worker_runtime,
@@ -1884,6 +2434,20 @@ fn start_full_system_live_session(app: &AppHandle, binding_id: &str) {
                 .lock()
                 .unwrap()
                 .extend_from_slice(&buffered);
+        }
+        if !buffered_microphone.is_empty() {
+            worker_runtime
+                .pending_microphone_samples
+                .lock()
+                .unwrap()
+                .extend_from_slice(&buffered_microphone);
+        }
+        if !buffered_system_audio.is_empty() {
+            worker_runtime
+                .pending_system_audio_samples
+                .lock()
+                .unwrap()
+                .extend_from_slice(&buffered_system_audio);
         }
     });
 
@@ -1917,7 +2481,7 @@ fn signal_full_system_live_session_stop(binding_id: &str) {
 async fn finish_full_system_live_session(
     app: &AppHandle,
     binding_id: &str,
-    tail_samples: Option<Vec<f32>>,
+    tail_samples: Option<FullSystemSessionTranscriptionSamples>,
     tm: Arc<TranscriptionManager>,
 ) -> Option<FullSystemLiveFinal> {
     let session = {
@@ -1944,11 +2508,38 @@ async fn finish_full_system_live_session(
         let mut pending = session.runtime.pending_samples.lock().unwrap();
         std::mem::take(&mut *pending)
     };
-    if let Some(tail_samples) = tail_samples.filter(|samples| !samples.is_empty()) {
-        final_samples.extend_from_slice(&tail_samples);
+    let mut final_microphone_samples = {
+        let mut pending = session.runtime.pending_microphone_samples.lock().unwrap();
+        std::mem::take(&mut *pending)
+    };
+    let mut final_system_audio_samples = {
+        let mut pending = session.runtime.pending_system_audio_samples.lock().unwrap();
+        std::mem::take(&mut *pending)
+    };
+    if let Some(tail_samples) = tail_samples {
+        if let Some(mixed) = tail_samples.mixed.filter(|samples| !samples.is_empty()) {
+            final_samples.extend_from_slice(&mixed);
+        }
+        for source_samples in tail_samples.sources {
+            match source_samples.source {
+                FullSystemTranscriptionSource::Microphone => {
+                    final_microphone_samples.extend_from_slice(&source_samples.samples);
+                }
+                FullSystemTranscriptionSource::SystemAudio => {
+                    final_system_audio_samples.extend_from_slice(&source_samples.samples);
+                }
+            }
+        }
     }
     if !final_samples.is_empty() {
-        transcribe_and_summarize_live_chunk(app, &session.runtime, &tm, final_samples, true, true)
+        let final_chunk = FullSystemLiveChunk {
+            mixed_samples: final_samples,
+            source_samples: source_samples_from_buffers(
+                final_microphone_samples,
+                final_system_audio_samples,
+            ),
+        };
+        transcribe_and_summarize_live_chunk(app, &session.runtime, &tm, final_chunk, true, true)
             .await;
     }
 
@@ -1989,7 +2580,7 @@ fn handle_transcription_stop(
         recording_duration.unwrap_or_default().as_millis()
     );
 
-    let context_snapshot = take_active_context(
+    let mut context_snapshot = take_active_context(
         binding_id,
         completion_mode == TranscriptionCompletionMode::EditMode,
     );
@@ -1998,6 +2589,7 @@ fn handle_transcription_stop(
     let task_completed = Arc::new(AtomicBool::new(false));
     let task_completed_for_worker = Arc::clone(&task_completed);
     let tm_for_worker = tm.clone();
+    let cancel_generation_at_start = tm.cancel_generation();
     let recording_duration = recording_duration.unwrap_or_default();
     let transcription_watchdog = samples
         .as_ref()
@@ -2016,6 +2608,23 @@ fn handle_transcription_stop(
 
         let Some(samples) = samples else {
             warn!("No samples retrieved from recording stop");
+            if completion_mode == TranscriptionCompletionMode::EditMode {
+                let session_id = current_ask_selection_session_id();
+                utils::show_ask_selection_panel(
+                    &ah,
+                    ask_selection_payload(
+                        "error",
+                        Some(session_id),
+                        current_ask_selection_messages(),
+                        None,
+                        Some(
+                            "No audio captured. Try holding the shortcut a bit longer.".to_string(),
+                        ),
+                    ),
+                );
+                change_tray_icon(&ah, TrayIconState::Idle);
+                return;
+            }
             if recording_duration >= NO_INPUT_OVERLAY_MIN_DURATION {
                 ui_guard.suppress();
                 spawn_no_input_overlay_feedback(&ah, post_process);
@@ -2032,6 +2641,23 @@ fn handle_transcription_stop(
         let transcription_timeout = transcription_timeout_for_samples(samples.len());
 
         if samples.is_empty() {
+            if completion_mode == TranscriptionCompletionMode::EditMode {
+                let session_id = current_ask_selection_session_id();
+                utils::show_ask_selection_panel(
+                    &ah,
+                    ask_selection_payload(
+                        "error",
+                        Some(session_id),
+                        current_ask_selection_messages(),
+                        None,
+                        Some(
+                            "No audio captured. Try holding the shortcut a bit longer.".to_string(),
+                        ),
+                    ),
+                );
+                change_tray_icon(&ah, TrayIconState::Idle);
+                return;
+            }
             if recording_duration >= NO_INPUT_OVERLAY_MIN_DURATION {
                 ui_guard.suppress();
                 spawn_no_input_overlay_feedback(&ah, post_process);
@@ -2173,6 +2799,21 @@ fn handle_transcription_stop(
         match transcription_result {
             Ok(transcription) => {
                 if suspected_no_input && transcription.trim().is_empty() {
+                    if completion_mode == TranscriptionCompletionMode::EditMode {
+                        let session_id = current_ask_selection_session_id();
+                        utils::show_ask_selection_panel(
+                            &ah,
+                            ask_selection_payload(
+                                "error",
+                                Some(session_id),
+                                current_ask_selection_messages(),
+                                None,
+                                Some("No speech detected. Try recording again.".to_string()),
+                            ),
+                        );
+                        change_tray_icon(&ah, TrayIconState::Idle);
+                        return;
+                    }
                     refresh_microphone_stream_after_suspected_no_input(
                         &ah,
                         &binding_id,
@@ -2182,7 +2823,9 @@ fn handle_transcription_stop(
                     spawn_no_input_overlay_feedback(&ah, post_process);
                     return;
                 }
-                if tm_for_worker.is_cancel_requested() {
+                if tm_for_worker.is_cancel_requested()
+                    || tm_for_worker.cancel_generation() != cancel_generation_at_start
+                {
                     debug!("Transcription was cancelled before output handling");
                     utils::hide_recording_overlay(&ah);
                     change_tray_icon(&ah, TrayIconState::Idle);
@@ -2196,99 +2839,144 @@ fn handle_transcription_stop(
                 if !transcription.is_empty() {
                     let settings = get_settings(&ah);
                     if completion_mode == TranscriptionCompletionMode::EditMode {
-                        let Some(selected_text) = context_snapshot
+                        let session_id = current_ask_selection_session_id();
+                        let selected_text = context_snapshot
                             .selected_text
                             .as_deref()
                             .map(str::trim)
                             .filter(|text| !text.is_empty())
-                        else {
-                            let message =
-                                "Edit Mode needs selected text before you start recording.";
-                            warn!("{}", message);
-                            let _ = ah.emit("transcription-error", message.to_string());
-                            utils::hide_recording_overlay(&ah);
-                            change_tray_icon(&ah, TrayIconState::Idle);
-                            return;
-                        };
+                            .map(ToOwned::to_owned)
+                            .or_else(|| {
+                                match crate::clipboard::capture_selected_text_via_copy(&ah) {
+                                    Ok(Some(text)) => {
+                                        log::info!(
+                                            "Captured Ask Selection text via copy fallback (chars={})",
+                                            text.chars().count()
+                                        );
+                                        context_snapshot.selected_text = Some(text.clone());
+                                        Some(text)
+                                    }
+                                    Ok(None) => {
+                                        debug!(
+                                            "Ask Selection copy fallback did not find selected text"
+                                        );
+                                        None
+                                    }
+                                    Err(error) => {
+                                        warn!("Ask Selection copy fallback unavailable: {}", error);
+                                        None
+                                    }
+                                }
+                            });
 
-                        spawn_deferred_overlay_state(&ah, DeferredOverlayState::Processing);
-                        match transform_edit_mode_text(
+                        let mut thinking_messages = vec![
+                            ask_selection_message("user", transcription.clone(), false),
+                            ask_selection_message("assistant", "Thinking...", true),
+                        ];
+                        update_ask_selection_session(
+                            session_id,
+                            selected_text.clone(),
+                            context_snapshot.clone(),
+                            thinking_messages.clone(),
+                        );
+                        utils::show_ask_selection_panel(
+                            &ah,
+                            ask_selection_payload(
+                                "thinking",
+                                Some(session_id),
+                                thinking_messages.clone(),
+                                None,
+                                None,
+                            ),
+                        );
+                        match answer_ask_selection(
                             &ah,
                             &settings,
-                            selected_text,
+                            selected_text.as_deref().unwrap_or(""),
                             &transcription,
                             &context_snapshot,
                         )
                         .await
                         {
-                            Ok((replacement_text, prompt_label)) => {
+                            Ok((answer_text, prompt_label)) => {
+                                if !ask_selection_session_is_current(session_id) {
+                                    change_tray_icon(&ah, TrayIconState::Idle);
+                                    return;
+                                }
+
                                 let hm_clone = Arc::clone(&hm);
                                 let ah_for_history = ah.clone();
                                 let transcription_for_history = transcription.clone();
-                                let replacement_for_history = replacement_text.clone();
+                                let answer_for_history = answer_text.clone();
                                 tauri::async_runtime::spawn(async move {
                                     if let Err(e) = hm_clone
                                         .save_transcription(
                                             samples_clone,
                                             transcription_for_history,
-                                            Some(replacement_for_history),
+                                            Some(answer_for_history),
                                             Some(prompt_label),
                                             "dictation",
                                         )
                                         .await
                                     {
-                                        error!("Failed to save edit-mode transcription: {}", e);
+                                        error!("Failed to save Ask Selection transcription: {}", e);
                                         let _ = ah_for_history.emit(
                                             "transcription-error",
                                             format!(
-                                                "Edit Mode succeeded, but saving history failed: {}",
+                                                "Ask Selection succeeded, but saving history failed: {}",
                                                 e
                                             ),
                                         );
                                     }
                                 });
 
-                                let ah_clone = ah.clone();
-                                let paste_time = Instant::now();
-                                ah.run_on_main_thread(move || {
-                                    let text_for_paste = replacement_text.clone();
-                                    match utils::paste(text_for_paste.clone(), ah_clone.clone()) {
-                                        Ok(()) => debug!(
-                                            "Edit Mode replacement pasted successfully in {:?}",
-                                            paste_time.elapsed()
-                                        ),
-                                        Err(e) => {
-                                            error!("Failed to paste Edit Mode replacement: {}", e);
-                                            let _ = ah_clone.emit(
-                                                "transcription-error",
-                                                format!(
-                                                    "Edit Mode succeeded, but paste failed: {}",
-                                                    e
-                                                ),
-                                            );
-                                            if let Err(copy_err) =
-                                                ah_clone.clipboard().write_text(&text_for_paste)
-                                            {
-                                                error!(
-                                                    "Failed to copy Edit Mode replacement after paste error: {}",
-                                                    copy_err
-                                                );
-                                            }
-                                        }
-                                    }
-                                    utils::hide_recording_overlay(&ah_clone);
-                                    change_tray_icon(&ah_clone, TrayIconState::Idle);
-                                })
-                                .unwrap_or_else(|e| {
-                                    error!("Failed to run Edit Mode paste on main thread: {:?}", e);
-                                    utils::hide_recording_overlay(&ah);
-                                    change_tray_icon(&ah, TrayIconState::Idle);
-                                });
+                                thinking_messages.pop();
+                                thinking_messages.push(ask_selection_message(
+                                    "assistant",
+                                    answer_text.clone(),
+                                    false,
+                                ));
+                                update_ask_selection_session(
+                                    session_id,
+                                    selected_text,
+                                    context_snapshot,
+                                    thinking_messages.clone(),
+                                );
+                                utils::update_ask_selection_panel(
+                                    &ah,
+                                    ask_selection_payload(
+                                        "result",
+                                        Some(session_id),
+                                        thinking_messages,
+                                        Some(answer_text),
+                                        None,
+                                    ),
+                                );
+                                change_tray_icon(&ah, TrayIconState::Idle);
                             }
                             Err(error) => {
-                                error!("Edit Mode transform failed: {}", error);
+                                error!("Ask Selection failed: {}", error);
+                                if !ask_selection_session_is_current(session_id) {
+                                    change_tray_icon(&ah, TrayIconState::Idle);
+                                    return;
+                                }
+
+                                let error_messages = vec![ask_selection_message(
+                                    "user",
+                                    transcription.clone(),
+                                    false,
+                                )];
+                                utils::update_ask_selection_panel(
+                                    &ah,
+                                    ask_selection_payload(
+                                        "error",
+                                        Some(session_id),
+                                        error_messages,
+                                        None,
+                                        Some(error.clone()),
+                                    ),
+                                );
                                 let _ = ah.emit("transcription-error", error);
-                                utils::hide_recording_overlay(&ah);
                                 change_tray_icon(&ah, TrayIconState::Idle);
                             }
                         }
@@ -2433,12 +3121,45 @@ fn handle_transcription_stop(
                         utils::hide_recording_overlay(&ah);
                         change_tray_icon(&ah, TrayIconState::Idle);
                     });
+                } else if completion_mode == TranscriptionCompletionMode::EditMode {
+                    let session_id = current_ask_selection_session_id();
+                    utils::show_ask_selection_panel(
+                        &ah,
+                        ask_selection_payload(
+                            "error",
+                            Some(session_id),
+                            current_ask_selection_messages(),
+                            None,
+                            Some("No speech detected. Try recording again.".to_string()),
+                        ),
+                    );
+                    change_tray_icon(&ah, TrayIconState::Idle);
                 } else {
                     utils::hide_recording_overlay(&ah);
                     change_tray_icon(&ah, TrayIconState::Idle);
                 }
             }
             Err(err) => {
+                if completion_mode == TranscriptionCompletionMode::EditMode {
+                    let session_id = current_ask_selection_session_id();
+                    let message = if suspected_no_input {
+                        "No speech detected. Try recording again.".to_string()
+                    } else {
+                        format!("Ask Selection transcription failed: {}", err)
+                    };
+                    utils::show_ask_selection_panel(
+                        &ah,
+                        ask_selection_payload(
+                            "error",
+                            Some(session_id),
+                            current_ask_selection_messages(),
+                            None,
+                            Some(message),
+                        ),
+                    );
+                    change_tray_icon(&ah, TrayIconState::Idle);
+                    return;
+                }
                 if suspected_no_input {
                     refresh_microphone_stream_after_suspected_no_input(
                         &ah,
@@ -2521,17 +3242,19 @@ impl ShortcutAction for TranscribeAction {
         if self.completion_mode == TranscriptionCompletionMode::EditMode
             && !settings.edit_mode_enabled
         {
-            let message = "Edit Mode is disabled in settings.";
+            let message = "Ask Selection is disabled in settings.";
             warn!("{}", message);
             let _ = app.emit("transcription-error", message.to_string());
             change_tray_icon(app, TrayIconState::Idle);
             utils::hide_recording_overlay(app);
             return;
         }
-        if self.completion_mode == TranscriptionCompletionMode::EditMode
-            || self.post_process
-            || settings.post_process_enabled
-        {
+        let is_edit_mode = self.completion_mode == TranscriptionCompletionMode::EditMode;
+        if is_edit_mode {
+            clear_ask_selection_session();
+            utils::hide_ask_selection_panel(app);
+        }
+        if !is_edit_mode && (self.post_process || settings.post_process_enabled) {
             store_active_context_async(&binding_id);
         }
         let use_incremental = should_use_incremental_transcription(&settings, &tm);
@@ -2618,6 +3341,32 @@ impl ShortcutAction for TranscribeAction {
             }
         }
 
+        if is_edit_mode && recording_started {
+            let context_start = Instant::now();
+            let snapshot = capture_ask_selection_start_context();
+            store_active_context_snapshot(&binding_id, snapshot);
+            log::info!(
+                "[latency] ask selection context captured after recording overlay binding={} elapsed_ms={} total_start_elapsed_ms={}",
+                binding_id,
+                context_start.elapsed().as_millis(),
+                start_time.elapsed().as_millis()
+            );
+        }
+
+        if is_edit_mode && !recording_started {
+            let session_id = current_ask_selection_session_id();
+            utils::show_ask_selection_panel(
+                app,
+                ask_selection_payload(
+                    "error",
+                    Some(session_id),
+                    Vec::new(),
+                    None,
+                    Some("Ask Selection could not start recording.".to_string()),
+                ),
+            );
+        }
+
         tm.cancel_incremental_session();
         start_transcription_session(app, &binding_id, recording_started);
         let preload_model_id = if settings.selected_model.is_empty() {
@@ -2668,9 +3417,6 @@ impl ShortcutAction for TranscribeAction {
         let tm = Arc::clone(&app.state::<Arc<TranscriptionManager>>());
         let hm = Arc::clone(&app.state::<Arc<HistoryManager>>());
 
-        change_tray_icon(app, TrayIconState::Transcribing);
-        spawn_deferred_overlay_state(app, DeferredOverlayState::Transcribing);
-
         // Unmute before playing audio feedback so the stop sound is audible
         rm.remove_mute();
 
@@ -2682,6 +3428,23 @@ impl ShortcutAction for TranscribeAction {
         // transcription. The dedicated post-process hotkey still forces it on.
         let post_process = self.post_process || settings.post_process_enabled;
         let use_incremental = should_use_incremental_transcription(&settings, &tm);
+        let is_edit_mode = self.completion_mode == TranscriptionCompletionMode::EditMode;
+        warn!(
+            "[ask-hotkey] action_stop binding={} completion_mode={} is_edit_mode={}",
+            binding_id,
+            match self.completion_mode {
+                TranscriptionCompletionMode::Standard => "standard",
+                TranscriptionCompletionMode::EditMode => "edit_mode",
+                TranscriptionCompletionMode::FullSystemOverlay => "full_system_overlay",
+            },
+            is_edit_mode
+        );
+        change_tray_icon(app, TrayIconState::Transcribing);
+        if is_edit_mode {
+            show_transcribing_overlay(app);
+        } else {
+            spawn_deferred_overlay_state(app, DeferredOverlayState::Transcribing);
+        }
         if use_incremental {
             tm.signal_incremental_stop(binding_id);
         }
@@ -2892,7 +3655,16 @@ impl ShortcutAction for FullSystemTranscribeAction {
             stop_time.elapsed().as_millis()
         );
 
-        let live_tail_samples = stop_result.transcription_samples;
+        let fallback_samples = stop_result.transcription_samples.clone();
+        let live_tail_samples =
+            if fallback_samples.is_some() || !stop_result.transcription_source_samples.is_empty() {
+                Some(FullSystemSessionTranscriptionSamples {
+                    mixed: stop_result.transcription_samples,
+                    sources: stop_result.transcription_source_samples,
+                })
+            } else {
+                None
+            };
         let live_app = app.clone();
         let live_binding_id = binding_id.to_string();
         let live_tm = Arc::clone(&tm);
@@ -2900,7 +3672,6 @@ impl ShortcutAction for FullSystemTranscribeAction {
         tauri::async_runtime::spawn(async move {
             let _finish_guard = FinishGuard(live_app.clone());
             let mut ui_guard = UiResetGuard::new(live_app.clone());
-            let fallback_samples = live_tail_samples.clone();
             if let Some(live_final) = finish_full_system_live_session(
                 &live_app,
                 &live_binding_id,
@@ -3113,19 +3884,24 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
-        build_edit_mode_prompt, build_live_summary_prompt, clean_edit_mode_response,
-        clean_post_process_response, custom_vocabulary_prompt_block, friendly_live_summary_error,
+        ask_selection_message, ask_selection_session_is_current,
+        build_ask_selection_follow_up_prompt, build_ask_selection_prompt,
+        build_live_summary_prompt, clean_ask_selection_response, clean_post_process_response,
+        clear_ask_selection_session, current_ask_selection_messages,
+        current_ask_selection_session_id, custom_vocabulary_prompt_block,
+        format_labeled_transcript_segments, friendly_live_summary_error,
         is_effectively_silent_audio, is_supported_post_process_model,
         normalize_live_summary_output, parse_meeting_summary_state,
         render_meeting_summary_markdown, resolved_post_process_system_prompt,
         select_preferred_groq_model, should_pause_live_summaries,
         should_refresh_microphone_stream_after_suspected_no_input, should_update_live_summary,
         toggle_post_process_enabled, transcription_timeout_for_samples,
-        transcription_watchdog_delay, usable_post_processed_text, MeetingSummaryState,
-        SummaryPoint, TranscriptionCompletionMode, ACTION_MAP,
-        FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT, FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL,
+        transcription_watchdog_delay, update_ask_selection_session, usable_post_processed_text,
+        LabeledTranscriptSegment, MeetingSummaryState, SummaryPoint, TranscriptionCompletionMode,
+        ACTION_MAP, FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT, FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL,
     };
     use crate::app_context::AppContextSnapshot;
+    use crate::managers::full_system_audio::FullSystemTranscriptionSource;
     use crate::settings::get_default_settings;
 
     #[test]
@@ -3182,32 +3958,128 @@ mod tests {
     }
 
     #[test]
-    fn edit_mode_prompt_keeps_selection_and_instruction_separate() {
+    fn ask_selection_prompt_uses_selection_as_context() {
         let context = AppContextSnapshot {
             app_name: Some("Notes".to_string()),
             selected_text: Some("selected text".to_string()),
             ..Default::default()
         };
-        let prompt = build_edit_mode_prompt(
+        let prompt = build_ask_selection_prompt(
             "This is too long.",
             "make this shorter",
             &context,
             &["Prime Directive".to_string()],
         );
 
-        assert!(prompt.contains("# Spoken instruction\nmake this shorter"));
+        assert!(prompt.contains("# Spoken request\nmake this shorter"));
         assert!(prompt.contains("# Selected text\nThis is too long."));
+        assert!(prompt.contains("using the selected text as context"));
         assert!(prompt.contains("Prime Directive"));
-        assert!(prompt.contains("<uttr_edit_output>"));
+        assert!(prompt.contains("<uttr_ask_output>"));
     }
 
     #[test]
-    fn clean_edit_mode_response_prefers_edit_tag() {
-        let cleaned = clean_edit_mode_response(
-            "notes <uttr_edit_output>\nShorter text.\n</uttr_edit_output>",
+    fn ask_selection_prompt_without_selection_behaves_like_chat() {
+        let context = AppContextSnapshot {
+            app_name: Some("Notes".to_string()),
+            ..Default::default()
+        };
+        let prompt = build_ask_selection_prompt("", "why is the sky blue?", &context, &Vec::new());
+
+        assert!(prompt.contains("# Spoken request\nwhy is the sky blue?"));
+        assert!(prompt.contains("No selected text was provided"));
+        assert!(prompt.contains("chat question"));
+        assert!(!prompt.contains("# Selected text"));
+        assert!(prompt.contains("<uttr_ask_output>"));
+    }
+
+    #[test]
+    fn clean_ask_selection_response_prefers_ask_tag() {
+        let cleaned = clean_ask_selection_response(
+            "notes <uttr_ask_output>\nShorter text.\n</uttr_ask_output>",
         );
 
         assert_eq!(cleaned, "Shorter text.");
+    }
+
+    #[test]
+    fn ask_selection_follow_up_prompt_keeps_selected_text_and_prior_chat() {
+        let context = AppContextSnapshot {
+            app_name: Some("Google Docs".to_string()),
+            window_title: Some("Market notes".to_string()),
+            ..Default::default()
+        };
+        let messages = vec![
+            ask_selection_message("user", "What is the risk?", false),
+            ask_selection_message("assistant", "The buyer is unclear.", false),
+            ask_selection_message("assistant", "Thinking...", true),
+        ];
+
+        let prompt = build_ask_selection_follow_up_prompt(
+            "Counselor overload is real, but buyer urgency is unproven.",
+            &messages,
+            "make it sharper",
+            &context,
+            &["FreeFlow".to_string()],
+        );
+
+        assert!(prompt.contains("# Latest follow-up\nmake it sharper"));
+        assert!(prompt.contains("# Selected text\nCounselor overload"));
+        assert!(prompt.contains("User: What is the risk?"));
+        assert!(prompt.contains("Assistant: The buyer is unclear."));
+        assert!(!prompt.contains("Thinking..."));
+        assert!(prompt.contains("Google Docs"));
+        assert!(prompt.contains("FreeFlow"));
+        assert!(prompt.contains("<uttr_ask_output>"));
+    }
+
+    #[test]
+    fn ask_selection_follow_up_prompt_without_selection_uses_prior_chat() {
+        let context = AppContextSnapshot {
+            app_name: Some("Notes".to_string()),
+            ..Default::default()
+        };
+        let messages = vec![
+            ask_selection_message("user", "What is Rust?", false),
+            ask_selection_message("assistant", "Rust is a systems language.", false),
+            ask_selection_message("assistant", "Thinking...", true),
+        ];
+
+        let prompt = build_ask_selection_follow_up_prompt(
+            "",
+            &messages,
+            "make it shorter",
+            &context,
+            &Vec::new(),
+        );
+
+        assert!(prompt.contains("# Latest follow-up\nmake it shorter"));
+        assert!(prompt.contains("No selected text was provided"));
+        assert!(prompt.contains("User: What is Rust?"));
+        assert!(prompt.contains("Assistant: Rust is a systems language."));
+        assert!(!prompt.contains("Thinking..."));
+        assert!(!prompt.contains("# Selected text"));
+        assert!(prompt.contains("<uttr_ask_output>"));
+    }
+
+    #[test]
+    fn clear_ask_selection_session_drops_prior_messages() {
+        let session_id = current_ask_selection_session_id();
+        update_ask_selection_session(
+            session_id,
+            Some("selected text".to_string()),
+            AppContextSnapshot::default(),
+            vec![ask_selection_message("assistant", "Previous answer", false)],
+        );
+
+        assert_eq!(current_ask_selection_messages().len(), 1);
+        assert!(ask_selection_session_is_current(session_id));
+
+        clear_ask_selection_session();
+
+        assert!(current_ask_selection_messages().is_empty());
+        assert!(!ask_selection_session_is_current(session_id));
+        assert_ne!(current_ask_selection_session_id(), session_id);
     }
 
     #[test]
@@ -3279,6 +4151,56 @@ mod tests {
         assert!(!should_update_live_summary(7, false));
         assert!(should_update_live_summary(12, false));
         assert!(should_update_live_summary(3, true));
+    }
+
+    #[test]
+    fn labeled_meeting_transcript_formats_source_blocks() {
+        let rendered = format_labeled_transcript_segments(&[
+            LabeledTranscriptSegment {
+                source: FullSystemTranscriptionSource::Microphone,
+                text: "I want the transcript labels.".to_string(),
+            },
+            LabeledTranscriptSegment {
+                source: FullSystemTranscriptionSource::SystemAudio,
+                text: "Use source labels first.".to_string(),
+            },
+            LabeledTranscriptSegment {
+                source: FullSystemTranscriptionSource::Microphone,
+                text: "That works.".to_string(),
+            },
+        ]);
+
+        assert_eq!(
+            rendered,
+            "Me: I want the transcript labels.\n\nThem: Use source labels first.\n\nMe: That works."
+        );
+    }
+
+    #[test]
+    fn labeled_meeting_transcript_merges_adjacent_source_text_and_skips_empty() {
+        let rendered = format_labeled_transcript_segments(&[
+            LabeledTranscriptSegment {
+                source: FullSystemTranscriptionSource::Microphone,
+                text: "First sentence.".to_string(),
+            },
+            LabeledTranscriptSegment {
+                source: FullSystemTranscriptionSource::Microphone,
+                text: " Second sentence. ".to_string(),
+            },
+            LabeledTranscriptSegment {
+                source: FullSystemTranscriptionSource::SystemAudio,
+                text: " ".to_string(),
+            },
+            LabeledTranscriptSegment {
+                source: FullSystemTranscriptionSource::SystemAudio,
+                text: "Remote audio.".to_string(),
+            },
+        ]);
+
+        assert_eq!(
+            rendered,
+            "Me: First sentence. Second sentence.\n\nThem: Remote audio."
+        );
     }
 
     #[test]

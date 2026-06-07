@@ -16,7 +16,7 @@ type SessionPayload = {
   exp: number;
 };
 
-export type AuthSession = {
+type AuthSession = {
   expires_at: string;
   user: AuthenticatedUser;
 };
@@ -221,8 +221,4 @@ export function buildClearSessionCookie() {
   ]
     .filter(Boolean)
     .join("; ");
-}
-
-export function readSessionCookieName() {
-  return SESSION_COOKIE_NAME;
 }

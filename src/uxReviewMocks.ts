@@ -40,8 +40,8 @@ const bindings = {
     current_binding: "ctrl+shift+space",
   },
   edit_mode: {
-    name: "Edit Mode Shortcut",
-    description: "Transforms selected text using a spoken instruction.",
+    name: "Ask Selection Shortcut",
+    description: "Ask a spoken question about selected text.",
     default_binding: "ctrl+shift+e",
     current_binding: "ctrl+shift+e",
   },
@@ -77,7 +77,7 @@ const sampleHistoryEntries = [
     saved: false,
     title: "Session",
     transcription_text:
-      "every single month. It makes it easier for people to at least hold Bitcoin or buy back into Bitcoin. And I think we are in this healing process.",
+      "Me: Can we show the raw meeting transcript with separate labels for what I said and what came through the call audio?\n\nThem: Yes. The useful first version is source-based labeling, with microphone audio marked as Me and system audio marked as Them.\n\nMe: Keep the summary as the main view. The labels only need to appear when I open the raw transcript.\n\nThem: Older entries can keep rendering as plain text, and the labeled format can be saved in the existing transcript field.",
     post_processed_text:
       "## Current gist\nThe meeting is about market confidence and how recurring Bitcoin accumulation affects sentiment.\n\n## Key points\n- Recurring accumulation is framed as easier to maintain.\n  - Participants described monthly buying as a habit that can help people keep holding Bitcoin or return to it after stepping away.\n  - The point was less about a single trade and more about how repeated behavior can rebuild confidence over time.\n- Higher prices are connected to improving sentiment.\n  - The discussion treats price recovery as part of a broader healing process.\n  - Participants suggested that optimism improves when people see the market validating their patience.",
     post_process_prompt: "Live session summary via OpenAI after 2 chunk(s)",

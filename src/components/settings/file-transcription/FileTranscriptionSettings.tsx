@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useReducer } from "react";
 import { useTranslation } from "react-i18next";
 import { listen } from "@tauri-apps/api/event";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -34,6 +34,98 @@ interface FileTranscriptionProgressEvent {
   total_chunks?: number | null;
 }
 
+interface FileTranscriptionState {
+  isDragActive: boolean;
+  isProcessing: boolean;
+  selectedFilePath: string | null;
+  selectedFileName: string | null;
+  errorMessage: string | null;
+  infoMessage: string | null;
+  progress: FileTranscriptionProgressEvent | null;
+}
+
+type FileTranscriptionAction =
+  | { type: "drag_active"; active: boolean }
+  | { type: "select_path"; path: string; readyMessage: string }
+  | { type: "error"; message: string }
+  | { type: "clear" }
+  | { type: "transcription_started"; progress: FileTranscriptionProgressEvent }
+  | { type: "transcription_completed"; message: string }
+  | { type: "transcription_cancelled"; message: string }
+  | { type: "transcription_finished" }
+  | { type: "cancelling"; message: string }
+  | { type: "progress"; progress: FileTranscriptionProgressEvent };
+
+const fileTranscriptionInitialState: FileTranscriptionState = {
+  isDragActive: false,
+  isProcessing: false,
+  selectedFilePath: null,
+  selectedFileName: null,
+  errorMessage: null,
+  infoMessage: null,
+  progress: null,
+};
+
+const fileTranscriptionReducer = (
+  state: FileTranscriptionState,
+  action: FileTranscriptionAction,
+): FileTranscriptionState => {
+  switch (action.type) {
+    case "drag_active":
+      return { ...state, isDragActive: action.active };
+    case "select_path":
+      return {
+        ...state,
+        selectedFilePath: action.path,
+        selectedFileName: fileNameFromPath(action.path),
+        errorMessage: null,
+        infoMessage: action.readyMessage,
+        progress: null,
+      };
+    case "error":
+      return { ...state, errorMessage: action.message };
+    case "clear":
+      return fileTranscriptionInitialState;
+    case "transcription_started":
+      return {
+        ...state,
+        isProcessing: true,
+        errorMessage: null,
+        infoMessage: null,
+        progress: action.progress,
+      };
+    case "transcription_completed":
+      return {
+        ...state,
+        selectedFilePath: null,
+        selectedFileName: null,
+        progress: null,
+        infoMessage: action.message,
+      };
+    case "transcription_cancelled":
+      return {
+        ...state,
+        progress: null,
+        infoMessage: action.message,
+      };
+    case "transcription_finished":
+      return { ...state, isProcessing: false };
+    case "cancelling":
+      return {
+        ...state,
+        infoMessage: action.message,
+        progress: {
+          percentage: state.progress?.percentage ?? 0,
+          stage: action.message,
+          current_chunk: state.progress?.current_chunk,
+          total_chunks: state.progress?.total_chunks,
+        },
+      };
+    case "progress":
+      return { ...state, progress: action.progress };
+  }
+};
+
 const extensionFromPath = (path: string) => {
   const parts = path.split(".");
   if (parts.length < 2) return "";
@@ -45,18 +137,22 @@ const fileNameFromPath = (path: string) => {
   return segments[segments.length - 1] || path;
 };
 
-export const FileTranscriptionSettings: React.FC = () => {
+const useFileTranscriptionController = () => {
   const { t } = useTranslation();
   const { installAccess, refreshInstallAccess, settings, refreshSettings } =
     useSettings();
-  const [isDragActive, setIsDragActive] = useState(false);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
-  const [selectedFileName, setSelectedFileName] = useState<string | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [infoMessage, setInfoMessage] = useState<string | null>(null);
-  const [progress, setProgress] =
-    useState<FileTranscriptionProgressEvent | null>(null);
+  const [
+    {
+      isDragActive,
+      isProcessing,
+      selectedFilePath,
+      selectedFileName,
+      errorMessage,
+      infoMessage,
+      progress,
+    },
+    dispatch,
+  ] = useReducer(fileTranscriptionReducer, fileTranscriptionInitialState);
 
   const history = settings?.file_transcription_history ?? [];
   const supportedFormatsText = SUPPORTED_EXTENSIONS.join(", ");
@@ -72,16 +168,14 @@ export const FileTranscriptionSettings: React.FC = () => {
 
   const selectPath = useCallback(
     (path: string) => {
-      setSelectedFilePath(path);
-      setSelectedFileName(fileNameFromPath(path));
-      setErrorMessage(null);
-      setProgress(null);
-      setInfoMessage(
-        t("settings.fileTranscription.readyState", {
+      dispatch({
+        type: "select_path",
+        path,
+        readyMessage: t("settings.fileTranscription.readyState", {
           defaultValue:
             "File selected. Review it, then click Transcribe when you're ready.",
         }),
-      );
+      });
     },
     [t],
   );
@@ -89,7 +183,7 @@ export const FileTranscriptionSettings: React.FC = () => {
   const handlePaths = useCallback(
     async (paths: string[]) => {
       if (premiumLocked) {
-        setErrorMessage(lockedMessage);
+        dispatch({ type: "error", message: lockedMessage });
         toast.error(lockedMessage);
         return;
       }
@@ -107,7 +201,7 @@ export const FileTranscriptionSettings: React.FC = () => {
         const message = t("settings.fileTranscription.errors.singleFile", {
           defaultValue: "Drop or choose exactly one audio file.",
         });
-        setErrorMessage(message);
+        dispatch({ type: "error", message });
         toast.error(message);
         return;
       }
@@ -126,7 +220,7 @@ export const FileTranscriptionSettings: React.FC = () => {
             formats: supportedFormatsText,
           },
         );
-        setErrorMessage(message);
+        dispatch({ type: "error", message });
         toast.error(message);
         return;
       }
@@ -146,7 +240,7 @@ export const FileTranscriptionSettings: React.FC = () => {
   const chooseAudioFile = useCallback(async () => {
     if (isProcessing || premiumLocked) {
       if (premiumLocked) {
-        setErrorMessage(lockedMessage);
+        dispatch({ type: "error", message: lockedMessage });
         toast.error(lockedMessage);
       }
       return;
@@ -171,75 +265,67 @@ export const FileTranscriptionSettings: React.FC = () => {
   }, [handlePaths, isProcessing, lockedMessage, premiumLocked, t]);
 
   const clearResult = useCallback(() => {
-    setIsDragActive(false);
-    setIsProcessing(false);
-    setSelectedFilePath(null);
-    setSelectedFileName(null);
-    setErrorMessage(null);
-    setInfoMessage(null);
-    setProgress(null);
+    dispatch({ type: "clear" });
   }, []);
 
   const startTranscription = useCallback(async () => {
     if (premiumLocked) {
-      setErrorMessage(lockedMessage);
+      dispatch({ type: "error", message: lockedMessage });
       return;
     }
 
     if (!selectedFilePath || isProcessing) return;
 
-    setIsProcessing(true);
-    setErrorMessage(null);
-    setInfoMessage(null);
-    setProgress({
-      percentage: 0,
-      stage: t("settings.fileTranscription.starting", {
-        defaultValue: "Starting transcription...",
-      }),
+    dispatch({
+      type: "transcription_started",
+      progress: {
+        percentage: 0,
+        stage: t("settings.fileTranscription.starting", {
+          defaultValue: "Starting transcription...",
+        }),
+      },
     });
 
     try {
       const response = await commands.transcribeAudioFile(selectedFilePath);
       if (response.status === "ok") {
-        setSelectedFilePath(null);
-        setSelectedFileName(null);
-        setProgress(null);
-        setInfoMessage(
-          t("settings.fileTranscription.completed", {
+        dispatch({
+          type: "transcription_completed",
+          message: t("settings.fileTranscription.completed", {
             defaultValue: "Transcription finished.",
           }),
-        );
+        });
         await refreshSettings();
         return;
       }
 
       const message = String(response.error);
       if (message.toLowerCase().includes("cancelled")) {
-        setInfoMessage(
-          t("settings.fileTranscription.cancelled", {
+        dispatch({
+          type: "transcription_cancelled",
+          message: t("settings.fileTranscription.cancelled", {
             defaultValue: "Transcription cancelled.",
           }),
-        );
-        setProgress(null);
+        });
         return;
       }
 
-      setErrorMessage(message);
+      dispatch({ type: "error", message });
     } catch (error) {
       const message = String(error);
       if (message.toLowerCase().includes("cancelled")) {
-        setInfoMessage(
-          t("settings.fileTranscription.cancelled", {
+        dispatch({
+          type: "transcription_cancelled",
+          message: t("settings.fileTranscription.cancelled", {
             defaultValue: "Transcription cancelled.",
           }),
-        );
-        setProgress(null);
+        });
         return;
       }
 
-      setErrorMessage(message);
+      dispatch({ type: "error", message });
     } finally {
-      setIsProcessing(false);
+      dispatch({ type: "transcription_finished" });
     }
   }, [
     isProcessing,
@@ -256,18 +342,12 @@ export const FileTranscriptionSettings: React.FC = () => {
     const cancellingMessage = t("settings.fileTranscription.cancelling", {
       defaultValue: "Cancelling transcription...",
     });
-    setInfoMessage(cancellingMessage);
-    setProgress((current) => ({
-      percentage: current?.percentage ?? 0,
-      stage: cancellingMessage,
-      current_chunk: current?.current_chunk,
-      total_chunks: current?.total_chunks,
-    }));
+    dispatch({ type: "cancelling", message: cancellingMessage });
 
     try {
       await commands.cancelOperation();
     } catch (error) {
-      setErrorMessage(String(error));
+      dispatch({ type: "error", message: String(error) });
     }
   }, [isProcessing, t]);
 
@@ -300,16 +380,19 @@ export const FileTranscriptionSettings: React.FC = () => {
     getCurrentWebview()
       .onDragDropEvent(async (event) => {
         if (event.payload.type === "leave") {
-          setIsDragActive(false);
+          dispatch({ type: "drag_active", active: false });
           return;
         }
 
         if (event.payload.type === "enter" || event.payload.type === "over") {
-          setIsDragActive(!isProcessing && !premiumLocked);
+          dispatch({
+            type: "drag_active",
+            active: !isProcessing && !premiumLocked,
+          });
           return;
         }
 
-        setIsDragActive(false);
+        dispatch({ type: "drag_active", active: false });
         if (event.payload.type === "drop" && !premiumLocked) {
           await handlePaths(event.payload.paths);
         }
@@ -334,7 +417,7 @@ export const FileTranscriptionSettings: React.FC = () => {
     listen<FileTranscriptionProgressEvent>(
       "file-transcription-progress",
       (event) => {
-        setProgress(event.payload);
+        dispatch({ type: "progress", progress: event.payload });
       },
     )
       .then((fn) => {
@@ -353,6 +436,144 @@ export const FileTranscriptionSettings: React.FC = () => {
       }
     };
   }, []);
+
+  return {
+    t,
+    history,
+    supportedFormatsText,
+    accessLoaded,
+    premiumLocked,
+    lockedMessage,
+    isDragActive,
+    isProcessing,
+    selectedFilePath,
+    selectedFileName,
+    errorMessage,
+    infoMessage,
+    progress,
+    chooseAudioFile,
+    clearPersistedResult,
+    startTranscription,
+    cancelTranscription,
+    copyTranscript,
+  };
+};
+
+interface FileTranscriptionHistoryListProps {
+  history: SavedFileTranscription[];
+  onCopyTranscript: (transcriptText: string) => void;
+}
+
+const FileTranscriptionHistoryList: React.FC<
+  FileTranscriptionHistoryListProps
+> = ({ history, onCopyTranscript }) => {
+  const { t } = useTranslation();
+  const latestEntry = history[0];
+  const latestTranscriptText =
+    latestEntry?.post_processed_text || latestEntry?.transcription_text;
+  const latestEntryKey = latestEntry
+    ? `${latestEntry.source_path ?? latestEntry.file_name}-${latestTranscriptText}`
+    : null;
+
+  if (history.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="space-y-3">
+      <div className="space-y-1">
+        <p className="text-xs uppercase tracking-[0.16em] text-text/35">
+          {t("settings.fileTranscription.historyLabel", {
+            defaultValue: "Recent file transcriptions",
+          })}
+        </p>
+        <p className="text-sm text-text/55">
+          {t("settings.fileTranscription.historyDescription", {
+            defaultValue:
+              "Uttr keeps the five most recent file transcriptions from this screen.",
+          })}
+        </p>
+      </div>
+
+      {history.map((entry: SavedFileTranscription) => {
+        const transcriptText =
+          entry.post_processed_text || entry.transcription_text;
+        const entryKey = `${entry.source_path ?? entry.file_name}-${transcriptText}`;
+
+        return (
+          <div
+            key={entryKey}
+            className="rounded-[18px] border border-white/7 bg-white/[0.02] p-4"
+          >
+            <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-xs uppercase tracking-[0.16em] text-text/35">
+                  {t("settings.fileTranscription.fileNameLabel", {
+                    defaultValue: "File",
+                  })}
+                </p>
+                <p className="mt-1 text-sm font-medium text-text">
+                  {entry.file_name}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {entryKey === latestEntryKey && (
+                  <span className="rounded-full border border-logo-primary/20 bg-logo-primary/10 px-3 py-1 text-xs font-medium text-logo-primary">
+                    {t("settings.fileTranscription.latestBadge", {
+                      defaultValue: "Latest",
+                    })}
+                  </span>
+                )}
+                <Button
+                  type="button"
+                  variant="secondary"
+                  onClick={() => {
+                    onCopyTranscript(transcriptText);
+                  }}
+                  className="flex items-center gap-2 rounded-full"
+                >
+                  <Copy className="h-4 w-4" />
+                  <span>
+                    {t("settings.fileTranscription.copy", {
+                      defaultValue: "Copy",
+                    })}
+                  </span>
+                </Button>
+              </div>
+            </div>
+            <Textarea
+              value={transcriptText}
+              readOnly
+              className="min-h-[180px] w-full resize-y"
+            />
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+export const FileTranscriptionSettings: React.FC = () => {
+  const {
+    t,
+    history,
+    supportedFormatsText,
+    accessLoaded,
+    premiumLocked,
+    lockedMessage,
+    isDragActive,
+    isProcessing,
+    selectedFilePath,
+    selectedFileName,
+    errorMessage,
+    infoMessage,
+    progress,
+    chooseAudioFile,
+    clearPersistedResult,
+    startTranscription,
+    cancelTranscription,
+    copyTranscript,
+  } = useFileTranscriptionController();
 
   return (
     <div className="mx-auto w-full max-w-3xl space-y-5">
@@ -616,77 +837,12 @@ export const FileTranscriptionSettings: React.FC = () => {
           </Alert>
         )}
 
-      {history.length > 0 && (
-        <div className="space-y-3">
-          <div className="space-y-1">
-            <p className="text-xs uppercase tracking-[0.16em] text-text/35">
-              {t("settings.fileTranscription.historyLabel", {
-                defaultValue: "Recent file transcriptions",
-              })}
-            </p>
-            <p className="text-sm text-text/55">
-              {t("settings.fileTranscription.historyDescription", {
-                defaultValue:
-                  "Uttr keeps the five most recent file transcriptions from this screen.",
-              })}
-            </p>
-          </div>
-
-          {history.map((entry: SavedFileTranscription, index: number) => {
-            const transcriptText =
-              entry.post_processed_text || entry.transcription_text;
-
-            return (
-              <div
-                key={`${entry.source_path ?? entry.file_name}-${index}`}
-                className="rounded-[18px] border border-white/7 bg-white/[0.02] p-4"
-              >
-                <div className="mb-3 flex flex-wrap items-start justify-between gap-3">
-                  <div>
-                    <p className="text-xs uppercase tracking-[0.16em] text-text/35">
-                      {t("settings.fileTranscription.fileNameLabel", {
-                        defaultValue: "File",
-                      })}
-                    </p>
-                    <p className="mt-1 text-sm font-medium text-text">
-                      {entry.file_name}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {index === 0 && (
-                      <span className="rounded-full border border-logo-primary/20 bg-logo-primary/10 px-3 py-1 text-xs font-medium text-logo-primary">
-                        {t("settings.fileTranscription.latestBadge", {
-                          defaultValue: "Latest",
-                        })}
-                      </span>
-                    )}
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      onClick={() => {
-                        void copyTranscript(transcriptText);
-                      }}
-                      className="flex items-center gap-2 rounded-full"
-                    >
-                      <Copy className="h-4 w-4" />
-                      <span>
-                        {t("settings.fileTranscription.copy", {
-                          defaultValue: "Copy",
-                        })}
-                      </span>
-                    </Button>
-                  </div>
-                </div>
-                <Textarea
-                  value={transcriptText}
-                  readOnly
-                  className="min-h-[180px] w-full resize-y"
-                />
-              </div>
-            );
-          })}
-        </div>
-      )}
+      <FileTranscriptionHistoryList
+        history={history}
+        onCopyTranscript={(transcriptText) => {
+          void copyTranscript(transcriptText);
+        }}
+      />
     </div>
   );
 };

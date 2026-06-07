@@ -31,6 +31,29 @@ type PostProcessProviderState = {
 
 const APPLE_PROVIDER_ID = "apple_intelligence";
 const GROQ_PROVIDER_ID = "groq";
+const EMPTY_PROVIDERS: PostProcessProvider[] = [];
+const EMPTY_MODELS: string[] = [];
+const EXCLUDED_MODEL_PATTERNS = [
+  "whisper",
+  "guard",
+  "safeguard",
+  "orpheus",
+  "compound",
+  "kimi",
+];
+
+const isExcludedModel = (id: string) =>
+  EXCLUDED_MODEL_PATTERNS.some((pattern) => id.toLowerCase().includes(pattern));
+
+const displayModelLabel = (id: string) =>
+  id.includes("/") ? id.split("/").pop()! : id;
+
+const modelSizeB = (id: string): number => {
+  const match = id.toLowerCase().match(/(\d+(?:\.\d+)?)(b|m)/);
+  if (!match) return Infinity;
+  const num = parseFloat(match[1]);
+  return match[2] === "m" ? num / 1000 : num;
+};
 
 export const usePostProcessProviderState = (): PostProcessProviderState => {
   const {
@@ -46,7 +69,7 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
   } = useSettings();
 
   // Settings are guaranteed to have providers after migration
-  const providers = settings?.post_process_providers || [];
+  const providers = settings?.post_process_providers ?? EMPTY_PROVIDERS;
   const groqProvider = useMemo(
     () => providers.find((provider) => provider.id === GROQ_PROVIDER_ID),
     [providers],
@@ -86,7 +109,10 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
   const isGroqProvider = selectedProvider?.id === GROQ_PROVIDER_ID;
   const [appleIntelligenceUnavailable, setAppleIntelligenceUnavailable] =
     useState(false);
-  const autoFetchedSignatures = useRef<Set<string>>(new Set());
+  const autoFetchedSignatures = useRef<Set<string> | null>(null);
+  if (autoFetchedSignatures.current === null) {
+    autoFetchedSignatures.current = new Set();
+  }
 
   // Use settings directly as single source of truth
   const baseUrl = selectedProvider?.base_url ?? "";
@@ -180,45 +206,21 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
     void fetchPostProcessModels(selectedProviderId);
   }, [fetchPostProcessModels, isAppleProvider, selectedProviderId]);
 
-  const availableModelsRaw = postProcessModelOptions[selectedProviderId] || [];
+  const availableModelsRaw =
+    postProcessModelOptions[selectedProviderId] ?? EMPTY_MODELS;
 
   const modelOptions = useMemo<ModelOption[]>(() => {
     const seen = new Set<string>();
     const options: ModelOption[] = [];
 
-    // Exclude models not suited for text cleanup: speech-to-text, safety classifiers,
-    // TTS, agentic compound models, and non-English focused models.
-    const EXCLUDED_PATTERNS = [
-      "whisper",
-      "guard",
-      "safeguard",
-      "orpheus",
-      "compound",
-      "kimi",
-    ];
-    const isExcluded = (id: string) =>
-      EXCLUDED_PATTERNS.some((p) => id.toLowerCase().includes(p));
-
-    // Strip provider prefix for display (e.g. "meta-llama/llama-4-scout" → "llama-4-scout")
-    const displayLabel = (id: string) =>
-      id.includes("/") ? id.split("/").pop()! : id;
-
-    // Extract model size in billions for sorting (e.g. "70b" → 70, "22m" → 0.022, missing → Infinity)
-    const modelSizeB = (id: string): number => {
-      const match = id.toLowerCase().match(/(\d+(?:\.\d+)?)(b|m)/);
-      if (!match) return Infinity;
-      const num = parseFloat(match[1]);
-      return match[2] === "m" ? num / 1000 : num;
-    };
-
-    const filtered = availableModelsRaw.filter((id) => !isExcluded(id));
+    const filtered = availableModelsRaw.filter((id) => !isExcludedModel(id));
     filtered.sort((a, b) => modelSizeB(a) - modelSizeB(b));
 
     for (const candidate of filtered) {
       const trimmed = candidate.trim();
       if (!trimmed || seen.has(trimmed)) continue;
       seen.add(trimmed);
-      options.push({ value: trimmed, label: displayLabel(trimmed) });
+      options.push({ value: trimmed, label: displayModelLabel(trimmed) });
     }
 
     // Ensure current model is in the list
@@ -227,7 +229,7 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
       seen.add(currentTrimmed);
       options.push({
         value: currentTrimmed,
-        label: displayLabel(currentTrimmed),
+        label: displayModelLabel(currentTrimmed),
       });
     }
 
@@ -280,11 +282,12 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
       return;
     }
 
-    if (autoFetchedSignatures.current.has(autoFetchSignature)) {
+    const fetchedSignatures = autoFetchedSignatures.current;
+    if (!fetchedSignatures || fetchedSignatures.has(autoFetchSignature)) {
       return;
     }
 
-    autoFetchedSignatures.current.add(autoFetchSignature);
+    fetchedSignatures.add(autoFetchSignature);
     void fetchPostProcessModels(selectedProviderId);
   }, [
     autoFetchSignature,

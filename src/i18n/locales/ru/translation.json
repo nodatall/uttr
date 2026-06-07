@@ -200,8 +200,8 @@
             "description": "Сочетание клавиш для записи и транскрибирования вашего голоса."
           },
           "edit_mode": {
-            "name": "Edit Mode Shortcut",
-            "description": "Transforms selected text using a spoken instruction."
+            "name": "Ask Selection Shortcut",
+            "description": "Ask a spoken question about selected text."
           },
           "cancel": {
             "name": "Горячая клавиша отмены",

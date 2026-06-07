@@ -6,7 +6,7 @@ use crate::managers::model::ModelManager;
 use crate::managers::audio::AudioRecordingManager;
 use anyhow::Result;
 use serde::Serialize;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use tauri::AppHandle;
 
@@ -23,6 +23,7 @@ pub struct TranscriptionManager {
     #[allow(dead_code)]
     app_handle: AppHandle,
     cancel_requested: Arc<AtomicBool>,
+    cancel_generation: Arc<AtomicU64>,
 }
 
 impl TranscriptionManager {
@@ -30,6 +31,7 @@ impl TranscriptionManager {
         Ok(Self {
             app_handle: app_handle.clone(),
             cancel_requested: Arc::new(AtomicBool::new(false)),
+            cancel_generation: Arc::new(AtomicU64::new(0)),
         })
     }
 
@@ -96,6 +98,7 @@ impl TranscriptionManager {
     pub fn cancel_incremental_session(&self) {}
 
     pub fn request_cancel(&self) {
+        self.cancel_generation.fetch_add(1, Ordering::Relaxed);
         self.cancel_requested.store(true, Ordering::Relaxed);
     }
 
@@ -105,6 +108,10 @@ impl TranscriptionManager {
 
     pub fn is_cancel_requested(&self) -> bool {
         self.cancel_requested.load(Ordering::Relaxed)
+    }
+
+    pub fn cancel_generation(&self) -> u64 {
+        self.cancel_generation.load(Ordering::Relaxed)
     }
 }
 

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { createAuthClient, type AuthSession } from "@/lib/auth/client";
 import { getDownloadUrl } from "@/lib/download";
 
@@ -24,18 +24,95 @@ async function openBillingPortal() {
   window.location.assign(payload.url);
 }
 
+type AccountStatus = "idle" | "auth" | "portal" | "logout";
+
+type AccountState = {
+  email: string;
+  password: string;
+  signedInEmail: string | null;
+  hasCheckedSession: boolean;
+  status: AccountStatus;
+  error: string | null;
+};
+
+type AccountAction =
+  | { type: "email"; email: string }
+  | { type: "password"; password: string }
+  | { type: "checking_session" }
+  | { type: "session_loaded"; email: string | null }
+  | { type: "session_refresh_requested" }
+  | { type: "status"; status: AccountStatus; error?: string | null }
+  | { type: "signed_in"; email: string }
+  | { type: "signed_out" };
+
+const accountInitialState: AccountState = {
+  email: "",
+  password: "",
+  signedInEmail: null,
+  hasCheckedSession: false,
+  status: "idle",
+  error: null,
+};
+
+const accountReducer = (
+  state: AccountState,
+  action: AccountAction,
+): AccountState => {
+  switch (action.type) {
+    case "email":
+      return { ...state, email: action.email };
+    case "password":
+      return { ...state, password: action.password };
+    case "checking_session":
+      return { ...state, hasCheckedSession: false };
+    case "session_loaded":
+      return {
+        ...state,
+        signedInEmail: action.email,
+        hasCheckedSession: true,
+      };
+    case "session_refresh_requested":
+      return {
+        ...state,
+        status:
+          state.status === "auth" || state.status === "portal"
+            ? "idle"
+            : state.status,
+      };
+    case "status":
+      return {
+        ...state,
+        status: action.status,
+        error: action.error ?? null,
+      };
+    case "signed_in":
+      return {
+        ...state,
+        signedInEmail: action.email,
+        hasCheckedSession: true,
+        status: "portal",
+      };
+    case "signed_out":
+      return {
+        ...state,
+        email: "",
+        password: "",
+        signedInEmail: null,
+        hasCheckedSession: true,
+        status: "idle",
+        error: null,
+      };
+  }
+};
+
 export function AccountFlow() {
   const downloadUrl = getDownloadUrl();
   const [auth] = useState(() => createAuthClient());
   const sessionCheckRef = useRef<Promise<AuthSession | null> | null>(null);
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [signedInEmail, setSignedInEmail] = useState<string | null>(null);
-  const [hasCheckedSession, setHasCheckedSession] = useState(false);
-  const [status, setStatus] = useState<"idle" | "auth" | "portal" | "logout">(
-    "idle",
-  );
-  const [error, setError] = useState<string | null>(null);
+  const [
+    { email, password, signedInEmail, hasCheckedSession, status, error },
+    dispatch,
+  ] = useReducer(accountReducer, accountInitialState);
   const canSubmitCredentials =
     status === "idle" && email.trim().length > 0 && password.length > 0;
 
@@ -51,23 +128,18 @@ export function AccountFlow() {
     };
 
     const syncSession = async () => {
-      setHasCheckedSession(false);
+      dispatch({ type: "checking_session" });
 
       const session = await getVerifiedSession();
       if (cancelled) {
         return;
       }
 
-      setSignedInEmail(session?.user.email ?? null);
-      setHasCheckedSession(true);
+      dispatch({ type: "session_loaded", email: session?.user.email ?? null });
     };
 
     const refreshSession = () => {
-      setStatus((currentStatus) =>
-        currentStatus === "auth" || currentStatus === "portal"
-          ? "idle"
-          : currentStatus,
-      );
+      dispatch({ type: "session_refresh_requested" });
       void syncSession();
     };
 
@@ -90,8 +162,7 @@ export function AccountFlow() {
       return;
     }
 
-    setStatus("auth");
-    setError(null);
+    dispatch({ type: "status", status: "auth" });
 
     try {
       const session = await auth.signInWithPassword({
@@ -99,19 +170,19 @@ export function AccountFlow() {
         password,
       });
 
-      setSignedInEmail(session.user.email ?? email);
-      setHasCheckedSession(true);
-      setStatus("portal");
+      dispatch({ type: "signed_in", email: session.user.email ?? email });
       await openBillingPortal();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to sign in.");
-      setStatus("idle");
+      dispatch({
+        type: "status",
+        status: "idle",
+        error: err instanceof Error ? err.message : "Unable to sign in.",
+      });
     }
   };
 
   const manageBilling = async () => {
-    setStatus("portal");
-    setError(null);
+    dispatch({ type: "status", status: "portal" });
 
     try {
       const session = await auth.getSession();
@@ -121,28 +192,28 @@ export function AccountFlow() {
 
       await openBillingPortal();
     } catch (err) {
-      setError(
-        err instanceof Error ? err.message : "Unable to open billing portal.",
-      );
-      setStatus("idle");
+      dispatch({
+        type: "status",
+        status: "idle",
+        error:
+          err instanceof Error ? err.message : "Unable to open billing portal.",
+      });
     }
   };
 
   const logOut = async () => {
-    setStatus("logout");
-    setError(null);
+    dispatch({ type: "status", status: "logout" });
 
     try {
       await auth.signOut();
 
-      setSignedInEmail(null);
-      setEmail("");
-      setPassword("");
-      setHasCheckedSession(true);
-      setStatus("idle");
+      dispatch({ type: "signed_out" });
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Unable to log out.");
-      setStatus("idle");
+      dispatch({
+        type: "status",
+        status: "idle",
+        error: err instanceof Error ? err.message : "Unable to log out.",
+      });
     }
   };
 
@@ -190,7 +261,9 @@ export function AccountFlow() {
                 type="email"
                 autoComplete="email"
                 value={email}
-                onChange={(event) => setEmail(event.target.value)}
+                onChange={(event) =>
+                  dispatch({ type: "email", email: event.target.value })
+                }
                 className="w-full rounded-2xl border border-white/15 bg-black/20 px-4 py-3 text-cosmic-50 outline-none ring-0 transition placeholder:text-cosmic-400 focus:border-white/35"
                 placeholder="you@example.com"
               />
@@ -204,7 +277,9 @@ export function AccountFlow() {
                 type="password"
                 autoComplete="current-password"
                 value={password}
-                onChange={(event) => setPassword(event.target.value)}
+                onChange={(event) =>
+                  dispatch({ type: "password", password: event.target.value })
+                }
                 className="w-full rounded-2xl border border-white/15 bg-black/20 px-4 py-3 text-cosmic-50 outline-none ring-0 transition placeholder:text-cosmic-400 focus:border-white/35"
                 placeholder="Your account password"
               />

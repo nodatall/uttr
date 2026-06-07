@@ -1,4 +1,4 @@
-use crate::actions::ACTION_MAP;
+use crate::actions::{promote_active_transcription_to_edit_mode, ACTION_MAP};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::full_system_audio::FullSystemAudioSessionManager;
 use crate::managers::transcription::TranscriptionManager;
@@ -36,6 +36,14 @@ enum Stage {
     Idle,
     Recording(String), // binding_id
     Processing,
+}
+
+fn stage_label(stage: &Stage) -> String {
+    match stage {
+        Stage::Idle => "Idle".to_string(),
+        Stage::Recording(binding_id) => format!("Recording({binding_id})"),
+        Stage::Processing => "Processing".to_string(),
+    }
 }
 
 #[derive(Default)]
@@ -123,7 +131,7 @@ impl TranscriptionCoordinator {
     fn run_worker(app: AppHandle, rx: Receiver<Command>) {
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             let mut stage = Stage::Idle;
-            let mut last_press: Option<Instant> = None;
+            let mut last_press: Option<(String, Instant)> = None;
             let mut processing_started_at: Option<Instant> = None;
             let mut push_to_talk_suppression = PushToTalkSuppression::default();
 
@@ -136,17 +144,21 @@ impl TranscriptionCoordinator {
                         push_to_talk,
                         received_at,
                     } => {
+                        warn!(
+                            "[ask-hotkey] coordinator_input binding={} pressed={} push_to_talk={} stage={}",
+                            binding_id,
+                            is_pressed,
+                            push_to_talk,
+                            stage_label(&stage)
+                        );
                         // Debounce rapid-fire press events (key repeat / double-tap).
                         // Releases always pass through for push-to-talk.
                         if is_pressed {
-                            if last_press
-                                .map(|t| received_at.saturating_duration_since(t) < DEBOUNCE)
-                                .unwrap_or(false)
-                            {
+                            if should_debounce_press(&last_press, &binding_id, received_at) {
                                 debug!("Debounced press for '{binding_id}'");
                                 continue;
                             }
-                            last_press = Some(received_at);
+                            last_press = Some((binding_id.clone(), received_at));
 
                             if matches!(stage, Stage::Processing)
                                 && processing_started_at
@@ -182,6 +194,32 @@ impl TranscriptionCoordinator {
                                 );
                                 stop(&app, &mut stage, &binding_id, &hotkey_string);
                                 processing_started_at = Some(Instant::now());
+                            } else if is_pressed
+                                && matches!(&stage, Stage::Recording(active_binding_id)
+                                    if binding_id == "edit_mode" && active_binding_id == "transcribe")
+                            {
+                                let Stage::Recording(from_binding_id) = &stage else {
+                                    unreachable!();
+                                };
+                                let from_binding_id = from_binding_id.clone();
+                                if promote_active_transcription_to_edit_mode(
+                                    &app,
+                                    &from_binding_id,
+                                    &binding_id,
+                                ) {
+                                    info!(
+                                        "Promoted push-to-talk recording from '{}' to '{}'",
+                                        from_binding_id, binding_id
+                                    );
+                                    stage = Stage::Recording(binding_id.clone());
+                                } else {
+                                    warn!(
+                                        "[ask-hotkey] promotion_failed from={} to={} stage={}",
+                                        from_binding_id,
+                                        binding_id,
+                                        stage_label(&stage)
+                                    );
+                                }
                             } else if !is_pressed
                                 && matches!(&stage, Stage::Recording(id) if id == &binding_id)
                             {
@@ -239,6 +277,7 @@ impl TranscriptionCoordinator {
                         {
                             stage = Stage::Idle;
                             processing_started_at = None;
+                            last_press = None;
                         }
                     }
                     Command::ProcessingFinished => {
@@ -354,6 +393,20 @@ fn release_received_before_recording_started(
         .unwrap_or(false)
 }
 
+fn should_debounce_press(
+    last_press: &Option<(String, Instant)>,
+    binding_id: &str,
+    received_at: Instant,
+) -> bool {
+    last_press
+        .as_ref()
+        .map(|(last_binding_id, last_received_at)| {
+            last_binding_id == binding_id
+                && received_at.saturating_duration_since(*last_received_at) < DEBOUNCE
+        })
+        .unwrap_or(false)
+}
+
 fn cancel_stale_push_to_talk_recording(app: &AppHandle, stage: &mut Stage, binding_id: &str) {
     warn!(
         "Discarding stale push-to-talk recording for '{}' because release arrived before audio became active",
@@ -394,9 +447,9 @@ fn stop(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &st
 #[cfg(test)]
 mod tests {
     use super::{
-        is_transcribe_binding, release_received_before_recording_started,
+        is_transcribe_binding, release_received_before_recording_started, should_debounce_press,
         transcribe_binding_push_to_talk, transcription_session_is_active, PushToTalkSuppression,
-        SUPPRESS_AFTER_IGNORED_PUSH_TO_TALK_RELEASE,
+        DEBOUNCE, SUPPRESS_AFTER_IGNORED_PUSH_TO_TALK_RELEASE,
     };
     use std::time::{Duration, Instant};
 
@@ -494,6 +547,23 @@ mod tests {
         assert!(!release_received_before_recording_started(
             release_received_at,
             Some(recording_started_at)
+        ));
+    }
+
+    #[test]
+    fn press_debounce_only_suppresses_same_binding_repeats() {
+        let now = Instant::now();
+        let last_press = Some(("transcribe".to_string(), now));
+
+        assert!(should_debounce_press(
+            &last_press,
+            "transcribe",
+            now + DEBOUNCE - Duration::from_millis(1)
+        ));
+        assert!(!should_debounce_press(
+            &last_press,
+            "edit_mode",
+            now + Duration::from_millis(1)
         ));
     }
 
