@@ -4,6 +4,18 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 ENV_FILE="${ROOT_DIR}/.env.local"
 
+if [[ -f "${HOME}/.cargo/env" ]]; then
+  # shellcheck disable=SC1090
+  source "${HOME}/.cargo/env"
+fi
+
+for LOCAL_BIN_DIR in "${HOME}/.bun/bin" "${HOME}/Library/Python/3.9/bin"; do
+  if [[ -d "${LOCAL_BIN_DIR}" && ":${PATH}:" != *":${LOCAL_BIN_DIR}:"* ]]; then
+    PATH="${LOCAL_BIN_DIR}:${PATH}"
+  fi
+done
+export PATH
+
 if [[ -f "${ENV_FILE}" ]]; then
   # shellcheck disable=SC1090
   set -a

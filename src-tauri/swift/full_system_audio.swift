@@ -9,6 +9,28 @@ private let activeSessionLock = NSLock()
 private var activeSession: AnyObject?
 private var liveLevelCallback: UttrFullSystemAudioLevelCallback?
 
+private final class LockedBool: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value: Bool
+
+    init(_ value: Bool) {
+        self.value = value
+    }
+
+    func set(_ newValue: Bool) {
+        lock.lock()
+        value = newValue
+        lock.unlock()
+    }
+
+    func get() -> Bool {
+        lock.lock()
+        let currentValue = value
+        lock.unlock()
+        return currentValue
+    }
+}
+
 private func permissionStateValue(_ state: Int32) -> UttrFullSystemAudioPermissionState {
     state
 }
@@ -136,7 +158,7 @@ private final class FullSystemAudioCaptureSession: NSObject, SCStreamOutput, SCS
 
     func start(config: UttrFullSystemAudioCaptureConfig) -> Bool {
         let semaphore = DispatchSemaphore(value: 0)
-        var didStart = false
+        let didStart = LockedBool(false)
 
         Task {
             defer { semaphore.signal() }
@@ -183,14 +205,14 @@ private final class FullSystemAudioCaptureSession: NSObject, SCStreamOutput, SCS
                 stateLock.lock()
                 self.stream = stream
                 stateLock.unlock()
-                didStart = true
+                didStart.set(true)
             } catch {
-                didStart = false
+                didStart.set(false)
             }
         }
 
         semaphore.wait()
-        return didStart
+        return didStart.get()
     }
 
     func stop() -> UttrFullSystemAudioStopResult {

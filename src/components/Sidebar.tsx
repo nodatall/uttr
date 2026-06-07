@@ -89,7 +89,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onSectionChange,
 }) => {
   const { t } = useTranslation();
-  const { settings, installAccess } = useSettings();
+  const { settings, installAccess, updateSetting } = useSettings();
   const [version, setVersion] = useState("");
   const versionTapCountRef = useRef(0);
   const versionTapTimerRef = useRef<number | null>(null);
@@ -131,6 +131,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
         versionTapTimerRef.current = null;
       }
       versionTapCountRef.current = 0;
+      if (!settings?.debug_mode) {
+        void updateSetting("debug_mode", true);
+      }
       onSectionChange("settings");
     }
   };
