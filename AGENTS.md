@@ -15,3 +15,12 @@
 - For backend, integration, runtime, deployment, or agent/tooling changes, capture the current state before editing: relevant routes, config, env var presence, schema/migrations, services, provider state, and validation commands. Prefer structured output such as `--json`, health checks, metadata commands, or diagnostics when available, and do not expose secret values. After the first failed runtime or integration attempt, classify the failure layer before patching again.
 - Do not claim success until the relevant check has run or you clearly state what could not be checked.
 - Before boundary-affecting work, read `docs/ARCHITECTURE.md` when it exists.
+
+## Verification
+
+- Frontend changes: run `bun run build`; run `bun run lint` when JS/TS/React files change.
+- Rendered UI changes: run `bun run test:playwright` or inspect with Browser and mention the screenshot/visual evidence.
+- Rust/Tauri changes: run `cd src-tauri && cargo test`, preferably targeted to the changed module first.
+- Native macOS behavior changes: run `bun run tauri:build:fast`.
+- Transcription, paste, overlay, shortcut, or permissions changes: run `bun run test:e2e:release-transcribe -- --preflight-only`; run the full smoke test when local permissions/automation allow it.
+- If the relevant check cannot run, state the exact blocker and do not claim the fix works.
