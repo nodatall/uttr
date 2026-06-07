@@ -76,6 +76,7 @@ const QUIET_AUDIO_MAX_PEAK: f32 = 0.92;
 const QUIET_AUDIO_MAX_GAIN: f32 = 4.0;
 const QUIET_AUDIO_MIN_GAIN: f32 = 1.15;
 const MIN_INCREMENTAL_FINALIZATION_CHUNKS: u64 = 2;
+const MIN_ONE_CHUNK_INCREMENTAL_FINALIZATION_SAMPLES: usize = SAMPLE_RATE * 15;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CloudTranscriptionRoute {
@@ -394,6 +395,11 @@ pub(crate) fn stitch_transcription_text(existing: &mut String, incoming: &str) {
 
 fn has_enough_incremental_chunks_for_finalization(chunk_count: u64) -> bool {
     chunk_count >= MIN_INCREMENTAL_FINALIZATION_CHUNKS
+}
+
+fn has_enough_incremental_progress_for_finalization(chunk_count: u64, sample_count: usize) -> bool {
+    has_enough_incremental_chunks_for_finalization(chunk_count)
+        || (chunk_count >= 1 && sample_count >= MIN_ONE_CHUNK_INCREMENTAL_FINALIZATION_SAMPLES)
 }
 
 fn incremental_tail_timeout(chunk_count: u64) -> Duration {
@@ -2018,20 +2024,21 @@ impl TranscriptionManager {
                         if self.cancel_requested.load(Ordering::Relaxed) {
                             break 'chunking;
                         }
-                        if !runtime.stop_requested.load(Ordering::Relaxed) {
-                            let mut assembled = runtime.assembled_raw.lock().unwrap();
-                            append_stitched_text(&mut assembled, &chunk_text);
-                            runtime.next_chunk_start.store(chunk_end, Ordering::Relaxed);
-                            let count = runtime.chunk_count.fetch_add(1, Ordering::Relaxed) + 1;
-                            debug!(
-                                "Incremental chunk {} completed in {}ms (speech_len={} samples)",
-                                count,
-                                chunk_st.elapsed().as_millis(),
-                                chunk_end
-                            );
-                        }
+                        let mut assembled = runtime.assembled_raw.lock().unwrap();
+                        append_stitched_text(&mut assembled, &chunk_text);
+                        runtime.next_chunk_start.store(chunk_end, Ordering::Relaxed);
+                        let count = runtime.chunk_count.fetch_add(1, Ordering::Relaxed) + 1;
+                        debug!(
+                            "Incremental chunk {} completed in {}ms (speech_len={} samples)",
+                            count,
+                            chunk_st.elapsed().as_millis(),
+                            chunk_end
+                        );
                         saw_pause = false;
                         made_progress = true;
+                        if runtime.stop_requested.load(Ordering::Relaxed) {
+                            break 'chunking;
+                        }
                     }
                     Err(err) => {
                         runtime.failed.store(true, Ordering::Relaxed);
@@ -2108,7 +2115,10 @@ impl TranscriptionManager {
         if session.runtime.failed.load(Ordering::Relaxed) {
             let completed_chunk_count = session.runtime.chunk_count.load(Ordering::Relaxed);
             let next_chunk_start = session.runtime.next_chunk_start.load(Ordering::Relaxed);
-            if has_enough_incremental_chunks_for_finalization(completed_chunk_count) {
+            if has_enough_incremental_progress_for_finalization(
+                completed_chunk_count,
+                full_samples.len(),
+            ) {
                 return self.finalize_completed_incremental_chunks(
                     &session.runtime,
                     completed_chunk_count,
@@ -2127,7 +2137,10 @@ impl TranscriptionManager {
         }
 
         let completed_chunk_count = session.runtime.chunk_count.load(Ordering::Relaxed);
-        if !has_enough_incremental_chunks_for_finalization(completed_chunk_count) {
+        if !has_enough_incremental_progress_for_finalization(
+            completed_chunk_count,
+            full_samples.len(),
+        ) {
             return Err(anyhow::anyhow!(
                 "Only {} incremental chunk(s) completed; using full-pass fallback",
                 completed_chunk_count
@@ -2647,6 +2660,22 @@ mod tests {
         assert!(!has_enough_incremental_chunks_for_finalization(0));
         assert!(!has_enough_incremental_chunks_for_finalization(1));
         assert!(has_enough_incremental_chunks_for_finalization(2));
+    }
+
+    #[test]
+    fn incremental_finalization_allows_one_chunk_for_long_recordings() {
+        assert!(!has_enough_incremental_progress_for_finalization(
+            1,
+            SAMPLE_RATE * 14
+        ));
+        assert!(has_enough_incremental_progress_for_finalization(
+            1,
+            SAMPLE_RATE * 15
+        ));
+        assert!(has_enough_incremental_progress_for_finalization(
+            2,
+            SAMPLE_RATE * 10
+        ));
     }
 
     #[test]

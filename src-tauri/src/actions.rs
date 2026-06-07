@@ -912,8 +912,11 @@ fn transcription_watchdog_delay(sample_count: usize) -> Duration {
     transcription_timeout_for_samples(sample_count) + FULL_PASS_TRANSCRIPTION_WATCHDOG_GRACE
 }
 
-fn incremental_finalization_timeout(completed_chunk_count: u64) -> Option<Duration> {
-    if should_retry_full_pass_after_incremental_timeout(completed_chunk_count) {
+fn incremental_finalization_timeout(
+    completed_chunk_count: u64,
+    sample_count: usize,
+) -> Option<Duration> {
+    if should_retry_full_pass_after_incremental_timeout(completed_chunk_count, sample_count) {
         Some(
             INCREMENTAL_FINALIZATION_BASE_TIMEOUT
                 + INCREMENTAL_FINALIZATION_TIMEOUT_PER_CHUNK
@@ -924,8 +927,12 @@ fn incremental_finalization_timeout(completed_chunk_count: u64) -> Option<Durati
     }
 }
 
-fn should_retry_full_pass_after_incremental_timeout(completed_chunk_count: u64) -> bool {
-    completed_chunk_count < 2
+fn should_retry_full_pass_after_incremental_timeout(
+    completed_chunk_count: u64,
+    sample_count: usize,
+) -> bool {
+    completed_chunk_count == 0
+        || (completed_chunk_count == 1 && sample_count < SHORT_UTTERANCE_SAMPLES * 3 / 2)
 }
 
 fn transcription_source_for_binding(binding_id: &str) -> Option<&'static str> {
@@ -2744,7 +2751,7 @@ fn handle_transcription_stop(
         {
             let completed_incremental_chunks =
                 tm_for_worker.incremental_completed_chunk_count(&binding_id);
-            match incremental_finalization_timeout(completed_incremental_chunks) {
+            match incremental_finalization_timeout(completed_incremental_chunks, samples.len()) {
                 Some(incremental_timeout) => {
                     debug!(
                         "Finishing incremental transcription with {} completed chunk(s), timeout={}s",
@@ -3967,6 +3974,7 @@ mod tests {
         LabeledTranscriptSegment, MeetingSummaryState, SummaryPoint, TranscriptionCompletionMode,
         ACTION_MAP, FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT, FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL,
         INCREMENTAL_FINALIZATION_BASE_TIMEOUT, INCREMENTAL_FINALIZATION_TIMEOUT_PER_CHUNK,
+        SHORT_UTTERANCE_SAMPLES,
     };
     use crate::app_context::AppContextSnapshot;
     use crate::managers::full_system_audio::FullSystemTranscriptionSource;
@@ -4192,25 +4200,51 @@ mod tests {
     #[test]
     fn incremental_finalization_timeout_is_only_for_insufficient_progress() {
         assert_eq!(
-            incremental_finalization_timeout(0),
+            incremental_finalization_timeout(0, SHORT_UTTERANCE_SAMPLES * 2),
             Some(INCREMENTAL_FINALIZATION_BASE_TIMEOUT)
         );
         assert_eq!(
-            incremental_finalization_timeout(1),
+            incremental_finalization_timeout(1, SHORT_UTTERANCE_SAMPLES),
             Some(
                 INCREMENTAL_FINALIZATION_BASE_TIMEOUT + INCREMENTAL_FINALIZATION_TIMEOUT_PER_CHUNK
             )
         );
-        assert_eq!(incremental_finalization_timeout(2), None);
-        assert_eq!(incremental_finalization_timeout(6), None);
+        assert_eq!(
+            incremental_finalization_timeout(1, SHORT_UTTERANCE_SAMPLES * 2),
+            None
+        );
+        assert_eq!(
+            incremental_finalization_timeout(2, SHORT_UTTERANCE_SAMPLES * 2),
+            None
+        );
+        assert_eq!(
+            incremental_finalization_timeout(6, SHORT_UTTERANCE_SAMPLES * 2),
+            None
+        );
     }
 
     #[test]
     fn incremental_timeout_does_not_full_pass_after_multiple_chunks() {
-        assert!(should_retry_full_pass_after_incremental_timeout(0));
-        assert!(should_retry_full_pass_after_incremental_timeout(1));
-        assert!(!should_retry_full_pass_after_incremental_timeout(2));
-        assert!(!should_retry_full_pass_after_incremental_timeout(6));
+        assert!(should_retry_full_pass_after_incremental_timeout(
+            0,
+            SHORT_UTTERANCE_SAMPLES * 2
+        ));
+        assert!(should_retry_full_pass_after_incremental_timeout(
+            1,
+            SHORT_UTTERANCE_SAMPLES
+        ));
+        assert!(!should_retry_full_pass_after_incremental_timeout(
+            1,
+            SHORT_UTTERANCE_SAMPLES * 2
+        ));
+        assert!(!should_retry_full_pass_after_incremental_timeout(
+            2,
+            SHORT_UTTERANCE_SAMPLES * 2
+        ));
+        assert!(!should_retry_full_pass_after_incremental_timeout(
+            6,
+            SHORT_UTTERANCE_SAMPLES * 2
+        ));
     }
 
     #[test]
