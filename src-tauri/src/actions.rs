@@ -257,6 +257,8 @@ const GROQ_MODEL_PREFERENCES: &[&str] = &[
 const FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT: Duration = Duration::from_secs(45);
 const FULL_PASS_TRANSCRIPTION_TIMEOUT_PER_TEN_MINUTES: Duration = Duration::from_secs(60);
 const FULL_PASS_TRANSCRIPTION_WATCHDOG_GRACE: Duration = Duration::from_secs(15);
+const INCREMENTAL_FINALIZATION_BASE_TIMEOUT: Duration = Duration::from_secs(6);
+const INCREMENTAL_FINALIZATION_TIMEOUT_PER_CHUNK: Duration = Duration::from_secs(4);
 const POST_PROCESS_TIMEOUT_DEFAULT: Duration = Duration::from_secs(20);
 const SHORT_UTTERANCE_SAMPLES: usize = 16_000 * 10;
 
@@ -908,6 +910,22 @@ fn transcription_timeout_for_samples(sample_count: usize) -> Duration {
 
 fn transcription_watchdog_delay(sample_count: usize) -> Duration {
     transcription_timeout_for_samples(sample_count) + FULL_PASS_TRANSCRIPTION_WATCHDOG_GRACE
+}
+
+fn incremental_finalization_timeout(completed_chunk_count: u64) -> Option<Duration> {
+    if should_retry_full_pass_after_incremental_timeout(completed_chunk_count) {
+        Some(
+            INCREMENTAL_FINALIZATION_BASE_TIMEOUT
+                + INCREMENTAL_FINALIZATION_TIMEOUT_PER_CHUNK
+                    .saturating_mul(completed_chunk_count as u32),
+        )
+    } else {
+        None
+    }
+}
+
+fn should_retry_full_pass_after_incremental_timeout(completed_chunk_count: u64) -> bool {
+    completed_chunk_count < 2
 }
 
 fn transcription_source_for_binding(binding_id: &str) -> Option<&'static str> {
@@ -2724,45 +2742,93 @@ fn handle_transcription_stop(
             && samples.len() >= SHORT_UTTERANCE_SAMPLES
             && has_incremental_progress
         {
-            match timeout(
-                Duration::from_secs(6),
-                tm_for_worker.finish_incremental_session(&binding_id, &samples),
-            )
-            .await
-            {
-                Ok(Ok(text)) => {
+            let completed_incremental_chunks =
+                tm_for_worker.incremental_completed_chunk_count(&binding_id);
+            match incremental_finalization_timeout(completed_incremental_chunks) {
+                Some(incremental_timeout) => {
                     debug!(
-                        "Incremental transcription finalized in {:?}",
-                        transcription_time.elapsed()
+                        "Finishing incremental transcription with {} completed chunk(s), timeout={}s",
+                        completed_incremental_chunks,
+                        incremental_timeout.as_secs()
                     );
-                    Ok(text)
-                }
-                Ok(Err(incremental_err)) => {
-                    warn!(
-                        "Incremental path unavailable, falling back to full-pass transcription: {}",
-                        incremental_err
-                    );
-                    tm_for_worker.cancel_incremental_session();
-                    transcribe_full_pass_with_timeout(
-                        &tm_for_worker,
-                        samples,
-                        transcription_source_for_binding(&binding_id),
-                        transcription_timeout,
+                    match timeout(
+                        incremental_timeout,
+                        tm_for_worker.finish_incremental_session(&binding_id, &samples),
                     )
                     .await
+                    {
+                        Ok(Ok(text)) => {
+                            debug!(
+                                "Incremental transcription finalized in {:?}",
+                                transcription_time.elapsed()
+                            );
+                            Ok(text)
+                        }
+                        Ok(Err(incremental_err)) => {
+                            warn!(
+                                "Incremental path unavailable, falling back to full-pass transcription: {}",
+                                incremental_err
+                            );
+                            tm_for_worker.cancel_incremental_session();
+                            transcribe_full_pass_with_timeout(
+                                &tm_for_worker,
+                                samples,
+                                transcription_source_for_binding(&binding_id),
+                                transcription_timeout,
+                            )
+                            .await
+                        }
+                        Err(_) => {
+                            warn!(
+                                "Incremental finalization timed out after {}s with {} completed chunk(s)",
+                                incremental_timeout.as_secs(),
+                                completed_incremental_chunks
+                            );
+                            tm_for_worker.cancel_incremental_session();
+                            warn!(
+                                "Retrying full-pass transcription because incremental progress was insufficient"
+                            );
+                            transcribe_full_pass_with_timeout(
+                                &tm_for_worker,
+                                samples,
+                                transcription_source_for_binding(&binding_id),
+                                transcription_timeout,
+                            )
+                            .await
+                        }
+                    }
                 }
-                Err(_) => {
-                    warn!(
-                        "Incremental finalization timed out; falling back to full-pass transcription"
+                None => {
+                    debug!(
+                        "Finishing incremental transcription with {} completed chunk(s), no outer timeout",
+                        completed_incremental_chunks
                     );
-                    tm_for_worker.cancel_incremental_session();
-                    transcribe_full_pass_with_timeout(
-                        &tm_for_worker,
-                        samples,
-                        transcription_source_for_binding(&binding_id),
-                        transcription_timeout,
-                    )
-                    .await
+                    match tm_for_worker
+                        .finish_incremental_session(&binding_id, &samples)
+                        .await
+                    {
+                        Ok(text) => {
+                            debug!(
+                                "Incremental transcription finalized in {:?}",
+                                transcription_time.elapsed()
+                            );
+                            Ok(text)
+                        }
+                        Err(incremental_err) => {
+                            warn!(
+                                "Incremental path unavailable after completed chunks, falling back to full-pass transcription: {}",
+                                incremental_err
+                            );
+                            tm_for_worker.cancel_incremental_session();
+                            transcribe_full_pass_with_timeout(
+                                &tm_for_worker,
+                                samples,
+                                transcription_source_for_binding(&binding_id),
+                                transcription_timeout,
+                            )
+                            .await
+                        }
+                    }
                 }
             }
         } else if samples.len() < SHORT_UTTERANCE_SAMPLES {
@@ -3890,15 +3956,17 @@ mod tests {
         clear_ask_selection_session, current_ask_selection_messages,
         current_ask_selection_session_id, custom_vocabulary_prompt_block,
         format_labeled_transcript_segments, friendly_live_summary_error,
-        is_effectively_silent_audio, is_supported_post_process_model,
-        normalize_live_summary_output, parse_meeting_summary_state,
-        render_meeting_summary_markdown, resolved_post_process_system_prompt,
-        select_preferred_groq_model, should_pause_live_summaries,
-        should_refresh_microphone_stream_after_suspected_no_input, should_update_live_summary,
+        incremental_finalization_timeout, is_effectively_silent_audio,
+        is_supported_post_process_model, normalize_live_summary_output,
+        parse_meeting_summary_state, render_meeting_summary_markdown,
+        resolved_post_process_system_prompt, select_preferred_groq_model,
+        should_pause_live_summaries, should_refresh_microphone_stream_after_suspected_no_input,
+        should_retry_full_pass_after_incremental_timeout, should_update_live_summary,
         toggle_post_process_enabled, transcription_timeout_for_samples,
         transcription_watchdog_delay, update_ask_selection_session, usable_post_processed_text,
         LabeledTranscriptSegment, MeetingSummaryState, SummaryPoint, TranscriptionCompletionMode,
         ACTION_MAP, FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT, FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL,
+        INCREMENTAL_FINALIZATION_BASE_TIMEOUT, INCREMENTAL_FINALIZATION_TIMEOUT_PER_CHUNK,
     };
     use crate::app_context::AppContextSnapshot;
     use crate::managers::full_system_audio::FullSystemTranscriptionSource;
@@ -4119,6 +4187,30 @@ mod tests {
         let long_timeout = transcription_timeout_for_samples(16_000 * 60 * 31);
         let long_watchdog = transcription_watchdog_delay(16_000 * 60 * 31);
         assert!(long_watchdog > long_timeout);
+    }
+
+    #[test]
+    fn incremental_finalization_timeout_is_only_for_insufficient_progress() {
+        assert_eq!(
+            incremental_finalization_timeout(0),
+            Some(INCREMENTAL_FINALIZATION_BASE_TIMEOUT)
+        );
+        assert_eq!(
+            incremental_finalization_timeout(1),
+            Some(
+                INCREMENTAL_FINALIZATION_BASE_TIMEOUT + INCREMENTAL_FINALIZATION_TIMEOUT_PER_CHUNK
+            )
+        );
+        assert_eq!(incremental_finalization_timeout(2), None);
+        assert_eq!(incremental_finalization_timeout(6), None);
+    }
+
+    #[test]
+    fn incremental_timeout_does_not_full_pass_after_multiple_chunks() {
+        assert!(should_retry_full_pass_after_incremental_timeout(0));
+        assert!(should_retry_full_pass_after_incremental_timeout(1));
+        assert!(!should_retry_full_pass_after_incremental_timeout(2));
+        assert!(!should_retry_full_pass_after_incremental_timeout(6));
     }
 
     #[test]
