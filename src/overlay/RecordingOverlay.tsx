@@ -272,9 +272,7 @@ const useRecordingOverlayController = () => {
             setOverlayVisibility(true);
             setOverlayMode(overlayState);
             smoothedLevelsRef.current = Array(16).fill(0);
-            setAlertKind(
-              overlayState === "trial_ended" ? "trial_ended" : null,
-            );
+            setAlertKind(overlayState === "trial_ended" ? "trial_ended" : null);
             resetSpeechTracking();
             syncSiriWaveForOverlay();
 

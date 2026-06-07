@@ -21,8 +21,9 @@ interface GlobalShortcutInputProps {
   label?: string;
 }
 
-const EMPTY_BINDINGS: NonNullable<ReturnType<typeof useSettings>["settings"]>["bindings"] =
-  {};
+const EMPTY_BINDINGS: NonNullable<
+  ReturnType<typeof useSettings>["settings"]
+>["bindings"] = {};
 
 const useGlobalShortcutInputController = ({
   shortcutId,
@@ -192,14 +193,7 @@ const useGlobalShortcutInputController = ({
       window.removeEventListener("keyup", handleKeyUp);
       window.removeEventListener("click", handleClickOutside);
     };
-  }, [
-    recordedKeys,
-    editingShortcutId,
-    bindings,
-    updateBinding,
-    osType,
-    t,
-  ]);
+  }, [recordedKeys, editingShortcutId, bindings, updateBinding, osType, t]);
 
   // Start recording a new shortcut
   const startRecording = async (id: string) => {

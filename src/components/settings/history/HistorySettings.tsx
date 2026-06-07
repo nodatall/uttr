@@ -269,7 +269,6 @@ const useHistorySettingsController = ({
     dispatch({ type: "choose_tab", tab, ignoredFocusToken: focusToken });
   };
 
-
   useEffect(() => {
     if (focusedEntryId === null || loading) {
       return;

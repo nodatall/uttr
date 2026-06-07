@@ -182,7 +182,8 @@ const getClockForStage = (
   }
 
   if (isProcessingSessionStage(stage) || stage === "complete") {
-    return clock.recordingStartedAt !== null && clock.recordingStoppedAt === null
+    return clock.recordingStartedAt !== null &&
+      clock.recordingStoppedAt === null
       ? { ...clock, recordingStoppedAt: now }
       : clock;
   }

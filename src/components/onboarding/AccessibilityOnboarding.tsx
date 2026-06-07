@@ -151,7 +151,7 @@ const useAccessibilityOnboardingController = () => {
           return newState;
         });
 
-          // If both granted, stop polling, refresh audio devices, and proceed
+        // If both granted, stop polling, refresh audio devices, and proceed
         if (accessibilityGranted && microphoneGranted) {
           clearPolling();
           // Now that we have mic permission, refresh audio devices

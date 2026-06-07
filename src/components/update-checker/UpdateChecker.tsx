@@ -80,7 +80,13 @@ const updateCheckerReducer = (
 const UpdateChecker: React.FC<UpdateCheckerProps> = ({ className = "" }) => {
   const { t } = useTranslation();
   const [
-    { isChecking, updateAvailable, isInstalling, downloadProgress, showUpToDate },
+    {
+      isChecking,
+      updateAvailable,
+      isInstalling,
+      downloadProgress,
+      showUpToDate,
+    },
     dispatch,
   ] = useReducer(updateCheckerReducer, initialUpdateCheckerState);
 
@@ -105,36 +111,39 @@ const UpdateChecker: React.FC<UpdateCheckerProps> = ({ className = "" }) => {
   useEffect(() => clearUpToDateTimeout, [clearUpToDateTimeout]);
 
   // Update checking functions
-  const checkForUpdates = useCallback(async (manual = false) => {
-    if (!updateChecksEnabled || isCheckingRef.current) return;
+  const checkForUpdates = useCallback(
+    async (manual = false) => {
+      if (!updateChecksEnabled || isCheckingRef.current) return;
 
-    try {
-      isCheckingRef.current = true;
-      isManualCheckRef.current = manual;
-      dispatch({ type: "checking_started" });
-      const update = await runSharedUpdateCheck();
+      try {
+        isCheckingRef.current = true;
+        isManualCheckRef.current = manual;
+        dispatch({ type: "checking_started" });
+        const update = await runSharedUpdateCheck();
 
-      if (update) {
-        dispatch({ type: "update_available", available: true });
-      } else {
-        dispatch({ type: "update_available", available: false });
+        if (update) {
+          dispatch({ type: "update_available", available: true });
+        } else {
+          dispatch({ type: "update_available", available: false });
 
-        if (isManualCheckRef.current) {
-          dispatch({ type: "show_up_to_date", show: true });
-          clearUpToDateTimeout();
-          upToDateTimeoutRef.current = setTimeout(() => {
-            dispatch({ type: "show_up_to_date", show: false });
-          }, 3000);
+          if (isManualCheckRef.current) {
+            dispatch({ type: "show_up_to_date", show: true });
+            clearUpToDateTimeout();
+            upToDateTimeoutRef.current = setTimeout(() => {
+              dispatch({ type: "show_up_to_date", show: false });
+            }, 3000);
+          }
         }
+      } catch (error) {
+        console.error("Failed to check for updates:", error);
+      } finally {
+        isCheckingRef.current = false;
+        dispatch({ type: "checking_finished" });
+        isManualCheckRef.current = false;
       }
-    } catch (error) {
-      console.error("Failed to check for updates:", error);
-    } finally {
-      isCheckingRef.current = false;
-      dispatch({ type: "checking_finished" });
-      isManualCheckRef.current = false;
-    }
-  }, [clearUpToDateTimeout, updateChecksEnabled]);
+    },
+    [clearUpToDateTimeout, updateChecksEnabled],
+  );
 
   const handleManualUpdateCheck = useCallback(() => {
     if (!updateChecksEnabled) return;

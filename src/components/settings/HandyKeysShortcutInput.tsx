@@ -74,15 +74,15 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
   }, [isRecording, shortcutId, stopRecordingSession, t]);
 
   // Set up event listener for handy-keys events
-	  useEffect(() => {
-	    if (!isRecording) return;
+  useEffect(() => {
+    if (!isRecording) return;
 
-	    let cleanup = false;
-	    let localUnlisten: (() => void) | null = null;
+    let cleanup = false;
+    let localUnlisten: (() => void) | null = null;
 
-	    const setupListener = async () => {
-	      // Listen for key events from backend
-	      const unlisten = await listen<HandyKeysEvent>(
+    const setupListener = async () => {
+      // Listen for key events from backend
+      const unlisten = await listen<HandyKeysEvent>(
         "handy-keys-event",
         async (event) => {
           if (cleanup) return;
@@ -120,16 +120,16 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
             }
           }
         },
-	      );
+      );
 
-	      if (cleanup) {
-	        unlisten();
-	        return;
-	      }
+      if (cleanup) {
+        unlisten();
+        return;
+      }
 
-	      localUnlisten = unlisten;
-	      unlistenRef.current = unlisten;
-	    };
+      localUnlisten = unlisten;
+      unlistenRef.current = unlisten;
+    };
 
     setupListener();
 
@@ -143,15 +143,15 @@ export const HandyKeysShortcutInput: React.FC<HandyKeysShortcutInputProps> = ({
 
     window.addEventListener("keydown", handleKeyDown);
 
-	    return () => {
-	      cleanup = true;
-	      window.removeEventListener("keydown", handleKeyDown);
-	      if (localUnlisten) {
-	        localUnlisten();
-	      }
-	      // Stop backend recording on unmount to prevent orphaned recording loops
-	      commands.stopHandyKeysRecording().catch(console.error);
-	    };
+    return () => {
+      cleanup = true;
+      window.removeEventListener("keydown", handleKeyDown);
+      if (localUnlisten) {
+        localUnlisten();
+      }
+      // Stop backend recording on unmount to prevent orphaned recording loops
+      commands.stopHandyKeysRecording().catch(console.error);
+    };
   }, [
     isRecording,
     shortcutId,

@@ -46,10 +46,7 @@ const claimInitialState: ClaimState = {
   activeSession: null,
 };
 
-const claimReducer = (
-  state: ClaimState,
-  action: ClaimAction,
-): ClaimState => {
+const claimReducer = (state: ClaimState, action: ClaimAction): ClaimState => {
   switch (action.type) {
     case "email":
       return { ...state, email: action.email };

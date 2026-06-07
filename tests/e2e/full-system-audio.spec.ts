@@ -870,9 +870,9 @@ test.describe("full-system audio settings", () => {
 
     await page.goto("/");
 
-    await expect(
-      page.getByRole("button", { name: /^API Keys$/i }),
-    ).toHaveCount(0);
+    await expect(page.getByRole("button", { name: /^API Keys$/i })).toHaveCount(
+      0,
+    );
 
     const versionButton = page.getByRole("button", { name: "App version" });
     await expect(versionButton).toBeVisible();
@@ -883,17 +883,16 @@ test.describe("full-system audio settings", () => {
 
     await expect
       .poll(async () =>
-        page.evaluate(
-          () =>
-            (
-              window as unknown as {
-                __UTTR_E2E__: FullSystemAudioTestState;
-              }
-            ).__UTTR_E2E__.invokedCommands.some(
-              (command) =>
-                command.cmd === "change_debug_mode_setting" &&
-                command.args.enabled === true,
-            ),
+        page.evaluate(() =>
+          (
+            window as unknown as {
+              __UTTR_E2E__: FullSystemAudioTestState;
+            }
+          ).__UTTR_E2E__.invokedCommands.some(
+            (command) =>
+              command.cmd === "change_debug_mode_setting" &&
+              command.args.enabled === true,
+          ),
         ),
       )
       .toBe(true);

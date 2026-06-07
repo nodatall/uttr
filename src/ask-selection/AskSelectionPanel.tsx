@@ -82,9 +82,9 @@ const useAskSelectionPanelController = () => {
   const payloadRef = useRef<AskSelectionPayload | null>(null);
   const copyResetRef = useRef<number | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
-  const applyPayloadRef = useRef<(nextPayload: AskSelectionPayload | null) => void>(
-    () => {},
-  );
+  const applyPayloadRef = useRef<
+    (nextPayload: AskSelectionPayload | null) => void
+  >(() => {});
   const refreshPayloadRef = useRef<() => void>(() => {});
 
   const applyPayload = useCallback(

@@ -1695,7 +1695,13 @@ mod tests {
         };
 
         assert_eq!(
-            modifier_only_transition(hotkey, &event, event.modifiers, event.changed_modifier, true),
+            modifier_only_transition(
+                hotkey,
+                &event,
+                event.modifiers,
+                event.changed_modifier,
+                true
+            ),
             Some(false)
         );
     }

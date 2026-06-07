@@ -43,9 +43,7 @@ const EXCLUDED_MODEL_PATTERNS = [
 ];
 
 const isExcludedModel = (id: string) =>
-  EXCLUDED_MODEL_PATTERNS.some((pattern) =>
-    id.toLowerCase().includes(pattern),
-  );
+  EXCLUDED_MODEL_PATTERNS.some((pattern) => id.toLowerCase().includes(pattern));
 
 const displayModelLabel = (id: string) =>
   id.includes("/") ? id.split("/").pop()! : id;

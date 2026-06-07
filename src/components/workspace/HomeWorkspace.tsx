@@ -207,9 +207,7 @@ const SummarySectionView: React.FC<{ section: SummarySection }> = ({
             lineOccurrences.set(line, occurrence + 1);
             const nested = /^\s+-\s/.test(line);
             const isContinuation =
-              !nested &&
-              !line.trimStart().startsWith("-") &&
-              occurrence > 0;
+              !nested && !line.trimStart().startsWith("-") && occurrence > 0;
             return (
               <li
                 key={`${section.key}-${line}-${occurrence}`}
@@ -587,7 +585,10 @@ const RawTranscriptDialog: React.FC<RawTranscriptDialogProps> = ({
       <div className="flex max-h-[78vh] w-full max-w-3xl flex-col overflow-hidden rounded-[18px] border border-white/10 bg-[#070d16] shadow-2xl">
         <div className="flex items-center justify-between gap-4 border-b border-white/8 px-5 py-4">
           <div className="space-y-1">
-            <h2 id="raw-transcript-title" className="text-base font-semibold text-text">
+            <h2
+              id="raw-transcript-title"
+              className="text-base font-semibold text-text"
+            >
               {t("workspace.home.rawTranscriptTitle", {
                 defaultValue: "Raw transcript",
               })}
@@ -699,9 +700,7 @@ export const HomeWorkspace: React.FC<HomeWorkspaceProps> = ({
   const meetingView = live ? "record" : selectedMeetingView;
   const showingHistory = meetingView === "history";
   const pendingAction =
-    sessionState === sessionAction.observedState
-      ? sessionAction.pending
-      : null;
+    sessionState === sessionAction.observedState ? sessionAction.pending : null;
   const isStarting = pendingAction === "start";
   const isStopping = pendingAction === "stop";
 

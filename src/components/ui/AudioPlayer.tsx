@@ -63,16 +63,14 @@ export const AudioPlayer: React.FC<AudioPlayerProps> = ({
   className = "",
   autoPlay = false,
 }) => {
-  const [
-    { isPlaying, duration, currentTime, loadedSrc, isLoading },
-    dispatch,
-  ] = useReducer(audioPlayerReducer, {
-    isPlaying: false,
-    duration: 0,
-    currentTime: 0,
-    loadedSrc: initialSrc ?? null,
-    isLoading: false,
-  });
+  const [{ isPlaying, duration, currentTime, loadedSrc, isLoading }, dispatch] =
+    useReducer(audioPlayerReducer, {
+      isPlaying: false,
+      duration: 0,
+      currentTime: 0,
+      loadedSrc: initialSrc ?? null,
+      isLoading: false,
+    });
 
   const audioRef = useRef<HTMLAudioElement>(null);
   const src = loadedSrc;

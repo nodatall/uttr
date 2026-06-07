@@ -10,7 +10,11 @@
   background: rgba(5, 10, 18, 0.94);
   box-shadow: 0 18px 48px rgba(0, 0, 0, 0.42);
   color: #e6edf3;
-  font-family: Space Grotesk, Avenir Next, Segoe UI, sans-serif;
+  font-family:
+    Space Grotesk,
+    Avenir Next,
+    Segoe UI,
+    sans-serif;
 }
 
 .agentation-output-header {
@@ -64,7 +68,11 @@
   border-radius: 10px;
   background: rgba(0, 0, 0, 0.32);
   color: #dce7ef;
-  font: 12px ui-monospace, SFMono-Regular, Menlo, monospace;
+  font:
+    12px ui-monospace,
+    SFMono-Regular,
+    Menlo,
+    monospace;
   line-height: 1.45;
   padding: 10px;
 }

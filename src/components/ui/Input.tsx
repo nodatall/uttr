@@ -7,11 +7,13 @@ interface InputProps extends React.InputHTMLAttributes<HTMLInputElement> {
 const INPUT_BASE_CLASSES =
   "text-sm font-medium bg-white/[0.04] border border-white/10 rounded-xl text-start transition-all duration-150 text-text/92";
 
-const INPUT_VARIANT_CLASSES: Record<NonNullable<InputProps["variant"]>, string> =
-  {
-    default: "px-3.5 py-2.5",
-    compact: "px-2.5 py-1.5",
-  };
+const INPUT_VARIANT_CLASSES: Record<
+  NonNullable<InputProps["variant"]>,
+  string
+> = {
+  default: "px-3.5 py-2.5",
+  compact: "px-2.5 py-1.5",
+};
 
 export const Input: React.FC<InputProps> = ({
   className = "",

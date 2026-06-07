@@ -111,10 +111,7 @@ const formatDate = (timestamp: string, locale: string): string => {
  * @param locale - BCP 47 language tag (e.g., 'en', 'es', 'fr')
  * @returns Relative time string
  */
-const formatRelativeTime = (
-  timestamp: string,
-  locale: string,
-): string => {
+const formatRelativeTime = (timestamp: string, locale: string): string => {
   try {
     // Convert Unix timestamp (seconds) to milliseconds
     const timestampMs = parseInt(timestamp, 10) * 1000;
