@@ -12,6 +12,8 @@ Goal: Make `deliver/ask-selection` merge-ready by reviewing `origin/main...HEAD`
 - Starting status: original round started clean except for this state document.
 - Resumed at: `2026-06-06T05:10:31Z`
 - Resumed status: `## deliver/ask-selection` with substantial implementation dirty work from the React Doctor cleanup and current branch review scope. The earlier merge-ready verdict is superseded until Round 3 reviews, validates, and either commits or explicitly classifies the current dirty work.
+- Resumed again at: `2026-06-06T15:10:31Z`
+- Current status at resume: `## deliver/ask-selection`; no uncommitted working-tree changes before updating this state document. The prior merge-ready verdict is superseded until Round 4 completes a fresh review of the current `origin/main...HEAD`.
 
 ## End Condition
 
@@ -33,6 +35,7 @@ Do not stop because one round passed after fixes unless that round was a fresh r
 | 1 | `origin/main...HEAD` plus working tree | `AS-1` stale Ask Selection session finding classified `Disposition: fix` | repair and validate |
 | 2 | latest `origin/main...HEAD` after `0d292e1` | no remaining `Disposition: fix` findings | done |
 | 3 | latest `origin/main...HEAD` plus current working tree after React Doctor cleanup | `RD-1` pending Start state finding classified `Disposition: fix`; rereview after fix found no remaining `Disposition: fix` findings | done |
+| 4 | latest `origin/main...HEAD` after `9dda44f` plus current state-doc change | no remaining `Disposition: fix` findings | done |
 
 ## Findings
 
@@ -77,7 +80,20 @@ Do not stop because one round passed after fixes unless that round was a fresh r
 | `node scripts/release-transcribe-smoke.mjs --preflight-only --no-screenshots` | pass | Provider/settings/model preflight passed using isolated app data | Full native smoke was not run because it launches and controls Uttr/TextEdit; see residual risk. |
 | `git diff --check origin/main...HEAD && git diff --check` | pass | no whitespace errors in committed branch diff or working-tree diff | none |
 | Round 3 implementation commit | pass | committed validated implementation changes as `053c70e` (`Clean up React surfaces for merge review`) | none |
-| Final git status | pass | `## deliver/ask-selection` with only untracked `tasks/merge-review-deliver-ask-selection.md` | none |
+| Round 3 final git status | pass | `## deliver/ask-selection` with only the merge-review state document dirty at that time | superseded by Round 4 final status |
+| Prime Directive preflight | pass | `/Volumes/Code/primedirective/scripts/prime-directive-codex-preflight.sh` exited 0 for Round 4 | none |
+| `git fetch origin --prune` | pass | confirmed remote default branch `main`; pruned deleted remote branch ref | none |
+| `npm run build` | pass | TypeScript and Vite production build completed; existing chunk-size warning remains | none |
+| `npm run lint` | pass | ESLint over `src` completed | none |
+| `cargo test` | pass | 246 passed, 1 ignored; existing dead-code warnings remain | none |
+| `npm --prefix marketing-site run lint` | pass | marketing-site ESLint completed | none |
+| `npm --prefix marketing-site test` | pass | 118 Bun tests passed | none |
+| `npm run test:playwright -- tests/e2e/full-system-audio.spec.ts` | pass | 12 Chromium tests passed | none |
+| Ask Selection shimmed UI probe | pass | `node agents-scratch/merge-review/ask-selection-ui-probe.mjs` verified thinking, follow-up command with `sessionId: 42`, and error states; refreshed `agents-scratch/merge-review/output/ask-selection-*.png` | none |
+| UX review browser sweep | pass | `saved`, `live`, `history`, `missing-summary`, and `idle` states rendered at 1280x900 with no page errors and no horizontal overflow; saved state also rendered at 390x844; screenshots in `agents-scratch/merge-review/round4-ux-*.png` | none |
+| `node scripts/release-transcribe-smoke.mjs --preflight-only --no-screenshots` | pass | Provider/settings/model preflight passed using isolated app data | Full native smoke was not run because it launches and controls Uttr/TextEdit; see residual risk. |
+| `git diff --check origin/main...HEAD && git diff --check` | pass | no whitespace errors in committed branch diff or working-tree state-doc diff | none |
+| Round 4 rereview | pass | Bounded `bug_prior` checked Ask Selection promotion/cancel generation, provider fallback, selected-text fallback, modifier-only event ordering, marketing access/auth refactors, and UI surfaces; no verified local fix finding survived. `smaller_delta` found no safe reduction that lowers merge risk. `skeptic_falsifier` rejected standalone-browser Tauri bridge errors as a non-production probe limitation after the shimmed UI probe passed. | none |
 
 ## Remaining Human Decisions
 
@@ -87,20 +103,21 @@ Do not stop because one round passed after fixes unless that round was a fresh r
 
 - Full native `scripts/release-transcribe-smoke.mjs` was not run. The preflight passed, and the changed script path was reviewed, but the full flow is invasive desktop automation that launches Uttr and TextEdit.
 - The plain `/` browser entry is Tauri-dependent and can throw without mocked Tauri globals; Round 3 used `ux-review.html` with repo mocks for browser-level evidence.
+- Directly opening `src/ask-selection/index.html` in a plain browser without a Tauri shim throws bridge errors from `@tauri-apps/api/event`; the actual app runs inside Tauri, and Round 4 verified the panel through the shimmed Ask Selection probe.
 
 ## Resume State
 
 - Current status: done
 - Current phase: complete
-- Last completed step: committed validated Round 3 implementation changes in `053c70e` and confirmed final git status has no uncommitted implementation changes
+- Last completed step: completed Round 4 fresh review and validation over latest `origin/main...HEAD`
 - Active step: none
 - Next exact action: none
 - Blockers: none
-- Last validation: `npx react-doctor@latest --verbose --no-score`, `npx tsc --noEmit`, `npx eslint src`, `npm --prefix marketing-site run lint`, `npm run build`, `cargo test`, full-system Playwright spec, UX review browser sweep, release smoke preflight, and `git diff --check` passed
-- Protected paths: implementation fixes committed in `0d292e1` and `053c70e`; only this untracked state document remains dirty
-- Evidence paths: `tasks/merge-review-deliver-ask-selection.md`; `agents-scratch/merge-review/ux-review-*.png`; `agents-scratch/merge-review/ux-review-mobile-*.png`; `agents-scratch/merge-review/output/ask-selection-*.png`
+- Last validation: `npm run build`, `npm run lint`, `cargo test`, `npm --prefix marketing-site run lint`, `npm --prefix marketing-site test`, full-system Playwright spec, Ask Selection shimmed UI probe, UX review browser sweep, release smoke preflight, and `git diff --check` passed in Round 4
+- Protected paths: implementation fixes committed in `0d292e1`, `053c70e`, and `9dda44f`; only this tracked state document remains dirty from Round 4
+- Evidence paths: `tasks/merge-review-deliver-ask-selection.md`; `agents-scratch/merge-review/round4-ux-*.png`; `agents-scratch/merge-review/output/ask-selection-*.png`
 
 ## Final Merge-Readiness Verdict
 
 - Verdict: merge-ready under `$merge-review`
-- Reason: all verified `Disposition: fix` findings (`AS-1`, `RD-1`) were fixed, validated, committed, and rereviewed. Final status has no uncommitted implementation changes; only this untracked review artifact remains dirty.
+- Reason: all verified `Disposition: fix` findings (`AS-1`, `RD-1`) were fixed, validated, committed, and rereviewed. Round 4 found no new `Disposition: fix` findings over the latest branch. Final status has no uncommitted implementation changes; only this tracked review artifact is dirty from the current merge-review update.
