@@ -63,6 +63,9 @@ const CHUNK_FORCE_WAIT_SAMPLES: usize = SAMPLE_RATE * 2; // 2s of additional spe
 const CHUNK_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const CHUNK_WARMUP_DURATION: Duration = Duration::from_secs(10);
 const STOP_IN_FLIGHT_WAIT: Duration = Duration::from_secs(4);
+const INCREMENTAL_TAIL_BASE_TIMEOUT: Duration = Duration::from_secs(6);
+const INCREMENTAL_TAIL_TIMEOUT_PER_CHUNK: Duration = Duration::from_secs(4);
+const INCREMENTAL_TAIL_MAX_TIMEOUT: Duration = Duration::from_secs(30);
 const MAX_TOKEN_OVERLAP: usize = 25;
 const MODEL_LOADING_WAIT_TIMEOUT: Duration = Duration::from_secs(12);
 const LIVE_TRANSCRIPTION_OVERLAP_SAMPLES: usize = SAMPLE_RATE * 10;
@@ -73,6 +76,7 @@ const QUIET_AUDIO_MAX_PEAK: f32 = 0.92;
 const QUIET_AUDIO_MAX_GAIN: f32 = 4.0;
 const QUIET_AUDIO_MIN_GAIN: f32 = 1.15;
 const MIN_INCREMENTAL_FINALIZATION_CHUNKS: u64 = 2;
+const MIN_ONE_CHUNK_INCREMENTAL_FINALIZATION_SAMPLES: usize = SAMPLE_RATE * 15;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CloudTranscriptionRoute {
@@ -391,6 +395,17 @@ pub(crate) fn stitch_transcription_text(existing: &mut String, incoming: &str) {
 
 fn has_enough_incremental_chunks_for_finalization(chunk_count: u64) -> bool {
     chunk_count >= MIN_INCREMENTAL_FINALIZATION_CHUNKS
+}
+
+fn has_enough_incremental_progress_for_finalization(chunk_count: u64, sample_count: usize) -> bool {
+    has_enough_incremental_chunks_for_finalization(chunk_count)
+        || (chunk_count >= 1 && sample_count >= MIN_ONE_CHUNK_INCREMENTAL_FINALIZATION_SAMPLES)
+}
+
+fn incremental_tail_timeout(chunk_count: u64) -> Duration {
+    let timeout = INCREMENTAL_TAIL_BASE_TIMEOUT
+        + INCREMENTAL_TAIL_TIMEOUT_PER_CHUNK.saturating_mul(chunk_count as u32);
+    timeout.min(INCREMENTAL_TAIL_MAX_TIMEOUT)
 }
 
 fn safe_live_chunk_limit_bytes(route: CloudTranscriptionRoute) -> usize {
@@ -2009,20 +2024,21 @@ impl TranscriptionManager {
                         if self.cancel_requested.load(Ordering::Relaxed) {
                             break 'chunking;
                         }
-                        if !runtime.stop_requested.load(Ordering::Relaxed) {
-                            let mut assembled = runtime.assembled_raw.lock().unwrap();
-                            append_stitched_text(&mut assembled, &chunk_text);
-                            runtime.next_chunk_start.store(chunk_end, Ordering::Relaxed);
-                            let count = runtime.chunk_count.fetch_add(1, Ordering::Relaxed) + 1;
-                            debug!(
-                                "Incremental chunk {} completed in {}ms (speech_len={} samples)",
-                                count,
-                                chunk_st.elapsed().as_millis(),
-                                chunk_end
-                            );
-                        }
+                        let mut assembled = runtime.assembled_raw.lock().unwrap();
+                        append_stitched_text(&mut assembled, &chunk_text);
+                        runtime.next_chunk_start.store(chunk_end, Ordering::Relaxed);
+                        let count = runtime.chunk_count.fetch_add(1, Ordering::Relaxed) + 1;
+                        debug!(
+                            "Incremental chunk {} completed in {}ms (speech_len={} samples)",
+                            count,
+                            chunk_st.elapsed().as_millis(),
+                            chunk_end
+                        );
                         saw_pause = false;
                         made_progress = true;
+                        if runtime.stop_requested.load(Ordering::Relaxed) {
+                            break 'chunking;
+                        }
                     }
                     Err(err) => {
                         runtime.failed.store(true, Ordering::Relaxed);
@@ -2097,6 +2113,20 @@ impl TranscriptionManager {
         }
 
         if session.runtime.failed.load(Ordering::Relaxed) {
+            let completed_chunk_count = session.runtime.chunk_count.load(Ordering::Relaxed);
+            let next_chunk_start = session.runtime.next_chunk_start.load(Ordering::Relaxed);
+            if has_enough_incremental_progress_for_finalization(
+                completed_chunk_count,
+                full_samples.len(),
+            ) {
+                return self.finalize_completed_incremental_chunks(
+                    &session.runtime,
+                    completed_chunk_count,
+                    next_chunk_start,
+                    0,
+                    "chunking_failed",
+                );
+            }
             return Err(anyhow::anyhow!(
                 "Incremental chunking failed; using full-pass fallback"
             ));
@@ -2107,7 +2137,10 @@ impl TranscriptionManager {
         }
 
         let completed_chunk_count = session.runtime.chunk_count.load(Ordering::Relaxed);
-        if !has_enough_incremental_chunks_for_finalization(completed_chunk_count) {
+        if !has_enough_incremental_progress_for_finalization(
+            completed_chunk_count,
+            full_samples.len(),
+        ) {
             return Err(anyhow::anyhow!(
                 "Only {} incremental chunk(s) completed; using full-pass fallback",
                 completed_chunk_count
@@ -2127,23 +2160,34 @@ impl TranscriptionManager {
         } else {
             Vec::new()
         };
+        let tail_sample_count = tail_audio.len();
+        info!(
+            "Incremental finalization state completed_chunks={} next_chunk_start={} full_samples={} tail_samples={}",
+            completed_chunk_count,
+            next_chunk_start,
+            full_samples.len(),
+            tail_sample_count
+        );
 
         if !tail_audio.is_empty() {
             session.runtime.in_flight.store(true, Ordering::Relaxed);
             let tail_st = Instant::now();
             let settings = get_settings(&self.app_handle);
-            let tail_result = self
-                .transcribe_raw_with_settings(
+            let tail_timeout = incremental_tail_timeout(completed_chunk_count);
+            let tail_result = timeout(
+                tail_timeout,
+                self.transcribe_raw_with_settings(
                     tail_audio,
                     &settings,
                     false,
                     groq_client::ProxyTranscriptionMetadata::default(),
-                )
-                .await;
+                ),
+            )
+            .await;
             session.runtime.in_flight.store(false, Ordering::Relaxed);
 
             match tail_result {
-                Ok(tail_text) => {
+                Ok(Ok(tail_text)) => {
                     if self.cancel_requested.load(Ordering::Relaxed) {
                         return Err(anyhow::anyhow!("Transcription cancelled"));
                     }
@@ -2154,11 +2198,32 @@ impl TranscriptionManager {
                         tail_st.elapsed().as_millis()
                     );
                 }
-                Err(err) => {
-                    return Err(anyhow::anyhow!(
-                        "Failed to transcribe incremental tail: {}",
-                        err
-                    ));
+                Ok(Err(err)) => {
+                    warn!(
+                        "Incremental tail failed after {} completed chunk(s); using completed chunks: {}",
+                        completed_chunk_count, err
+                    );
+                    return self.finalize_completed_incremental_chunks(
+                        &session.runtime,
+                        completed_chunk_count,
+                        next_chunk_start,
+                        tail_sample_count,
+                        "tail_failed",
+                    );
+                }
+                Err(_) => {
+                    warn!(
+                        "Incremental tail timed out after {}s with {} completed chunk(s); using completed chunks",
+                        tail_timeout.as_secs(),
+                        completed_chunk_count
+                    );
+                    return self.finalize_completed_incremental_chunks(
+                        &session.runtime,
+                        completed_chunk_count,
+                        next_chunk_start,
+                        tail_sample_count,
+                        "tail_timed_out",
+                    );
                 }
             }
         }
@@ -2179,6 +2244,40 @@ impl TranscriptionManager {
         info!(
             "Incremental transcription finalized with {} chunk(s)",
             completed_chunk_count
+        );
+
+        self.maybe_unload_immediately("incremental transcription");
+
+        Ok(final_result)
+    }
+
+    fn finalize_completed_incremental_chunks(
+        &self,
+        runtime: &IncrementalRuntime,
+        completed_chunk_count: u64,
+        next_chunk_start: usize,
+        tail_samples: usize,
+        reason: &str,
+    ) -> Result<String> {
+        let raw = runtime.assembled_raw.lock().unwrap().clone();
+        if raw.trim().is_empty() {
+            return Err(anyhow::anyhow!(
+                "Incremental assembly was empty; using full-pass fallback"
+            ));
+        }
+
+        if self.cancel_requested.load(Ordering::Relaxed) {
+            return Err(anyhow::anyhow!("Transcription cancelled"));
+        }
+
+        let settings = get_settings(&self.app_handle);
+        let final_result = self.apply_transcription_filters(raw, &settings);
+        info!(
+            "Incremental transcription finalized from completed chunks reason={} completed_chunks={} next_chunk_start={} tail_samples={}",
+            reason,
+            completed_chunk_count,
+            next_chunk_start,
+            tail_samples
         );
 
         self.maybe_unload_immediately("incremental transcription");
@@ -2548,6 +2647,29 @@ mod tests {
         assert!(!has_enough_incremental_chunks_for_finalization(0));
         assert!(!has_enough_incremental_chunks_for_finalization(1));
         assert!(has_enough_incremental_chunks_for_finalization(2));
+    }
+
+    #[test]
+    fn incremental_finalization_allows_one_chunk_for_long_recordings() {
+        assert!(!has_enough_incremental_progress_for_finalization(
+            1,
+            SAMPLE_RATE * 14
+        ));
+        assert!(has_enough_incremental_progress_for_finalization(
+            1,
+            SAMPLE_RATE * 15
+        ));
+        assert!(has_enough_incremental_progress_for_finalization(
+            2,
+            SAMPLE_RATE * 10
+        ));
+    }
+
+    #[test]
+    fn incremental_tail_timeout_scales_and_caps() {
+        assert_eq!(incremental_tail_timeout(0), Duration::from_secs(6));
+        assert_eq!(incremental_tail_timeout(2), Duration::from_secs(14));
+        assert_eq!(incremental_tail_timeout(10), Duration::from_secs(30));
     }
 
     #[test]

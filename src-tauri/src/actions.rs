@@ -2724,36 +2724,22 @@ fn handle_transcription_stop(
             && samples.len() >= SHORT_UTTERANCE_SAMPLES
             && has_incremental_progress
         {
-            match timeout(
-                Duration::from_secs(6),
-                tm_for_worker.finish_incremental_session(&binding_id, &samples),
-            )
-            .await
+            debug!("Finishing incremental transcription with manager-bounded finalization");
+            match tm_for_worker
+                .finish_incremental_session(&binding_id, &samples)
+                .await
             {
-                Ok(Ok(text)) => {
+                Ok(text) => {
                     debug!(
                         "Incremental transcription finalized in {:?}",
                         transcription_time.elapsed()
                     );
                     Ok(text)
                 }
-                Ok(Err(incremental_err)) => {
+                Err(incremental_err) => {
                     warn!(
                         "Incremental path unavailable, falling back to full-pass transcription: {}",
                         incremental_err
-                    );
-                    tm_for_worker.cancel_incremental_session();
-                    transcribe_full_pass_with_timeout(
-                        &tm_for_worker,
-                        samples,
-                        transcription_source_for_binding(&binding_id),
-                        transcription_timeout,
-                    )
-                    .await
-                }
-                Err(_) => {
-                    warn!(
-                        "Incremental finalization timed out; falling back to full-pass transcription"
                     );
                     tm_for_worker.cancel_incremental_session();
                     transcribe_full_pass_with_timeout(
