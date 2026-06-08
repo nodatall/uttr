@@ -2319,19 +2319,6 @@ impl TranscriptionManager {
             || session.runtime.next_chunk_start.load(Ordering::Relaxed) > 0
     }
 
-    pub fn incremental_completed_chunk_count(&self, binding_id: &str) -> u64 {
-        let guard = self.incremental_session.lock().unwrap();
-        let Some(session) = guard.as_ref() else {
-            return 0;
-        };
-
-        if session.binding_id != binding_id {
-            return 0;
-        }
-
-        session.runtime.chunk_count.load(Ordering::Relaxed)
-    }
-
     pub fn cancel_incremental_session(&self) {
         let mut guard = self.incremental_session.lock().unwrap();
         if let Some(session) = guard.take() {
