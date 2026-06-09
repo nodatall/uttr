@@ -530,16 +530,81 @@ impl AudioRecordingManager {
                     self.close_on_demand_stream();
                 }
 
-                // Pad if very short
-                let s_len = samples.len();
-                // debug!("Got {} samples", s_len);
-                if s_len < WHISPER_SAMPLE_RATE && s_len > 0 {
-                    let mut padded = samples;
-                    padded.resize(WHISPER_SAMPLE_RATE * 5 / 4, 0.0);
-                    Some(padded)
-                } else {
-                    Some(samples)
-                }
+                Some(pad_short_recording_samples(samples))
+            }
+            _ => None,
+        }
+    }
+
+    pub fn borrow_recording_binding_with_boundary(
+        &self,
+        from_binding_id: &str,
+        to_binding_id: &str,
+    ) -> bool {
+        if !self.is_recording_binding(from_binding_id) {
+            return false;
+        }
+
+        // Clear any audio captured for the previous owner so the borrowed
+        // recording starts from a fresh sample boundary.
+        let Some(boundary) = self.drain_recording_delta(from_binding_id) else {
+            warn!(
+                "Unable to borrow recording from '{}' to '{}' because the sample boundary drain failed",
+                from_binding_id, to_binding_id
+            );
+            return false;
+        };
+        let drained_sample_count = boundary.samples.len();
+
+        let mut state = self.state.lock().unwrap();
+        match *state {
+            RecordingState::Recording {
+                binding_id: ref active,
+            } if active == from_binding_id => {
+                *state = RecordingState::Recording {
+                    binding_id: to_binding_id.to_string(),
+                };
+                *self.recording_started_at.lock().unwrap() = Some(Instant::now());
+                info!(
+                    "Borrowed active recording binding from '{}' to '{}' after draining {} sample(s)",
+                    from_binding_id, to_binding_id, drained_sample_count
+                );
+                true
+            }
+            _ => false,
+        }
+    }
+
+    pub fn finish_borrowed_recording_and_restore(
+        &self,
+        borrowed_binding_id: &str,
+        restore_binding_id: &str,
+    ) -> Option<Vec<f32>> {
+        let is_borrowed_recording = self.is_recording_binding(borrowed_binding_id);
+        if !is_borrowed_recording {
+            return None;
+        }
+
+        let samples = self
+            .drain_recording_delta(borrowed_binding_id)
+            .map(|delta| delta.samples)
+            .unwrap_or_default();
+
+        let mut state = self.state.lock().unwrap();
+        match *state {
+            RecordingState::Recording {
+                binding_id: ref active,
+            } if active == borrowed_binding_id => {
+                *state = RecordingState::Recording {
+                    binding_id: restore_binding_id.to_string(),
+                };
+                *self.recording_started_at.lock().unwrap() = Some(Instant::now());
+                *self.is_recording.lock().unwrap() = true;
+                info!(
+                    "Finished borrowed recording '{}' and restored microphone binding '{}'",
+                    borrowed_binding_id, restore_binding_id
+                );
+                Some(pad_short_recording_samples(samples))
             }
             _ => None,
         }
@@ -676,5 +741,34 @@ impl AudioRecordingManager {
 
             self.close_on_demand_stream();
         }
+    }
+}
+
+fn pad_short_recording_samples(samples: Vec<f32>) -> Vec<f32> {
+    let s_len = samples.len();
+    if s_len < WHISPER_SAMPLE_RATE && s_len > 0 {
+        let mut padded = samples;
+        padded.resize(WHISPER_SAMPLE_RATE * 5 / 4, 0.0);
+        padded
+    } else {
+        samples
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{pad_short_recording_samples, WHISPER_SAMPLE_RATE};
+
+    #[test]
+    fn short_recording_samples_are_padded_for_transcription() {
+        let padded = pad_short_recording_samples(vec![0.25, -0.25]);
+
+        assert_eq!(padded.len(), WHISPER_SAMPLE_RATE * 5 / 4);
+        assert_eq!(&padded[..2], &[0.25, -0.25]);
+    }
+
+    #[test]
+    fn empty_recording_samples_stay_empty() {
+        assert!(pad_short_recording_samples(Vec::new()).is_empty());
     }
 }

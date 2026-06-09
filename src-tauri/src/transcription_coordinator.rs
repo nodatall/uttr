@@ -28,13 +28,26 @@ enum Command {
     Cancel {
         recording_was_active: bool,
     },
-    ProcessingFinished,
+    ProcessingFinished {
+        binding_id: String,
+    },
 }
 
 /// Pipeline lifecycle, owned exclusively by the coordinator thread.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum QuickDictationStage {
+    Recording(String),
+    Processing(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum Stage {
     Idle,
     Recording(String), // binding_id
+    MeetingRecording {
+        binding_id: String,
+        quick_dictation: Option<QuickDictationStage>,
+    },
     Processing,
 }
 
@@ -42,6 +55,18 @@ fn stage_label(stage: &Stage) -> String {
     match stage {
         Stage::Idle => "Idle".to_string(),
         Stage::Recording(binding_id) => format!("Recording({binding_id})"),
+        Stage::MeetingRecording {
+            binding_id,
+            quick_dictation,
+        } => match quick_dictation {
+            Some(QuickDictationStage::Recording(quick_binding)) => {
+                format!("MeetingRecording({binding_id}, quick=Recording({quick_binding}))")
+            }
+            Some(QuickDictationStage::Processing(quick_binding)) => {
+                format!("MeetingRecording({binding_id}, quick=Processing({quick_binding}))")
+            }
+            None => format!("MeetingRecording({binding_id})"),
+        },
         Stage::Processing => "Processing".to_string(),
     }
 }
@@ -178,6 +203,16 @@ impl TranscriptionCoordinator {
                             transcribe_binding_push_to_talk(&binding_id, push_to_talk);
 
                         if push_to_talk {
+                            if handle_meeting_quick_dictation_input(
+                                &app,
+                                &mut stage,
+                                &binding_id,
+                                &hotkey_string,
+                                is_pressed,
+                            ) {
+                                continue;
+                            }
+
                             if is_pressed && matches!(stage, Stage::Idle) {
                                 if push_to_talk_suppression
                                     .suppresses_press(&binding_id, Instant::now())
@@ -264,6 +299,13 @@ impl TranscriptionCoordinator {
                                     stop(&app, &mut stage, &binding_id, &hotkey_string);
                                     processing_started_at = Some(Instant::now());
                                 }
+                                Stage::MeetingRecording {
+                                    binding_id: active_binding_id,
+                                    quick_dictation: None,
+                                } if active_binding_id == &binding_id => {
+                                    stop(&app, &mut stage, &binding_id, &hotkey_string);
+                                    processing_started_at = Some(Instant::now());
+                                }
                                 _ => debug!("Ignoring press for '{binding_id}': pipeline busy"),
                             }
                         }
@@ -280,9 +322,11 @@ impl TranscriptionCoordinator {
                             last_press = None;
                         }
                     }
-                    Command::ProcessingFinished => {
-                        stage = Stage::Idle;
-                        processing_started_at = None;
+                    Command::ProcessingFinished { binding_id } => {
+                        finish_processing_stage(&mut stage, &binding_id);
+                        if matches!(stage, Stage::Idle) {
+                            processing_started_at = None;
+                        }
                     }
                 }
             }
@@ -333,8 +377,10 @@ impl TranscriptionCoordinator {
         });
     }
 
-    pub fn notify_processing_finished(&self) {
-        self.send_with_recovery(Command::ProcessingFinished);
+    pub fn notify_processing_finished(&self, binding_id: &str) {
+        self.send_with_recovery(Command::ProcessingFinished {
+            binding_id: binding_id.to_string(),
+        });
     }
 }
 
@@ -354,7 +400,14 @@ fn start(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &s
         .map_or(false, |a| a.is_active());
 
     if transcription_session_is_active(audio_recording_active, full_system_active) {
-        *stage = Stage::Recording(binding_id.to_string());
+        *stage = if binding_id == "transcribe_full_system_audio" && full_system_active {
+            Stage::MeetingRecording {
+                binding_id: binding_id.to_string(),
+                quick_dictation: None,
+            }
+        } else {
+            Stage::Recording(binding_id.to_string())
+        };
         info!(
             "[latency] coordinator start active binding={} elapsed_ms={}",
             binding_id,
@@ -369,6 +422,116 @@ fn start(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &s
                 start_time.elapsed().as_millis()
             );
         }
+    }
+}
+
+fn handle_meeting_quick_dictation_input(
+    app: &AppHandle,
+    stage: &mut Stage,
+    binding_id: &str,
+    hotkey_string: &str,
+    is_pressed: bool,
+) -> bool {
+    let Stage::MeetingRecording {
+        binding_id: meeting_binding_id,
+        quick_dictation,
+    } = stage
+    else {
+        return false;
+    };
+
+    if binding_id != "transcribe" {
+        return false;
+    }
+
+    match (is_pressed, quick_dictation.clone()) {
+        (true, None) => {
+            start_meeting_quick_dictation(
+                app,
+                meeting_binding_id,
+                quick_dictation,
+                binding_id,
+                hotkey_string,
+            );
+            true
+        }
+        (false, Some(QuickDictationStage::Recording(active))) if active == binding_id => {
+            stop_meeting_quick_dictation(app, quick_dictation, binding_id, hotkey_string);
+            true
+        }
+        (true, Some(_)) => {
+            debug!("Ignoring quick dictation press while meeting quick dictation is active");
+            true
+        }
+        (false, _) => true,
+    }
+}
+
+fn start_meeting_quick_dictation(
+    app: &AppHandle,
+    meeting_binding_id: &str,
+    quick_dictation: &mut Option<QuickDictationStage>,
+    binding_id: &str,
+    hotkey_string: &str,
+) {
+    let Some(action) = ACTION_MAP.get(binding_id) else {
+        warn!("No action in ACTION_MAP for '{binding_id}'");
+        return;
+    };
+    action.start(app, binding_id, hotkey_string);
+
+    let audio_recording_active = app
+        .try_state::<Arc<AudioRecordingManager>>()
+        .and_then(|a| a.current_recording_started_at(binding_id))
+        .is_some();
+
+    if audio_recording_active {
+        *quick_dictation = Some(QuickDictationStage::Recording(binding_id.to_string()));
+        info!(
+            "Started quick dictation '{}' while meeting '{}' remains active",
+            binding_id, meeting_binding_id
+        );
+    } else {
+        warn!(
+            "Quick dictation '{}' did not start while meeting '{}' remains active",
+            binding_id, meeting_binding_id
+        );
+    }
+}
+
+fn stop_meeting_quick_dictation(
+    app: &AppHandle,
+    quick_dictation: &mut Option<QuickDictationStage>,
+    binding_id: &str,
+    hotkey_string: &str,
+) {
+    let Some(action) = ACTION_MAP.get(binding_id) else {
+        warn!("No action in ACTION_MAP for '{binding_id}'");
+        return;
+    };
+    action.stop(app, binding_id, hotkey_string);
+    *quick_dictation = Some(QuickDictationStage::Processing(binding_id.to_string()));
+    info!(
+        "Stopped quick dictation '{}' while meeting remains active",
+        binding_id
+    );
+}
+
+fn finish_processing_stage(stage: &mut Stage, binding_id: &str) {
+    match stage {
+        Stage::MeetingRecording {
+            binding_id: meeting_binding_id,
+            quick_dictation: Some(QuickDictationStage::Processing(active)),
+        } if active == binding_id => {
+            *stage = Stage::MeetingRecording {
+                binding_id: meeting_binding_id.clone(),
+                quick_dictation: None,
+            };
+        }
+        Stage::Processing => {
+            *stage = Stage::Idle;
+        }
+        _ => {}
     }
 }
 
@@ -447,9 +610,10 @@ fn stop(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &st
 #[cfg(test)]
 mod tests {
     use super::{
-        is_transcribe_binding, release_received_before_recording_started, should_debounce_press,
-        transcribe_binding_push_to_talk, transcription_session_is_active, PushToTalkSuppression,
-        DEBOUNCE, SUPPRESS_AFTER_IGNORED_PUSH_TO_TALK_RELEASE,
+        finish_processing_stage, is_transcribe_binding, release_received_before_recording_started,
+        should_debounce_press, transcribe_binding_push_to_talk, transcription_session_is_active,
+        PushToTalkSuppression, QuickDictationStage, Stage, DEBOUNCE,
+        SUPPRESS_AFTER_IGNORED_PUSH_TO_TALK_RELEASE,
     };
     use std::time::{Duration, Instant};
 
@@ -498,6 +662,40 @@ mod tests {
         assert!(transcription_session_is_active(false, true));
         assert!(transcription_session_is_active(true, true));
         assert!(!transcription_session_is_active(false, false));
+    }
+
+    #[test]
+    fn quick_dictation_finish_returns_to_meeting_recording_stage() {
+        let mut stage = Stage::MeetingRecording {
+            binding_id: "transcribe_full_system_audio".to_string(),
+            quick_dictation: Some(QuickDictationStage::Processing("transcribe".to_string())),
+        };
+
+        finish_processing_stage(&mut stage, "transcribe");
+
+        assert_eq!(
+            stage,
+            Stage::MeetingRecording {
+                binding_id: "transcribe_full_system_audio".to_string(),
+                quick_dictation: None,
+            }
+        );
+        assert!(matches!(
+            stage,
+            Stage::MeetingRecording {
+                binding_id,
+                quick_dictation: None
+            } if binding_id == "transcribe_full_system_audio"
+        ));
+    }
+
+    #[test]
+    fn meeting_processing_finish_returns_to_idle() {
+        let mut stage = Stage::Processing;
+
+        finish_processing_stage(&mut stage, "transcribe_full_system_audio");
+
+        assert_eq!(stage, Stage::Idle);
     }
 
     #[test]

@@ -48,7 +48,7 @@ impl FullSystemSourceOutcome {
         }
     }
 
-    fn is_active(&self) -> bool {
+    pub fn is_active(&self) -> bool {
         matches!(self.state, FullSystemSessionSourceState::Active)
     }
 }
@@ -240,6 +240,10 @@ where
 
     pub fn is_idle(&self) -> bool {
         self.state.lock().unwrap().is_idle()
+    }
+
+    pub fn active_snapshot(&self) -> Option<FullSystemSessionSnapshot> {
+        self.state.lock().unwrap().snapshot()
     }
 
     pub fn start_session(
