@@ -248,7 +248,7 @@ fn restore_ui_after_transcription(
 
             if should_restore_meeting_ui(completion_context, active_meeting_binding.as_deref()) {
                 emit_active_session_window_state(app);
-                show_recording_overlay(app);
+                utils::hide_recording_overlay(app);
                 change_tray_icon(app, TrayIconState::Recording);
                 shortcut::register_cancel_shortcut(app);
                 return;
@@ -3670,7 +3670,6 @@ impl ShortcutAction for FullSystemTranscribeAction {
         let rm = app.state::<Arc<AudioRecordingManager>>();
 
         let is_always_on = settings.always_on_microphone;
-        let should_show_warming = !is_always_on && !rm.is_microphone_open();
         debug!("Full-system mode - always_on: {}", is_always_on);
 
         change_tray_icon(app, TrayIconState::Recording);
@@ -3699,22 +3698,13 @@ impl ShortcutAction for FullSystemTranscribeAction {
                 focus_workspace_window(app);
                 emit_active_session_window_state(app);
                 start_full_system_live_session(app, &binding_id);
-                show_recording_overlay(app);
                 log::info!(
-                    "[latency] full-system overlay requested binding={} warming=false elapsed_ms={}",
+                    "[latency] full-system session UI active binding={} elapsed_ms={}",
                     binding_id,
                     start_time.elapsed().as_millis()
                 );
             }
         } else {
-            if should_show_warming {
-                show_warming_overlay(app);
-                log::info!(
-                    "[latency] full-system overlay requested binding={} warming=true elapsed_ms={}",
-                    binding_id,
-                    start_time.elapsed().as_millis()
-                );
-            }
             let recording_start_time = Instant::now();
             if full_system_audio
                 .start_session(&binding_id, start_config)
@@ -3724,9 +3714,8 @@ impl ShortcutAction for FullSystemTranscribeAction {
                 focus_workspace_window(app);
                 emit_active_session_window_state(app);
                 start_full_system_live_session(app, &binding_id);
-                show_recording_overlay(app);
                 log::info!(
-                    "[latency] full-system overlay requested binding={} warming=false elapsed_ms={}",
+                    "[latency] full-system session UI active binding={} elapsed_ms={}",
                     binding_id,
                     start_time.elapsed().as_millis()
                 );

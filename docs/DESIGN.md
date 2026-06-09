@@ -159,6 +159,8 @@ Pills are for status, selected model/provider state, and compact metadata. Avoid
 
 The recording overlay should feel immediate and lightweight. It may use the app font and accent colors, but it must not look like a settings card. Warm, recording, transcribing, and processing states should be visually distinct without adding heavy borders.
 
+Full-system meeting recording uses the session/settings surface for status and should not show the compact bottom recording overlay while passively recording. If normal dictation runs during a meeting, show the compact overlay only for that nested dictation/transcribing flow, then return to the meeting state with the bottom overlay hidden.
+
 ## Ask Selection Panel
 
 Ask Selection uses the compact bottom recording overlay while the user is speaking, then hides that bottom overlay when the interactive floating chat panel opens for thinking, answers, errors, and follow-up chat. The panel should use the settings-style dark translucent surface, subtle border, compact top-right close button, and the shared rose loader for thinking/loading. Do not show a title in the panel, explanatory copy hints, placeholder text, or a visible send button. Assistant answers can be clicked to copy while keeping the answer visible and showing only a small `Copied` status in the header. Follow-up messages send with Enter; Shift+Enter inserts a newline.
