@@ -276,6 +276,14 @@ fn should_restore_meeting_ui(
     }
 }
 
+fn completion_context_for_active_meeting(
+    active_meeting_binding: Option<String>,
+) -> TranscriptionCompletionContext {
+    active_meeting_binding
+        .map(|binding_id| TranscriptionCompletionContext::ReturnToMeeting { binding_id })
+        .unwrap_or(TranscriptionCompletionContext::Standalone)
+}
+
 fn restore_ui_or_show_no_input_feedback(
     app: &AppHandle,
     completion_context: &TranscriptionCompletionContext,
@@ -1166,6 +1174,16 @@ fn start_transcription_session(app: &AppHandle, binding_id: &str, started: bool)
         "Transcription session start completed for '{}' (started={})",
         binding_id, started
     );
+}
+
+fn active_meeting_binding_for_quick_dictation(app: &AppHandle, binding_id: &str) -> Option<String> {
+    if binding_id != "transcribe" {
+        return None;
+    }
+
+    app.try_state::<Arc<FullSystemAudioSessionManager>>()
+        .and_then(|manager| manager.active_snapshot())
+        .map(|snapshot| snapshot.binding_id)
 }
 
 fn meeting_microphone_binding_for_quick_dictation(
@@ -3600,6 +3618,7 @@ impl ShortcutAction for TranscribeAction {
             tm.signal_incremental_stop(binding_id);
         }
         let recording_duration = rm.current_recording_duration(binding_id);
+        let active_meeting_binding = active_meeting_binding_for_quick_dictation(app, binding_id);
         let meeting_restore_binding =
             meeting_microphone_binding_for_quick_dictation(app, binding_id);
         let samples = if let Some(meeting_binding_id) = meeting_restore_binding.as_deref() {
@@ -3607,9 +3626,7 @@ impl ShortcutAction for TranscribeAction {
         } else {
             rm.stop_recording(binding_id)
         };
-        let completion_context = meeting_restore_binding
-            .map(|binding_id| TranscriptionCompletionContext::ReturnToMeeting { binding_id })
-            .unwrap_or(TranscriptionCompletionContext::Standalone);
+        let completion_context = completion_context_for_active_meeting(active_meeting_binding);
         let restore_meeting_after_quick_dictation = matches!(
             completion_context,
             TranscriptionCompletionContext::ReturnToMeeting { .. }
@@ -4046,10 +4063,10 @@ mod tests {
         ask_selection_message, ask_selection_session_is_current,
         build_ask_selection_follow_up_prompt, build_ask_selection_prompt,
         build_live_summary_prompt, clean_ask_selection_response, clean_post_process_response,
-        clear_ask_selection_session, current_ask_selection_messages,
-        current_ask_selection_session_id, custom_vocabulary_prompt_block,
-        format_labeled_transcript_segments, friendly_live_summary_error,
-        is_effectively_silent_audio, is_supported_post_process_model,
+        clear_ask_selection_session, completion_context_for_active_meeting,
+        current_ask_selection_messages, current_ask_selection_session_id,
+        custom_vocabulary_prompt_block, format_labeled_transcript_segments,
+        friendly_live_summary_error, is_effectively_silent_audio, is_supported_post_process_model,
         normalize_live_summary_output, parse_meeting_summary_state,
         render_meeting_summary_markdown, resolved_post_process_system_prompt,
         select_preferred_groq_model, should_pause_live_summaries,
@@ -4103,6 +4120,18 @@ mod tests {
         assert!(!should_restore_meeting_ui(
             &TranscriptionCompletionContext::Standalone,
             Some("transcribe_full_system_audio")
+        ));
+    }
+
+    #[test]
+    fn system_only_meeting_quick_dictation_still_restores_meeting_context() {
+        let context =
+            completion_context_for_active_meeting(Some("transcribe_full_system_audio".to_string()));
+
+        assert!(matches!(
+            context,
+            TranscriptionCompletionContext::ReturnToMeeting { ref binding_id }
+                if binding_id == "transcribe_full_system_audio"
         ));
     }
 
