@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, mock, test } from "bun:test";
-import type Stripe from "stripe";
+import StripeSdk, { type Stripe } from "stripe";
 
 type StripeWebhookEvent = Stripe.Event & {
   data: {
@@ -17,6 +17,7 @@ const sendTransactionalEmailCalls: Array<Record<string, unknown>> = [];
 const beginWebhookEventCalls: Array<[string, string]> = [];
 const completeWebhookEventCalls: string[] = [];
 const failWebhookEventCalls: Array<[string, string]> = [];
+const constructEventCalls: Array<[string, string, string]> = [];
 const callOrder: string[] = [];
 
 let beginWebhookEventResult: "process" | "duplicate" | "in_progress" =
@@ -117,6 +118,7 @@ beforeEach(() => {
   beginWebhookEventCalls.length = 0;
   completeWebhookEventCalls.length = 0;
   failWebhookEventCalls.length = 0;
+  constructEventCalls.length = 0;
   callOrder.length = 0;
   beginWebhookEventResult = "process";
   upsertEntitlementStateShouldFail = false;
@@ -135,6 +137,7 @@ afterEach(() => {
   beginWebhookEventCalls.length = 0;
   completeWebhookEventCalls.length = 0;
   failWebhookEventCalls.length = 0;
+  constructEventCalls.length = 0;
   callOrder.length = 0;
 });
 
@@ -268,7 +271,10 @@ function buildUnknownEvent(): StripeWebhookEvent {
 function buildStripeMock() {
   return {
     webhooks: {
-      constructEvent: () => stripeWebhookEvent,
+      constructEvent: (payload: string, signature: string, secret: string) => {
+        constructEventCalls.push([payload, signature, secret]);
+        return stripeWebhookEvent;
+      },
     },
     subscriptions: {
       retrieve: async () => ({
@@ -303,6 +309,33 @@ async function invokeWebhook() {
 }
 
 describe("stripe webhook pending checkout lifecycle", () => {
+  test("passes raw webhook body, signature, and secret to Stripe verification", async () => {
+    stripeWebhookEvent = buildCompletedEvent();
+
+    const response = await invokeWebhook();
+
+    expect(response.status).toBe(200);
+    expect(constructEventCalls).toEqual([["{}", "sig_test", "whsec_test"]]);
+  });
+
+  test("Stripe SDK accepts a signed test webhook payload", async () => {
+    const stripe = new StripeSdk("sk_test_webhook");
+    const payload = JSON.stringify(buildCompletedEvent());
+    const signature = await stripe.webhooks.generateTestHeaderStringAsync({
+      payload,
+      secret: "whsec_test",
+    });
+
+    const event = await stripe.webhooks.constructEventAsync(
+      payload,
+      signature,
+      "whsec_test",
+    );
+
+    expect(event.id).toBe("evt_completed_123");
+    expect(event.type).toBe("checkout.session.completed");
+  });
+
   test("marks completed checkout sessions and still syncs entitlement", async () => {
     stripeWebhookEvent = buildCompletedEvent();
 

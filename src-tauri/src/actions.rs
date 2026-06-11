@@ -52,6 +52,8 @@ const RELEASE_SMOKE_TRANSCRIBING_HOLD_MS_DEFAULT: u64 = 1_500;
 const FULL_SYSTEM_LIVE_CHUNK_SECONDS: usize = 10;
 const FULL_SYSTEM_LIVE_CHUNK_SAMPLES: usize = 16_000 * FULL_SYSTEM_LIVE_CHUNK_SECONDS;
 const FULL_SYSTEM_LIVE_CHUNK_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const FULL_SYSTEM_LIVE_WORKER_STOP_TIMEOUT: Duration = Duration::from_secs(15);
+const FULL_SYSTEM_LIVE_FINAL_CHUNK_EXTRA_TIMEOUT: Duration = Duration::from_secs(10);
 const FULL_SYSTEM_LIVE_SUMMARY_SECONDS: usize = 60;
 const FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL: u64 =
     (FULL_SYSTEM_LIVE_SUMMARY_SECONDS / FULL_SYSTEM_LIVE_CHUNK_SECONDS) as u64;
@@ -992,6 +994,10 @@ fn transcription_timeout_for_samples(sample_count: usize) -> Duration {
 
 fn transcription_watchdog_delay(sample_count: usize) -> Duration {
     transcription_timeout_for_samples(sample_count) + FULL_PASS_TRANSCRIPTION_WATCHDOG_GRACE
+}
+
+fn full_system_live_final_chunk_timeout(sample_count: usize) -> Duration {
+    transcription_watchdog_delay(sample_count) + FULL_SYSTEM_LIVE_FINAL_CHUNK_EXTRA_TIMEOUT
 }
 
 fn transcription_source_for_binding(binding_id: &str) -> Option<&'static str> {
@@ -2430,9 +2436,14 @@ async fn transcribe_full_system_live_chunk_sources(
     let mut segments = Vec::new();
 
     if chunk.source_samples.is_empty() {
-        let transcription = tm
-            .transcribe_with_source(chunk.mixed_samples, Some("full_system_audio"))
-            .await?;
+        let sample_count = chunk.mixed_samples.len();
+        let transcription = transcribe_full_pass_with_timeout(
+            tm,
+            chunk.mixed_samples,
+            Some("full_system_audio"),
+            transcription_timeout_for_samples(sample_count),
+        )
+        .await?;
         if !transcription.trim().is_empty() {
             return Ok(vec![LabeledTranscriptSegment {
                 source: FullSystemTranscriptionSource::SystemAudio,
@@ -2467,9 +2478,13 @@ async fn transcribe_full_system_live_chunk_sources(
             source_label,
             sample_count
         );
-        let text = tm
-            .transcribe_with_source(source_samples.samples, Some(source_id))
-            .await?;
+        let text = transcribe_full_pass_with_timeout(
+            tm,
+            source_samples.samples,
+            Some(source_id),
+            transcription_timeout_for_samples(sample_count),
+        )
+        .await?;
         log::info!(
             "[latency] full-system source transcription complete chunk={} source={} sample_count={} elapsed_ms={}",
             chunk_index,
@@ -2665,8 +2680,19 @@ async fn finish_full_system_live_session(
         .runtime
         .stop_requested
         .store(true, Ordering::Relaxed);
-    if let Err(error) = session.worker_handle.await {
-        warn!("Live full-system worker join error: {}", error);
+    let mut worker_handle = session.worker_handle;
+    match timeout(FULL_SYSTEM_LIVE_WORKER_STOP_TIMEOUT, &mut worker_handle).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            warn!("Live full-system worker join error: {}", error);
+        }
+        Err(_) => {
+            warn!(
+                "Live full-system worker did not stop within {:?}; aborting worker",
+                FULL_SYSTEM_LIVE_WORKER_STOP_TIMEOUT
+            );
+            worker_handle.abort();
+        }
     }
 
     let mut final_samples = {
@@ -2704,8 +2730,27 @@ async fn finish_full_system_live_session(
                 final_system_audio_samples,
             ),
         };
-        transcribe_and_summarize_live_chunk(app, &session.runtime, &tm, final_chunk, true, true)
-            .await;
+        let final_chunk_timeout =
+            full_system_live_final_chunk_timeout(final_chunk.mixed_samples.len());
+        if timeout(
+            final_chunk_timeout,
+            transcribe_and_summarize_live_chunk(
+                app,
+                &session.runtime,
+                &tm,
+                final_chunk,
+                true,
+                true,
+            ),
+        )
+        .await
+        .is_err()
+        {
+            warn!(
+                "Live full-system final chunk timed out after {:?}; completing stop with collected transcript",
+                final_chunk_timeout
+            );
+        }
     }
 
     let transcript_text = session.runtime.transcript_text.lock().unwrap().clone();
@@ -4066,7 +4111,8 @@ mod tests {
         clear_ask_selection_session, completion_context_for_active_meeting,
         current_ask_selection_messages, current_ask_selection_session_id,
         custom_vocabulary_prompt_block, format_labeled_transcript_segments,
-        friendly_live_summary_error, is_effectively_silent_audio, is_supported_post_process_model,
+        friendly_live_summary_error, full_system_live_final_chunk_timeout,
+        is_effectively_silent_audio, is_supported_post_process_model,
         normalize_live_summary_output, parse_meeting_summary_state,
         render_meeting_summary_markdown, resolved_post_process_system_prompt,
         select_preferred_groq_model, should_pause_live_summaries,
@@ -4075,7 +4121,8 @@ mod tests {
         transcription_watchdog_delay, update_ask_selection_session, usable_post_processed_text,
         LabeledTranscriptSegment, MeetingSummaryState, SummaryPoint,
         TranscriptionCompletionContext, TranscriptionCompletionMode, ACTION_MAP,
-        FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT, FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL,
+        FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT, FULL_SYSTEM_LIVE_FINAL_CHUNK_EXTRA_TIMEOUT,
+        FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL,
     };
     use crate::app_context::AppContextSnapshot;
     use crate::managers::full_system_audio::FullSystemTranscriptionSource;
@@ -4330,6 +4377,15 @@ mod tests {
         let long_timeout = transcription_timeout_for_samples(16_000 * 60 * 31);
         let long_watchdog = transcription_watchdog_delay(16_000 * 60 * 31);
         assert!(long_watchdog > long_timeout);
+    }
+
+    #[test]
+    fn live_final_chunk_timeout_includes_extra_shutdown_budget() {
+        let sample_count = 16_000 * 60;
+        assert_eq!(
+            full_system_live_final_chunk_timeout(sample_count),
+            transcription_watchdog_delay(sample_count) + FULL_SYSTEM_LIVE_FINAL_CHUNK_EXTRA_TIMEOUT
+        );
     }
 
     #[test]

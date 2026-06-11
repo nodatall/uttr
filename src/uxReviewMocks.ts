@@ -322,7 +322,7 @@ const installInitialNavigation = () => {
             is_downloading: false,
             partial_size: 0,
             is_directory: false,
-            engine_type: "speech",
+            engine_type: "Parakeet",
             accuracy_score: 1,
             speed_score: 1,
             supports_translation: false,
@@ -386,7 +386,7 @@ const installInitialNavigation = () => {
         dispatchTauriEvent("history-updated", null);
         return null;
       default:
-        return null;
+        throw new Error(`Unhandled Tauri command in UX review mock: ${cmd}`);
     }
   },
   transformCallback(callback: (payload: unknown) => void, once = false) {

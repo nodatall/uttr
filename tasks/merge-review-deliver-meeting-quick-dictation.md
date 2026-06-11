@@ -28,32 +28,32 @@ Do not stop because one round passed after fixes unless that round was a fresh r
 
 ## Round Log
 
-| Round | Scope | Result | Next action |
-| --- | --- | --- | --- |
-| 1 | `origin/main...HEAD` | fix finding MR-1 | patch MR-1 |
-| 2 | `origin/main...HEAD` at `60f7561` | no `Disposition: fix` findings | finalize |
+| Round | Scope                             | Result                         | Next action |
+| ----- | --------------------------------- | ------------------------------ | ----------- |
+| 1     | `origin/main...HEAD`              | fix finding MR-1               | patch MR-1  |
+| 2     | `origin/main...HEAD` at `60f7561` | no `Disposition: fix` findings | finalize    |
 
 ## Findings
 
-| ID | Round | Severity | Disposition | Scope | Status | Evidence | Fix or reason |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| MR-1 | 1 | High | fix | quick dictation during system-audio-only meeting | validated | `TranscribeAction::stop` built `ReturnToMeeting` only from `meeting_microphone_binding_for_quick_dictation`; when a meeting is active without an active meeting microphone, quick dictation stopped with `Standalone`, hid overlay, set tray idle, and did not restore cancel shortcut even though system capture continued. | Fixed in commit `60f7561` by using the active full-system meeting binding for completion UI context; microphone-active binding remains only for borrowed microphone restore. |
+| ID   | Round | Severity | Disposition | Scope                                            | Status    | Evidence                                                                                                                                                                                                                                                                                                                     | Fix or reason                                                                                                                                                                |
+| ---- | ----- | -------- | ----------- | ------------------------------------------------ | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| MR-1 | 1     | High     | fix         | quick dictation during system-audio-only meeting | validated | `TranscribeAction::stop` built `ReturnToMeeting` only from `meeting_microphone_binding_for_quick_dictation`; when a meeting is active without an active meeting microphone, quick dictation stopped with `Standalone`, hid overlay, set tray idle, and did not restore cancel shortcut even though system capture continued. | Fixed in commit `60f7561` by using the active full-system meeting binding for completion UI context; microphone-active binding remains only for borrowed microphone restore. |
 
 ## Fix Log
 
-| Finding ID | Change | Files | Validation |
-| --- | --- | --- | --- |
-| MR-1 | Added active meeting completion context for quick dictation so system-audio-only meetings restore meeting UI/cancel/tray after nested dictation; added regression test. | `src-tauri/src/actions.rs` | `cargo test system_only_meeting_quick_dictation_still_restores_meeting_context --lib`; `cargo test`; release-transcribe preflight |
+| Finding ID | Change                                                                                                                                                                  | Files                      | Validation                                                                                                                        |
+| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| MR-1       | Added active meeting completion context for quick dictation so system-audio-only meetings restore meeting UI/cancel/tray after nested dictation; added regression test. | `src-tauri/src/actions.rs` | `cargo test system_only_meeting_quick_dictation_still_restores_meeting_context --lib`; `cargo test`; release-transcribe preflight |
 
 ## Validation Log
 
-| Command or flow | Result | Evidence | Remaining gap |
-| --- | --- | --- | --- |
-| `cargo fmt` | pass | completed with exit code 0 | none |
-| `cargo test system_only_meeting_quick_dictation_still_restores_meeting_context --lib` | pass | 1 passed, 0 failed | none |
-| `cargo test` | pass | 255 passed, 0 failed, 1 ignored | none |
-| `PATH="$HOME/.bun/bin:$PATH" bun run test:e2e:release-transcribe -- --preflight-only` | pass | preflight passed; native app launch skipped by `--preflight-only` | full native smoke not run |
-| `PATH="$HOME/.bun/bin:$PATH" bun run tauri:build:fast` | blocked | exits before build: missing `TAURI_SIGNING_PRIVATE_KEY` or `TAURI_SIGNING_PRIVATE_KEY_PATH` in `.env.local` | native build/UI verification blocked by signing-key configuration |
+| Command or flow                                                                       | Result  | Evidence                                                                                                    | Remaining gap                                                     |
+| ------------------------------------------------------------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| `cargo fmt`                                                                           | pass    | completed with exit code 0                                                                                  | none                                                              |
+| `cargo test system_only_meeting_quick_dictation_still_restores_meeting_context --lib` | pass    | 1 passed, 0 failed                                                                                          | none                                                              |
+| `cargo test`                                                                          | pass    | 255 passed, 0 failed, 1 ignored                                                                             | none                                                              |
+| `PATH="$HOME/.bun/bin:$PATH" bun run test:e2e:release-transcribe -- --preflight-only` | pass    | preflight passed; native app launch skipped by `--preflight-only`                                           | full native smoke not run                                         |
+| `PATH="$HOME/.bun/bin:$PATH" bun run tauri:build:fast`                                | blocked | exits before build: missing `TAURI_SIGNING_PRIVATE_KEY` or `TAURI_SIGNING_PRIVATE_KEY_PATH` in `.env.local` | native build/UI verification blocked by signing-key configuration |
 
 ## Remaining Human Decisions
 
