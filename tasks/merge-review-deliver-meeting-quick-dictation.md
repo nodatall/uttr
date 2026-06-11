@@ -9,9 +9,11 @@ Goal: Make `deliver/meeting-quick-dictation` merge-ready by reviewing `origin/ma
 - Base: `origin/main`
 - Review scope: `origin/main...HEAD`
 - Started at: `2026-06-09 20:06:57 MDT`
+- Resumed at: `2026-06-10 22:17:01 MDT`
 - Starting status: `## deliver/meeting-quick-dictation`
-- Base commit: `a608c88aa2859e604d77bb4b859d61732809c980`
-- HEAD commit: `739d9a28cd10d3ed8db27009ffe7885712f42da4`
+- Current status at resume: `## deliver/meeting-quick-dictation...origin/deliver/meeting-quick-dictation`; clean worktree before updating this state document.
+- Base commit: `82ba6ad83b53074916d2d3e571a1d65570ca62a0`
+- HEAD commit: `c11914f3d85705b25d433ed64bb5d0678c84cc42`
 
 ## End Condition
 
@@ -32,6 +34,7 @@ Do not stop because one round passed after fixes unless that round was a fresh r
 | ----- | --------------------------------- | ------------------------------ | ----------- |
 | 1     | `origin/main...HEAD`              | fix finding MR-1               | patch MR-1  |
 | 2     | `origin/main...HEAD` at `60f7561` | no `Disposition: fix` findings | finalize    |
+| 3     | `origin/main...HEAD` at `c11914f` | no `Disposition: fix` findings | finalize    |
 
 ## Findings
 
@@ -54,28 +57,39 @@ Do not stop because one round passed after fixes unless that round was a fresh r
 | `cargo test`                                                                          | pass    | 255 passed, 0 failed, 1 ignored                                                                             | none                                                              |
 | `PATH="$HOME/.bun/bin:$PATH" bun run test:e2e:release-transcribe -- --preflight-only` | pass    | preflight passed; native app launch skipped by `--preflight-only`                                           | full native smoke not run                                         |
 | `PATH="$HOME/.bun/bin:$PATH" bun run tauri:build:fast`                                | blocked | exits before build: missing `TAURI_SIGNING_PRIVATE_KEY` or `TAURI_SIGNING_PRIVATE_KEY_PATH` in `.env.local` | native build/UI verification blocked by signing-key configuration |
+| `git diff --check origin/main...HEAD && git diff --check`                             | pass    | no whitespace errors in committed branch diff or working tree                                               | none                                                              |
+| `bun run build`                                                                        | pass    | TypeScript and Vite production build completed; existing chunk-size warning remains                         | none                                                              |
+| `bun run lint`                                                                         | pass    | ESLint over `src` completed                                                                                 | none                                                              |
+| `cargo test`                                                                           | pass    | 260 passed, 0 failed, 1 ignored; existing dead-code warnings remain                                         | none                                                              |
+| `bun run test:playwright`                                                              | pass    | 15 Chromium tests passed                                                                                    | none                                                              |
+| `bun run test:e2e:release-transcribe -- --preflight-only`                              | pass    | preflight passed; native app launch skipped by `--preflight-only`                                           | full native smoke not run                                         |
+| `npm --prefix marketing-site test`                                                     | pass    | 120 Bun tests passed                                                                                        | none                                                              |
+| `npm --prefix marketing-site run lint`                                                 | pass    | marketing-site ESLint completed                                                                             | none                                                              |
+| `npm --prefix marketing-site run build`                                                | pass    | Next production build completed                                                                             | none                                                              |
+| `bun run tauri:build:fast`                                                             | blocked | exits before build: missing `TAURI_SIGNING_PRIVATE_KEY` or `TAURI_SIGNING_PRIVATE_KEY_PATH` in `.env.local` | native build/UI verification blocked by signing-key configuration |
+| Round 3 fresh review                                                                   | pass    | latest `origin/main...HEAD` at `c11914f` reviewed; no verified local `Disposition: fix` findings found       | none                                                              |
 
 ## Remaining Human Decisions
 
-- Native build and real UI verification are blocked locally until updater signing key configuration is present.
+- Native build and real native-app UI verification are blocked locally until updater signing key configuration is present.
 
 ## Residual Risks
 
-- None currently.
+- Full native `scripts/release-transcribe-smoke.mjs` was not run. Preflight passed, but the full flow is invasive desktop automation that launches Uttr and TextEdit.
 
 ## Resume State
 
 - Current status: done
 - Current phase: complete
-- Last completed step: fresh full-branch rereview at `60f7561` found no remaining `Disposition: fix` findings
+- Last completed step: fresh full-branch rereview at `c11914f` found no remaining `Disposition: fix` findings
 - Active step: none
 - Next exact action: none
 - Blockers: none
-- Last validation: `cargo test` passed; release-transcribe preflight passed; native fast build blocked by missing signing key
+- Last validation: `git diff --check`, `bun run build`, `bun run lint`, `cargo test`, `bun run test:playwright`, release-transcribe preflight, marketing-site test/lint/build passed; native fast build blocked by missing signing key
 - Protected paths: none beyond unrelated user changes
 - Evidence paths: this file
 
 ## Final Merge-Readiness Verdict
 
 - Verdict: merge-ready with recorded residual validation gap
-- Reason: Round 2 fresh review of `origin/main...HEAD` at `60f7561` found no remaining `Disposition: fix` findings. MR-1 was fixed, committed, and validated. `cargo test` and release-transcribe preflight passed. Native fast build and real UI verification remain blocked by missing updater signing key configuration.
+- Reason: Round 3 fresh review of `origin/main...HEAD` at `c11914f` found no remaining `Disposition: fix` findings. MR-1 was fixed, committed, and validated. Current validation passed for Rust, frontend, Playwright, marketing-site, release preflight, and whitespace checks. Native fast build and real native-app UI verification remain blocked by missing updater signing key configuration.
