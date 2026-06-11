@@ -10,6 +10,7 @@ This document records the repo boundaries that are easy to blur during desktop f
 - `src-tauri/src/app_context.rs` owns nearby macOS app context capture. It may provide app, window, and selected text context, but it should not decide product behavior.
 - `src-tauri/src/clipboard.rs` owns normal dictation paste/copy behavior. Ask Selection should not use this paste path because it displays answers instead of replacing text.
 - `src-tauri/src/managers/full_system_audio.rs` owns full-system meeting source capture. It may return mixed audio for saved playback and source-specific buffers for meeting transcript labeling.
+- During full-system meeting capture, `src-tauri/src/transcription_coordinator.rs` may run normal dictation as a nested quick action. `src-tauri/src/managers/audio.rs` owns microphone borrow, sample boundary, and restore behavior; full-system session lifecycle stays owned by `src-tauri/src/managers/full_system_audio.rs`.
 
 ## Overlay And Floating Panels
 

@@ -20,6 +20,9 @@ jobs:
       - name: Run ESLint
         run: bun run lint
 
+      - name: Build desktop frontend
+        run: bun run build
+
       - name: Install marketing site dependencies
         working-directory: marketing-site
         run: npm ci

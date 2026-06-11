@@ -344,7 +344,7 @@ async function installBrowserMocks(
                 is_downloading: false,
                 partial_size: 0,
                 is_directory: false,
-                engine_type: "speech" as const,
+                engine_type: "Parakeet" as const,
                 accuracy_score: 1,
                 speed_score: 1,
                 supports_translation: false,
@@ -450,7 +450,9 @@ async function installBrowserMocks(
             e2eState.settings.debug_mode = Boolean(args.enabled);
             return null;
           default:
-            return null;
+            throw new Error(
+              `Unhandled Tauri command in full-system audio E2E mock: ${cmd}`,
+            );
         }
       },
       transformCallback(callback: (payload: unknown) => void, once = false) {

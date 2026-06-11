@@ -52,6 +52,8 @@ const RELEASE_SMOKE_TRANSCRIBING_HOLD_MS_DEFAULT: u64 = 1_500;
 const FULL_SYSTEM_LIVE_CHUNK_SECONDS: usize = 10;
 const FULL_SYSTEM_LIVE_CHUNK_SAMPLES: usize = 16_000 * FULL_SYSTEM_LIVE_CHUNK_SECONDS;
 const FULL_SYSTEM_LIVE_CHUNK_POLL_INTERVAL: Duration = Duration::from_millis(250);
+const FULL_SYSTEM_LIVE_WORKER_STOP_TIMEOUT: Duration = Duration::from_secs(15);
+const FULL_SYSTEM_LIVE_FINAL_CHUNK_EXTRA_TIMEOUT: Duration = Duration::from_secs(10);
 const FULL_SYSTEM_LIVE_SUMMARY_SECONDS: usize = 60;
 const FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL: u64 =
     (FULL_SYSTEM_LIVE_SUMMARY_SECONDS / FULL_SYSTEM_LIVE_CHUNK_SECONDS) as u64;
@@ -87,6 +89,12 @@ enum TranscriptionCompletionMode {
     Standard,
     EditMode,
     FullSystemOverlay,
+}
+
+#[derive(Clone)]
+enum TranscriptionCompletionContext {
+    Standalone,
+    ReturnToMeeting { binding_id: String },
 }
 
 #[derive(Clone, Copy)]
@@ -180,11 +188,21 @@ struct AskSelectionChatSession {
 
 /// Drop guard that notifies the [`TranscriptionCoordinator`] when the
 /// transcription pipeline finishes — whether it completes normally or panics.
-struct FinishGuard(AppHandle);
+struct FinishGuard {
+    app: AppHandle,
+    binding_id: String,
+}
+
+impl FinishGuard {
+    fn new(app: AppHandle, binding_id: String) -> Self {
+        Self { app, binding_id }
+    }
+}
+
 impl Drop for FinishGuard {
     fn drop(&mut self) {
-        if let Some(c) = self.0.try_state::<TranscriptionCoordinator>() {
-            c.notify_processing_finished();
+        if let Some(c) = self.app.try_state::<TranscriptionCoordinator>() {
+            c.notify_processing_finished(&self.binding_id);
         }
     }
 }
@@ -194,11 +212,16 @@ impl Drop for FinishGuard {
 struct UiResetGuard {
     app: AppHandle,
     enabled: bool,
+    completion_context: TranscriptionCompletionContext,
 }
 
 impl UiResetGuard {
-    fn new(app: AppHandle) -> Self {
-        Self { app, enabled: true }
+    fn new(app: AppHandle, completion_context: TranscriptionCompletionContext) -> Self {
+        Self {
+            app,
+            enabled: true,
+            completion_context,
+        }
     }
 
     fn suppress(&mut self) {
@@ -209,8 +232,71 @@ impl UiResetGuard {
 impl Drop for UiResetGuard {
     fn drop(&mut self) {
         if self.enabled {
-            utils::hide_recording_overlay(&self.app);
-            change_tray_icon(&self.app, TrayIconState::Idle);
+            restore_ui_after_transcription(&self.app, &self.completion_context);
+        }
+    }
+}
+
+fn restore_ui_after_transcription(
+    app: &AppHandle,
+    completion_context: &TranscriptionCompletionContext,
+) {
+    match completion_context {
+        TranscriptionCompletionContext::ReturnToMeeting { .. } => {
+            let active_meeting_binding = app
+                .try_state::<Arc<FullSystemAudioSessionManager>>()
+                .and_then(|manager| manager.active_snapshot())
+                .map(|snapshot| snapshot.binding_id);
+
+            if should_restore_meeting_ui(completion_context, active_meeting_binding.as_deref()) {
+                emit_active_session_window_state(app);
+                utils::hide_recording_overlay(app);
+                change_tray_icon(app, TrayIconState::Recording);
+                shortcut::register_cancel_shortcut(app);
+                return;
+            }
+
+            utils::hide_recording_overlay(app);
+            change_tray_icon(app, TrayIconState::Idle);
+        }
+        TranscriptionCompletionContext::Standalone => {
+            utils::hide_recording_overlay(app);
+            change_tray_icon(app, TrayIconState::Idle);
+        }
+    }
+}
+
+fn should_restore_meeting_ui(
+    completion_context: &TranscriptionCompletionContext,
+    active_meeting_binding: Option<&str>,
+) -> bool {
+    match completion_context {
+        TranscriptionCompletionContext::ReturnToMeeting { binding_id } => {
+            active_meeting_binding == Some(binding_id.as_str())
+        }
+        TranscriptionCompletionContext::Standalone => false,
+    }
+}
+
+fn completion_context_for_active_meeting(
+    active_meeting_binding: Option<String>,
+) -> TranscriptionCompletionContext {
+    active_meeting_binding
+        .map(|binding_id| TranscriptionCompletionContext::ReturnToMeeting { binding_id })
+        .unwrap_or(TranscriptionCompletionContext::Standalone)
+}
+
+fn restore_ui_or_show_no_input_feedback(
+    app: &AppHandle,
+    completion_context: &TranscriptionCompletionContext,
+    post_process: bool,
+) {
+    match completion_context {
+        TranscriptionCompletionContext::ReturnToMeeting { .. } => {
+            restore_ui_after_transcription(app, completion_context);
+        }
+        TranscriptionCompletionContext::Standalone => {
+            spawn_no_input_overlay_feedback(app, post_process);
         }
     }
 }
@@ -910,6 +996,10 @@ fn transcription_watchdog_delay(sample_count: usize) -> Duration {
     transcription_timeout_for_samples(sample_count) + FULL_PASS_TRANSCRIPTION_WATCHDOG_GRACE
 }
 
+fn full_system_live_final_chunk_timeout(sample_count: usize) -> Duration {
+    transcription_watchdog_delay(sample_count) + FULL_SYSTEM_LIVE_FINAL_CHUNK_EXTRA_TIMEOUT
+}
+
 fn transcription_source_for_binding(binding_id: &str) -> Option<&'static str> {
     match binding_id {
         "transcribe_full_system_audio" => Some("full_system_audio"),
@@ -1090,6 +1180,45 @@ fn start_transcription_session(app: &AppHandle, binding_id: &str, started: bool)
         "Transcription session start completed for '{}' (started={})",
         binding_id, started
     );
+}
+
+fn active_meeting_binding_for_quick_dictation(app: &AppHandle, binding_id: &str) -> Option<String> {
+    if binding_id != "transcribe" {
+        return None;
+    }
+
+    app.try_state::<Arc<FullSystemAudioSessionManager>>()
+        .and_then(|manager| manager.active_snapshot())
+        .map(|snapshot| snapshot.binding_id)
+}
+
+fn meeting_microphone_binding_for_quick_dictation(
+    app: &AppHandle,
+    binding_id: &str,
+) -> Option<String> {
+    if binding_id != "transcribe" {
+        return None;
+    }
+
+    app.try_state::<Arc<FullSystemAudioSessionManager>>()
+        .and_then(|manager| manager.active_snapshot())
+        .filter(|snapshot| snapshot.microphone.is_active())
+        .map(|snapshot| snapshot.binding_id)
+}
+
+fn borrow_meeting_microphone_for_quick_dictation(
+    app: &AppHandle,
+    rm: &AudioRecordingManager,
+    meeting_binding_id: &str,
+    quick_binding_id: &str,
+) -> bool {
+    if let Some(full_system_audio) = app.try_state::<Arc<FullSystemAudioSessionManager>>() {
+        if let Some(delta) = full_system_audio.drain_session_delta_sources(meeting_binding_id) {
+            append_full_system_live_session_delta(meeting_binding_id, delta);
+        }
+    }
+
+    rm.borrow_recording_binding_with_boundary(meeting_binding_id, quick_binding_id)
 }
 
 pub fn promote_active_transcription_to_edit_mode(
@@ -2307,9 +2436,14 @@ async fn transcribe_full_system_live_chunk_sources(
     let mut segments = Vec::new();
 
     if chunk.source_samples.is_empty() {
-        let transcription = tm
-            .transcribe_with_source(chunk.mixed_samples, Some("full_system_audio"))
-            .await?;
+        let sample_count = chunk.mixed_samples.len();
+        let transcription = transcribe_full_pass_with_timeout(
+            tm,
+            chunk.mixed_samples,
+            Some("full_system_audio"),
+            transcription_timeout_for_samples(sample_count),
+        )
+        .await?;
         if !transcription.trim().is_empty() {
             return Ok(vec![LabeledTranscriptSegment {
                 source: FullSystemTranscriptionSource::SystemAudio,
@@ -2344,9 +2478,13 @@ async fn transcribe_full_system_live_chunk_sources(
             source_label,
             sample_count
         );
-        let text = tm
-            .transcribe_with_source(source_samples.samples, Some(source_id))
-            .await?;
+        let text = transcribe_full_pass_with_timeout(
+            tm,
+            source_samples.samples,
+            Some(source_id),
+            transcription_timeout_for_samples(sample_count),
+        )
+        .await?;
         log::info!(
             "[latency] full-system source transcription complete chunk={} source={} sample_count={} elapsed_ms={}",
             chunk_index,
@@ -2478,6 +2616,48 @@ fn signal_full_system_live_session_stop(binding_id: &str) {
     }
 }
 
+fn append_full_system_live_session_delta(
+    binding_id: &str,
+    delta: FullSystemSessionTranscriptionSamples,
+) {
+    let guard = FULL_SYSTEM_LIVE_SESSION.lock().unwrap();
+    let Some(session) = guard.as_ref() else {
+        return;
+    };
+    if session.binding_id != binding_id {
+        return;
+    }
+
+    if let Some(mixed) = delta.mixed.filter(|samples| !samples.is_empty()) {
+        session
+            .runtime
+            .pending_samples
+            .lock()
+            .unwrap()
+            .extend_from_slice(&mixed);
+    }
+    for source_samples in delta.sources {
+        match source_samples.source {
+            FullSystemTranscriptionSource::Microphone => {
+                session
+                    .runtime
+                    .pending_microphone_samples
+                    .lock()
+                    .unwrap()
+                    .extend_from_slice(&source_samples.samples);
+            }
+            FullSystemTranscriptionSource::SystemAudio => {
+                session
+                    .runtime
+                    .pending_system_audio_samples
+                    .lock()
+                    .unwrap()
+                    .extend_from_slice(&source_samples.samples);
+            }
+        }
+    }
+}
+
 async fn finish_full_system_live_session(
     app: &AppHandle,
     binding_id: &str,
@@ -2500,8 +2680,19 @@ async fn finish_full_system_live_session(
         .runtime
         .stop_requested
         .store(true, Ordering::Relaxed);
-    if let Err(error) = session.worker_handle.await {
-        warn!("Live full-system worker join error: {}", error);
+    let mut worker_handle = session.worker_handle;
+    match timeout(FULL_SYSTEM_LIVE_WORKER_STOP_TIMEOUT, &mut worker_handle).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            warn!("Live full-system worker join error: {}", error);
+        }
+        Err(_) => {
+            warn!(
+                "Live full-system worker did not stop within {:?}; aborting worker",
+                FULL_SYSTEM_LIVE_WORKER_STOP_TIMEOUT
+            );
+            worker_handle.abort();
+        }
     }
 
     let mut final_samples = {
@@ -2539,8 +2730,27 @@ async fn finish_full_system_live_session(
                 final_system_audio_samples,
             ),
         };
-        transcribe_and_summarize_live_chunk(app, &session.runtime, &tm, final_chunk, true, true)
-            .await;
+        let final_chunk_timeout =
+            full_system_live_final_chunk_timeout(final_chunk.mixed_samples.len());
+        if timeout(
+            final_chunk_timeout,
+            transcribe_and_summarize_live_chunk(
+                app,
+                &session.runtime,
+                &tm,
+                final_chunk,
+                true,
+                true,
+            ),
+        )
+        .await
+        .is_err()
+        {
+            warn!(
+                "Live full-system final chunk timed out after {:?}; completing stop with collected transcript",
+                final_chunk_timeout
+            );
+        }
     }
 
     let transcript_text = session.runtime.transcript_text.lock().unwrap().clone();
@@ -2570,6 +2780,7 @@ fn handle_transcription_stop(
     post_process: bool,
     use_incremental: bool,
     completion_mode: TranscriptionCompletionMode,
+    completion_context: TranscriptionCompletionContext,
     tm: Arc<TranscriptionManager>,
     hm: Arc<HistoryManager>,
 ) {
@@ -2597,9 +2808,9 @@ fn handle_transcription_stop(
         .unwrap_or(FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT + FULL_PASS_TRANSCRIPTION_WATCHDOG_GRACE);
 
     let transcription_task = tauri::async_runtime::spawn(async move {
-        let _guard = FinishGuard(ah.clone());
+        let _guard = FinishGuard::new(ah.clone(), binding_id.clone());
         let _completion_guard = CompletionGuard(task_completed_for_worker);
-        let mut ui_guard = UiResetGuard::new(ah.clone());
+        let mut ui_guard = UiResetGuard::new(ah.clone(), completion_context.clone());
         let binding_id = binding_id.clone();
         debug!(
             "Starting async transcription task for binding: {}",
@@ -2627,7 +2838,7 @@ fn handle_transcription_stop(
             }
             if recording_duration >= NO_INPUT_OVERLAY_MIN_DURATION {
                 ui_guard.suppress();
-                spawn_no_input_overlay_feedback(&ah, post_process);
+                restore_ui_or_show_no_input_feedback(&ah, &completion_context, post_process);
             }
             return;
         };
@@ -2660,7 +2871,7 @@ fn handle_transcription_stop(
             }
             if recording_duration >= NO_INPUT_OVERLAY_MIN_DURATION {
                 ui_guard.suppress();
-                spawn_no_input_overlay_feedback(&ah, post_process);
+                restore_ui_or_show_no_input_feedback(&ah, &completion_context, post_process);
             } else {
                 let settings = get_settings(&ah);
                 let binding = settings
@@ -2675,8 +2886,7 @@ fn handle_transcription_stop(
                 };
                 warn!("{}", message);
                 let _ = ah.emit("transcription-error", message.to_string());
-                utils::hide_recording_overlay(&ah);
-                change_tray_icon(&ah, TrayIconState::Idle);
+                restore_ui_after_transcription(&ah, &completion_context);
             }
             return;
         }
@@ -2806,15 +3016,14 @@ fn handle_transcription_stop(
                         completion_mode,
                     );
                     ui_guard.suppress();
-                    spawn_no_input_overlay_feedback(&ah, post_process);
+                    restore_ui_or_show_no_input_feedback(&ah, &completion_context, post_process);
                     return;
                 }
                 if tm_for_worker.is_cancel_requested()
                     || tm_for_worker.cancel_generation() != cancel_generation_at_start
                 {
                     debug!("Transcription was cancelled before output handling");
-                    utils::hide_recording_overlay(&ah);
-                    change_tray_icon(&ah, TrayIconState::Idle);
+                    restore_ui_after_transcription(&ah, &completion_context);
                     return;
                 }
                 debug!(
@@ -3072,6 +3281,7 @@ fn handle_transcription_stop(
                     }
 
                     let ah_clone = ah.clone();
+                    let paste_completion_context = completion_context.clone();
                     let paste_time = Instant::now();
                     ah.run_on_main_thread(move || {
                         let text_for_paste = final_text.clone();
@@ -3099,13 +3309,11 @@ fn handle_transcription_stop(
                                 }
                             }
                         }
-                        utils::hide_recording_overlay(&ah_clone);
-                        change_tray_icon(&ah_clone, TrayIconState::Idle);
+                        restore_ui_after_transcription(&ah_clone, &paste_completion_context);
                     })
                     .unwrap_or_else(|e| {
                         error!("Failed to run paste on main thread: {:?}", e);
-                        utils::hide_recording_overlay(&ah);
-                        change_tray_icon(&ah, TrayIconState::Idle);
+                        restore_ui_after_transcription(&ah, &completion_context);
                     });
                 } else if completion_mode == TranscriptionCompletionMode::EditMode {
                     let session_id = current_ask_selection_session_id();
@@ -3121,8 +3329,7 @@ fn handle_transcription_stop(
                     );
                     change_tray_icon(&ah, TrayIconState::Idle);
                 } else {
-                    utils::hide_recording_overlay(&ah);
-                    change_tray_icon(&ah, TrayIconState::Idle);
+                    restore_ui_after_transcription(&ah, &completion_context);
                 }
             }
             Err(err) => {
@@ -3153,19 +3360,17 @@ fn handle_transcription_stop(
                         completion_mode,
                     );
                     ui_guard.suppress();
-                    spawn_no_input_overlay_feedback(&ah, post_process);
+                    restore_ui_or_show_no_input_feedback(&ah, &completion_context, post_process);
                     return;
                 }
                 if tm_for_worker.is_cancel_requested() {
                     debug!("Transcription task cancelled");
-                    utils::hide_recording_overlay(&ah);
-                    change_tray_icon(&ah, TrayIconState::Idle);
+                    restore_ui_after_transcription(&ah, &completion_context);
                     return;
                 }
                 error!("Global Shortcut Transcription error: {}", err);
                 let _ = ah.emit("transcription-error", err.to_string());
-                utils::hide_recording_overlay(&ah);
-                change_tray_icon(&ah, TrayIconState::Idle);
+                restore_ui_after_transcription(&ah, &completion_context);
             }
         }
     });
@@ -3247,6 +3452,8 @@ impl ShortcutAction for TranscribeAction {
 
         let binding_id = binding_id.to_string();
         let rm = app.state::<Arc<AudioRecordingManager>>();
+        let meeting_microphone_binding =
+            meeting_microphone_binding_for_quick_dictation(app, &binding_id);
 
         // Get the microphone mode to determine audio feedback timing
         let is_always_on = settings.always_on_microphone;
@@ -3268,7 +3475,17 @@ impl ShortcutAction for TranscribeAction {
                 rm_clone.apply_mute();
             });
 
-            recording_started = rm.try_start_recording(&binding_id);
+            recording_started =
+                if let Some(meeting_binding_id) = meeting_microphone_binding.as_deref() {
+                    borrow_meeting_microphone_for_quick_dictation(
+                        app,
+                        &rm,
+                        meeting_binding_id,
+                        &binding_id,
+                    )
+                } else {
+                    rm.try_start_recording(&binding_id)
+                };
             debug!("Recording started: {}", recording_started);
             log::info!(
                 "[latency] transcribe recording active binding={} recording_started={} elapsed_ms={}",
@@ -3297,7 +3514,18 @@ impl ShortcutAction for TranscribeAction {
                 );
             }
             let recording_start_time = Instant::now();
-            if rm.try_start_recording(&binding_id) {
+            let borrow_or_start_succeeded =
+                if let Some(meeting_binding_id) = meeting_microphone_binding.as_deref() {
+                    borrow_meeting_microphone_for_quick_dictation(
+                        app,
+                        &rm,
+                        meeting_binding_id,
+                        &binding_id,
+                    )
+                } else {
+                    rm.try_start_recording(&binding_id)
+                };
+            if borrow_or_start_succeeded {
                 recording_started = true;
                 show_recording_overlay(app);
                 log::info!(
@@ -3435,7 +3663,19 @@ impl ShortcutAction for TranscribeAction {
             tm.signal_incremental_stop(binding_id);
         }
         let recording_duration = rm.current_recording_duration(binding_id);
-        let samples = rm.stop_recording(binding_id);
+        let active_meeting_binding = active_meeting_binding_for_quick_dictation(app, binding_id);
+        let meeting_restore_binding =
+            meeting_microphone_binding_for_quick_dictation(app, binding_id);
+        let samples = if let Some(meeting_binding_id) = meeting_restore_binding.as_deref() {
+            rm.finish_borrowed_recording_and_restore(binding_id, meeting_binding_id)
+        } else {
+            rm.stop_recording(binding_id)
+        };
+        let completion_context = completion_context_for_active_meeting(active_meeting_binding);
+        let restore_meeting_after_quick_dictation = matches!(
+            completion_context,
+            TranscriptionCompletionContext::ReturnToMeeting { .. }
+        );
         log::info!(
             "[latency] transcribe samples retrieved binding={} sample_count={} elapsed_ms={}",
             binding_id,
@@ -3450,9 +3690,13 @@ impl ShortcutAction for TranscribeAction {
             post_process,
             use_incremental,
             self.completion_mode,
+            completion_context,
             tm,
             hm,
         );
+        if restore_meeting_after_quick_dictation {
+            shortcut::register_cancel_shortcut(app);
+        }
 
         debug!(
             "TranscribeAction::stop completed in {:?}",
@@ -3488,7 +3732,6 @@ impl ShortcutAction for FullSystemTranscribeAction {
         let rm = app.state::<Arc<AudioRecordingManager>>();
 
         let is_always_on = settings.always_on_microphone;
-        let should_show_warming = !is_always_on && !rm.is_microphone_open();
         debug!("Full-system mode - always_on: {}", is_always_on);
 
         change_tray_icon(app, TrayIconState::Recording);
@@ -3517,22 +3760,13 @@ impl ShortcutAction for FullSystemTranscribeAction {
                 focus_workspace_window(app);
                 emit_active_session_window_state(app);
                 start_full_system_live_session(app, &binding_id);
-                show_recording_overlay(app);
                 log::info!(
-                    "[latency] full-system overlay requested binding={} warming=false elapsed_ms={}",
+                    "[latency] full-system session UI active binding={} elapsed_ms={}",
                     binding_id,
                     start_time.elapsed().as_millis()
                 );
             }
         } else {
-            if should_show_warming {
-                show_warming_overlay(app);
-                log::info!(
-                    "[latency] full-system overlay requested binding={} warming=true elapsed_ms={}",
-                    binding_id,
-                    start_time.elapsed().as_millis()
-                );
-            }
             let recording_start_time = Instant::now();
             if full_system_audio
                 .start_session(&binding_id, start_config)
@@ -3542,9 +3776,8 @@ impl ShortcutAction for FullSystemTranscribeAction {
                 focus_workspace_window(app);
                 emit_active_session_window_state(app);
                 start_full_system_live_session(app, &binding_id);
-                show_recording_overlay(app);
                 log::info!(
-                    "[latency] full-system overlay requested binding={} warming=false elapsed_ms={}",
+                    "[latency] full-system session UI active binding={} elapsed_ms={}",
                     binding_id,
                     start_time.elapsed().as_millis()
                 );
@@ -3656,8 +3889,9 @@ impl ShortcutAction for FullSystemTranscribeAction {
         let live_tm = Arc::clone(&tm);
         let live_hm = Arc::clone(&hm);
         tauri::async_runtime::spawn(async move {
-            let _finish_guard = FinishGuard(live_app.clone());
-            let mut ui_guard = UiResetGuard::new(live_app.clone());
+            let _finish_guard = FinishGuard::new(live_app.clone(), live_binding_id.clone());
+            let mut ui_guard =
+                UiResetGuard::new(live_app.clone(), TranscriptionCompletionContext::Standalone);
             if let Some(live_final) = finish_full_system_live_session(
                 &live_app,
                 &live_binding_id,
@@ -3737,6 +3971,7 @@ impl ShortcutAction for FullSystemTranscribeAction {
                 post_process,
                 false,
                 TranscriptionCompletionMode::FullSystemOverlay,
+                TranscriptionCompletionContext::Standalone,
                 live_tm,
                 live_hm,
             );
@@ -3873,18 +4108,21 @@ mod tests {
         ask_selection_message, ask_selection_session_is_current,
         build_ask_selection_follow_up_prompt, build_ask_selection_prompt,
         build_live_summary_prompt, clean_ask_selection_response, clean_post_process_response,
-        clear_ask_selection_session, current_ask_selection_messages,
-        current_ask_selection_session_id, custom_vocabulary_prompt_block,
-        format_labeled_transcript_segments, friendly_live_summary_error,
+        clear_ask_selection_session, completion_context_for_active_meeting,
+        current_ask_selection_messages, current_ask_selection_session_id,
+        custom_vocabulary_prompt_block, format_labeled_transcript_segments,
+        friendly_live_summary_error, full_system_live_final_chunk_timeout,
         is_effectively_silent_audio, is_supported_post_process_model,
         normalize_live_summary_output, parse_meeting_summary_state,
         render_meeting_summary_markdown, resolved_post_process_system_prompt,
         select_preferred_groq_model, should_pause_live_summaries,
-        should_refresh_microphone_stream_after_suspected_no_input, should_update_live_summary,
-        toggle_post_process_enabled, transcription_timeout_for_samples,
+        should_refresh_microphone_stream_after_suspected_no_input, should_restore_meeting_ui,
+        should_update_live_summary, toggle_post_process_enabled, transcription_timeout_for_samples,
         transcription_watchdog_delay, update_ask_selection_session, usable_post_processed_text,
-        LabeledTranscriptSegment, MeetingSummaryState, SummaryPoint, TranscriptionCompletionMode,
-        ACTION_MAP, FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT, FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL,
+        LabeledTranscriptSegment, MeetingSummaryState, SummaryPoint,
+        TranscriptionCompletionContext, TranscriptionCompletionMode, ACTION_MAP,
+        FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT, FULL_SYSTEM_LIVE_FINAL_CHUNK_EXTRA_TIMEOUT,
+        FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL,
     };
     use crate::app_context::AppContextSnapshot;
     use crate::managers::full_system_audio::FullSystemTranscriptionSource;
@@ -3908,6 +4146,40 @@ mod tests {
     #[test]
     fn edit_mode_binding_is_registered_in_action_map() {
         assert!(ACTION_MAP.contains_key("edit_mode"));
+    }
+
+    #[test]
+    fn quick_dictation_restore_requires_matching_active_meeting_binding() {
+        let context = TranscriptionCompletionContext::ReturnToMeeting {
+            binding_id: "transcribe_full_system_audio".to_string(),
+        };
+
+        assert!(should_restore_meeting_ui(
+            &context,
+            Some("transcribe_full_system_audio")
+        ));
+        assert!(!should_restore_meeting_ui(&context, Some("transcribe")));
+        assert!(!should_restore_meeting_ui(&context, None));
+    }
+
+    #[test]
+    fn standalone_dictation_never_restores_meeting_ui() {
+        assert!(!should_restore_meeting_ui(
+            &TranscriptionCompletionContext::Standalone,
+            Some("transcribe_full_system_audio")
+        ));
+    }
+
+    #[test]
+    fn system_only_meeting_quick_dictation_still_restores_meeting_context() {
+        let context =
+            completion_context_for_active_meeting(Some("transcribe_full_system_audio".to_string()));
+
+        assert!(matches!(
+            context,
+            TranscriptionCompletionContext::ReturnToMeeting { ref binding_id }
+                if binding_id == "transcribe_full_system_audio"
+        ));
     }
 
     #[test]
@@ -4105,6 +4377,15 @@ mod tests {
         let long_timeout = transcription_timeout_for_samples(16_000 * 60 * 31);
         let long_watchdog = transcription_watchdog_delay(16_000 * 60 * 31);
         assert!(long_watchdog > long_timeout);
+    }
+
+    #[test]
+    fn live_final_chunk_timeout_includes_extra_shutdown_budget() {
+        let sample_count = 16_000 * 60;
+        assert_eq!(
+            full_system_live_final_chunk_timeout(sample_count),
+            transcription_watchdog_delay(sample_count) + FULL_SYSTEM_LIVE_FINAL_CHUNK_EXTRA_TIMEOUT
+        );
     }
 
     #[test]

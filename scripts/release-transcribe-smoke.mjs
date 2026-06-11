@@ -17,7 +17,7 @@ import process from "node:process";
 const repoRoot = path.resolve(new URL("..", import.meta.url).pathname);
 const artifactRoot = path.join(
   repoRoot,
-  "agents-scratch",
+  "agent-scratch",
   "release-transcribe-smoke",
 );
 const appIdentifier = "com.pais.uttr";

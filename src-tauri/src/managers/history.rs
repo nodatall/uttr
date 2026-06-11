@@ -8,6 +8,7 @@ use specta::Type;
 use std::fs;
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter, Manager};
+use uuid::Uuid;
 
 use crate::audio_toolkit::save_wav_file;
 
@@ -190,7 +191,7 @@ impl HistoryManager {
         recording_source: &str,
     ) -> Result<i64> {
         let timestamp = Utc::now().timestamp();
-        let file_name = format!("uttr-{}.wav", timestamp);
+        let file_name = recording_file_name(timestamp);
         let title = self.format_timestamp_title(timestamp);
 
         // Save WAV file
@@ -537,6 +538,10 @@ impl HistoryManager {
     }
 }
 
+fn recording_file_name(timestamp: i64) -> String {
+    format!("uttr-{}-{}.wav", timestamp, Uuid::new_v4())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -588,6 +593,16 @@ mod tests {
             ],
         )
         .expect("insert history entry");
+    }
+
+    #[test]
+    fn recording_file_name_is_unique_with_same_second_timestamp() {
+        let first = recording_file_name(123);
+        let second = recording_file_name(123);
+
+        assert_ne!(first, second);
+        assert!(first.starts_with("uttr-123-"));
+        assert!(first.ends_with(".wav"));
     }
 
     #[test]

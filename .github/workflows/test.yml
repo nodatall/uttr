@@ -21,6 +21,10 @@ jobs:
         working-directory: src-tauri
         run: cargo check --locked --lib --bin uttr
 
+      - name: Run production transcription unit tests
+        working-directory: src-tauri
+        run: cargo test --locked managers::transcription::tests --lib
+
   rust-tests:
     runs-on: ubuntu-24.04
     steps:
