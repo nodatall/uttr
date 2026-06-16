@@ -45,6 +45,12 @@ const bindings = {
     default_binding: "ctrl+shift+e",
     current_binding: "ctrl+shift+e",
   },
+  copy_last_transcript: {
+    name: "Copy Last Transcript Shortcut",
+    description: "Copy the most recent transcript to the clipboard.",
+    default_binding: "ctrl+shift+c",
+    current_binding: "ctrl+shift+c",
+  },
   cancel: {
     name: "Cancel Shortcut",
     description: "The keyboard shortcut to cancel the current recording.",

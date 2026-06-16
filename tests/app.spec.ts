@@ -29,10 +29,16 @@ const bindings = {
     current_binding: "ctrl+shift+space",
   },
   edit_mode: {
-    name: "Edit Mode Shortcut",
-    description: "Transforms selected text using a spoken instruction.",
+    name: "Ask Selection Shortcut",
+    description: "Ask a spoken question about selected text.",
     default_binding: "ctrl+shift+e",
     current_binding: "ctrl+shift+e",
+  },
+  copy_last_transcript: {
+    name: "Copy Last Transcript Shortcut",
+    description: "Copy the most recent transcript to the clipboard.",
+    default_binding: "ctrl+shift+c",
+    current_binding: "ctrl+shift+c",
   },
   cancel: {
     name: "Cancel Shortcut",
@@ -155,6 +161,7 @@ async function installHiddenUnlockMocks(
             return true;
           case "plugin:macos-permissions|request_accessibility_permission":
           case "plugin:macos-permissions|request_microphone_permission":
+          case "log_frontend_startup":
             return null;
           case "plugin:event|listen": {
             const eventId = nextEventId++;
@@ -180,6 +187,7 @@ async function installHiddenUnlockMocks(
           case "initialize_enigo":
           case "initialize_shortcuts":
           case "is_recording":
+          case "has_any_models_or_downloads":
             return false;
           case "get_available_models":
           case "get_available_microphones":
@@ -211,7 +219,7 @@ async function installHiddenUnlockMocks(
           case "resume_binding":
             return { success: true, error: null };
           default:
-            return null;
+            throw new Error(`Unhandled Tauri command in app E2E mock: ${cmd}`);
         }
       },
       transformCallback(callback: (payload: unknown) => void, once = false) {

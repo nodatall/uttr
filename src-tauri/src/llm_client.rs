@@ -2,6 +2,9 @@ use crate::settings::PostProcessProvider;
 use log::debug;
 use reqwest::header::{HeaderMap, HeaderValue, AUTHORIZATION, CONTENT_TYPE, REFERER, USER_AGENT};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
+
+const MODEL_LIST_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Serialize)]
 struct ChatMessage {
@@ -202,6 +205,7 @@ pub async fn fetch_models(
 
     let response = client
         .get(&url)
+        .timeout(MODEL_LIST_TIMEOUT)
         .send()
         .await
         .map_err(|e| format!("Failed to fetch models: {}", e))?;

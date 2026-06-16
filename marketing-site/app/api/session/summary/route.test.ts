@@ -41,11 +41,48 @@ let currentAccessDecision: MockAccessDecision = {
 const callOrder: string[] = [];
 const summaryInputs: Array<Record<string, unknown>> = [];
 let summaryShouldFail = false;
+let trialUsageEvents: Array<Record<string, unknown>> = [];
+let userDailyUsageEvents: Array<Record<string, unknown>> = [];
+let userBurstUsageEvents: Array<Record<string, unknown>> = [];
 const lockedExecutor = { query: async () => ({ rows: [], rowCount: 0 }) };
 
 mock.module("@/lib/access", () => ({
   fetchAnonymousTrialById: async () => currentTrial,
   fetchEntitlementByUserId: async () => null,
+  fetchUsageEventsSince: async (_params: unknown, executor?: unknown) => {
+    callOrder.push(
+      executor === lockedExecutor ? "fetch_usage_locked" : "fetch_usage_pool",
+    );
+    return trialUsageEvents;
+  },
+  fetchUserUsageEventsSince: async (
+    params: { since?: string },
+    executor?: unknown,
+  ) => {
+    const bucket =
+      params.since && Date.now() - Date.parse(params.since) < 60 * 60 * 1000
+        ? "burst"
+        : "daily";
+    callOrder.push(
+      executor === lockedExecutor
+        ? `fetch_user_${bucket}_usage_locked`
+        : `fetch_user_${bucket}_usage_pool`,
+    );
+    return bucket === "burst" ? userBurstUsageEvents : userDailyUsageEvents;
+  },
+  insertUsageEvent: async (_event: unknown, executor?: unknown) => {
+    callOrder.push(
+      executor === lockedExecutor ? "insert_usage_locked" : "insert_usage_pool",
+    );
+    return {
+      id: "usage_123",
+      anonymous_trial_id: currentTrial.id,
+      user_id: currentTrial.user_id,
+      source: "cloud_default",
+      audio_seconds: 0,
+      created_at: new Date().toISOString(),
+    };
+  },
   patchAnonymousTrialById: async (
     _id: string,
     _patch: unknown,
@@ -107,6 +144,9 @@ beforeEach(() => {
   callOrder.length = 0;
   summaryInputs.length = 0;
   summaryShouldFail = false;
+  trialUsageEvents = [];
+  userDailyUsageEvents = [];
+  userBurstUsageEvents = [];
 });
 
 function buildRequest(body: Record<string, unknown> = {}) {
@@ -138,8 +178,10 @@ describe("/api/session/summary", () => {
     expect(payload.access_state).toBe("trialing");
     expect(callOrder).toEqual([
       "lock:trial_123",
+      "fetch_usage_locked",
       "patch_trial_locked",
       "summarize",
+      "insert_usage_locked",
     ]);
     expect(summaryInputs).toEqual([
       {
@@ -177,9 +219,33 @@ describe("/api/session/summary", () => {
     expect(response.status).toBe(200);
     expect(callOrder).toEqual([
       "user_lock:user_123",
+      "fetch_user_daily_usage_locked",
+      "fetch_user_burst_usage_locked",
       "patch_trial_locked",
       "summarize",
+      "insert_usage_locked",
     ]);
+  });
+
+  test("rejects trial summaries when the usage request limit is exhausted", async () => {
+    trialUsageEvents = Array.from({ length: 250 }, (_, index) => ({
+      id: `usage_${index}`,
+      anonymous_trial_id: currentTrial.id,
+      user_id: null,
+      source: "cloud_default",
+      audio_seconds: 0,
+      created_at: new Date().toISOString(),
+    }));
+
+    const response = await POST(buildRequest());
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      error: "Trial usage limit reached. Upgrade to Pro to continue.",
+      reason: "request_limit",
+    });
+    expect(callOrder).toEqual(["lock:trial_123", "fetch_usage_locked"]);
+    expect(summaryInputs).toHaveLength(0);
   });
 
   test("does not report success when the provider fails", async () => {
@@ -193,6 +259,7 @@ describe("/api/session/summary", () => {
     });
     expect(callOrder).toEqual([
       "lock:trial_123",
+      "fetch_usage_locked",
       "patch_trial_locked",
       "summarize",
     ]);

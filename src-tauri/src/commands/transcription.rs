@@ -383,8 +383,19 @@ pub async fn transcribe_audio_file(
     transcription_manager.clear_cancel_request();
     emit_file_transcription_progress(&app, 5, "Importing audio file", None, None);
 
-    let imported =
-        import_audio_file(&path).map_err(|err| format!("Failed to import audio file: {}", err))?;
+    if transcription_manager.is_cancel_requested() {
+        return Err("Transcription cancelled".to_string());
+    }
+
+    let import_path = path.clone();
+    let imported = tokio::task::spawn_blocking(move || import_audio_file(&import_path))
+        .await
+        .map_err(|err| format!("Failed to import audio file: {}", err))?
+        .map_err(|err| format!("Failed to import audio file: {}", err))?;
+    if transcription_manager.is_cancel_requested() {
+        return Err("Transcription cancelled".to_string());
+    }
+
     let file_name = Path::new(&path)
         .file_name()
         .and_then(|name| name.to_str())

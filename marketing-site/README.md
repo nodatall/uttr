@@ -53,10 +53,12 @@ The site expects these runtime variables:
 - `DATABASE_URL` - Postgres connection string for accounts, billing access, rate limits, and webhook state.
 - `DATABASE_POOL_MAX` - optional Postgres pool size; defaults to `5`.
 - `GROQ_API_KEY` - server-held Groq key for default cloud transcription proxying.
-- `GROQ_TRANSCRIPTION_MODEL_DEFAULT` - default Groq transcription model name.
+- `GROQ_TRANSCRIPTION_MODEL_DEFAULT` - optional default Groq transcription model name.
+- `OPENAI_API_KEY` - server-held OpenAI key for live session summaries.
+- `OPENAI_SESSION_SUMMARY_MODEL` - optional OpenAI model override for session summaries.
 - `UTTR_PRO_DAILY_AUDIO_SECONDS_LIMIT` - optional Pro rolling 24-hour audio cap in seconds; defaults to `18000` (5 hours).
-- `UTTR_PRO_DAILY_REQUEST_LIMIT` - optional Pro rolling 24-hour transcription request cap; defaults to `500`.
-- `UTTR_PRO_BURST_REQUEST_LIMIT` - optional Pro burst transcription request cap; defaults to `60`.
+- `UTTR_PRO_DAILY_REQUEST_LIMIT` - optional Pro rolling 24-hour transcription and summary request cap; defaults to `500`.
+- `UTTR_PRO_BURST_REQUEST_LIMIT` - optional Pro burst transcription and summary request cap; defaults to `60`.
 - `UTTR_PRO_BURST_WINDOW_SECONDS` - optional Pro burst window in seconds; defaults to `600` (10 minutes).
 - `UTTR_INSTALL_TOKEN_SECRET` - signing secret for install tokens.
 - `UTTR_CLAIM_TOKEN_SECRET` - signing secret for claim tokens.
@@ -102,14 +104,28 @@ Copy the emitted signing secret to `STRIPE_WEBHOOK_SECRET`.
 ## Routes
 
 - `/` landing page
+- `/account` account and subscription page
+- `/claim` anonymous install claim page
 - `/download` redirect to the latest macOS release download
+- `/legal` legal page
 - `/success` checkout success page
 - `/cancel` checkout cancellation page
+- `GET /api/auth/session` read the current signed-in account session
+- `POST /api/auth/signin` sign in with an email/password account
+- `POST /api/auth/signup` create an email/password account
+- `POST /api/auth/signout` clear the account session
+- `POST /api/auth/convert-anonymous` link an anonymous trial to an account
+- `POST /api/billing/portal` create a Stripe billing portal session
 - `POST /api/checkout` create Stripe checkout session
+- `GET /api/entitlement` resolve install entitlement and trial state
+- `POST /api/session/summary` summarize a live session transcript chunk set
 - `POST /api/stripe/webhook` process Stripe webhooks
+- `POST /api/transcribe/cloud` proxy default cloud transcription
+- `POST /api/trial/bootstrap` create or refresh an anonymous install trial
+- `POST /api/trial/create-claim` create an anonymous trial claim token
 
 ## Notes
 
-- The app is purchase-enabled and does not enforce in-app entitlement checks.
-- Webhook idempotency and production rate limiting are durable Postgres writes.
-- The backend proxy and entitlement work will add additional routes under `/api/*` in later tasks.
+- The desktop app enforces entitlement through install tokens and server access snapshots.
+- Webhook idempotency, production rate limiting, trial state, usage accounting, and account sessions are durable Postgres writes.
+- Cloud transcription and session summary routes use server-held provider keys and count successful provider calls against request usage limits.

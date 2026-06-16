@@ -34,10 +34,13 @@ export const RecordingRetentionPeriodSelector: React.FC<RecordingRetentionPeriod
           count: Number(historyLimit),
         }),
       },
-      { value: "days3", label: t("settings.debug.recordingRetention.days3") },
-      { value: "weeks2", label: t("settings.debug.recordingRetention.weeks2") },
+      { value: "days_3", label: t("settings.debug.recordingRetention.days3") },
       {
-        value: "months3",
+        value: "weeks_2",
+        label: t("settings.debug.recordingRetention.weeks2"),
+      },
+      {
+        value: "months_3",
         label: t("settings.debug.recordingRetention.months3"),
       },
     ];

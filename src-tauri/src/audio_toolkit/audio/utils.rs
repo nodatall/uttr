@@ -1,12 +1,19 @@
 use anyhow::Result;
 use hound::{WavSpec, WavWriter};
 use log::debug;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::audio_toolkit::constants::WHISPER_SAMPLE_RATE;
 
 /// Save audio samples as a WAV file
 pub async fn save_wav_file<P: AsRef<Path>>(file_path: P, samples: &[f32]) -> Result<()> {
+    let file_path = file_path.as_ref().to_path_buf();
+    let samples = samples.to_vec();
+
+    tokio::task::spawn_blocking(move || write_wav_file(file_path, samples)).await?
+}
+
+fn write_wav_file(file_path: PathBuf, samples: Vec<f32>) -> Result<()> {
     let spec = WavSpec {
         channels: 1,
         sample_rate: 16000,
@@ -14,7 +21,7 @@ pub async fn save_wav_file<P: AsRef<Path>>(file_path: P, samples: &[f32]) -> Res
         sample_format: hound::SampleFormat::Int,
     };
 
-    let mut writer = WavWriter::create(file_path.as_ref(), spec)?;
+    let mut writer = WavWriter::create(&file_path, spec)?;
 
     // Convert f32 samples to i16 for WAV
     for sample in samples {
@@ -23,7 +30,7 @@ pub async fn save_wav_file<P: AsRef<Path>>(file_path: P, samples: &[f32]) -> Res
     }
 
     writer.finalize()?;
-    debug!("Saved WAV file: {:?}", file_path.as_ref());
+    debug!("Saved WAV file: {:?}", file_path);
     Ok(())
 }
 

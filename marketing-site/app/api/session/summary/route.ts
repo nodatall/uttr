@@ -4,15 +4,25 @@ import type { DbExecutor } from "@/lib/db";
 import {
   fetchAnonymousTrialById,
   fetchEntitlementByUserId,
+  fetchUsageEventsSince,
+  fetchUserUsageEventsSince,
+  insertUsageEvent,
   patchAnonymousTrialById,
   readInstallTokenFromRequest,
   refreshAnonymousTrialState,
   resolveAccessDecision,
   type InstallTokenPayload,
+  type UsageEventRow,
   verifyInstallToken,
   withAnonymousTrialUsageLock,
   withUserUsageLock,
 } from "@/lib/access";
+import {
+  proBurstUsageAllowsRequest,
+  proDailyUsageAllowsRequest,
+  readProUsageLimits,
+  trialUsageAllowsRequest,
+} from "@/lib/access/usage";
 import { summarizeSessionWithOpenAi } from "@/lib/openai/session-summary";
 import {
   checkRateLimit,
@@ -81,6 +91,12 @@ function requestBodyHasKnownLength(request: Request) {
 
   const parsed = Number.parseInt(contentLength, 10);
   return Number.isFinite(parsed) && parsed > 0;
+}
+
+function respondToUsageLimit(error: string, reason?: string | null) {
+  return NextResponse.json(reason ? { error, reason } : { error }, {
+    status: 403,
+  });
 }
 
 async function readJsonPayload(request: Request) {
@@ -246,6 +262,78 @@ export async function POST(request: Request) {
     }
 
     const runSummary = async (executor?: DbExecutor) => {
+      let usageEvents: UsageEventRow[] = [];
+      let proDailyUsageEvents: UsageEventRow[] = [];
+      let proBurstUsageEvents: UsageEventRow[] = [];
+      const proUsageLimits = readProUsageLimits();
+
+      if (accessDecision.accessState !== "subscribed") {
+        const usageWindowStart =
+          refreshedTrial.trial_started_at ||
+          new Date(Date.now() - TRIAL_DURATION_MS).toISOString();
+        usageEvents = await fetchUsageEventsSince(
+          {
+            anonymousTrialId: refreshedTrial.id,
+            since: usageWindowStart,
+          },
+          executor,
+        );
+
+        const usageDecision = trialUsageAllowsRequest(usageEvents, 0);
+        if (!usageDecision.allowed) {
+          return respondToUsageLimit(
+            "Trial usage limit reached. Upgrade to Pro to continue.",
+            usageDecision.reason,
+          );
+        }
+      } else if (refreshedTrial.user_id) {
+        const nowMs = Date.now();
+        const dailyUsageWindowStart = new Date(
+          nowMs - 24 * 60 * 60 * 1000,
+        ).toISOString();
+        const burstUsageWindowStart = new Date(
+          nowMs - proUsageLimits.burstWindowSeconds * 1000,
+        ).toISOString();
+
+        proDailyUsageEvents = await fetchUserUsageEventsSince(
+          {
+            userId: refreshedTrial.user_id,
+            since: dailyUsageWindowStart,
+          },
+          executor,
+        );
+        proBurstUsageEvents = await fetchUserUsageEventsSince(
+          {
+            userId: refreshedTrial.user_id,
+            since: burstUsageWindowStart,
+          },
+          executor,
+        );
+
+        const burstDecision = proBurstUsageAllowsRequest(
+          proBurstUsageEvents,
+          proUsageLimits,
+        );
+        if (!burstDecision.allowed) {
+          return respondToUsageLimit(
+            "Temporary Pro usage limit reached. Contact support if this is legitimate heavy use.",
+            burstDecision.reason,
+          );
+        }
+
+        const dailyDecision = proDailyUsageAllowsRequest(
+          proDailyUsageEvents,
+          0,
+          proUsageLimits,
+        );
+        if (!dailyDecision.allowed) {
+          return respondToUsageLimit(
+            "Daily Pro usage limit reached. Contact support if this is legitimate heavy use.",
+            dailyDecision.reason,
+          );
+        }
+      }
+
       const now = new Date().toISOString();
       let persistedTrial = refreshedTrial;
 
@@ -291,6 +379,21 @@ export async function POST(request: Request) {
         transcriptText,
         previousSummary,
       });
+
+      const usageEvent = await insertUsageEvent(
+        {
+          anonymous_trial_id: persistedTrial.id,
+          user_id: persistedTrial.user_id,
+          source: "cloud_default",
+          audio_seconds: 0,
+        },
+        executor,
+      );
+
+      if (!usageEvent) {
+        throw new Error("Unable to record usage event.");
+      }
+
       const accessState = resolvePostSummaryAccessState(
         persistedTrial.status,
         accessDecision.accessState,

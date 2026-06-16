@@ -14,6 +14,8 @@ use symphonia::default::{get_codecs, get_probe};
 const TARGET_SAMPLE_RATE: u32 = 16_000;
 const RESAMPLER_CHUNK_SIZE: usize = 1024;
 const SUPPORTED_EXTENSIONS: &[&str] = &["wav", "mp3", "m4a", "aac", "ogg"];
+const MAX_AUDIO_IMPORT_BYTES: u64 = 512 * 1024 * 1024;
+const MAX_AUDIO_IMPORT_SECONDS: usize = 2 * 60 * 60;
 
 #[derive(Debug, Clone)]
 pub struct ImportedAudioFile {
@@ -61,6 +63,13 @@ fn validate_audio_path(path: &Path) -> Result<()> {
         return Err(anyhow!("The selected path is not a file."));
     }
 
+    let metadata = path.metadata()?;
+    if metadata.len() > MAX_AUDIO_IMPORT_BYTES {
+        return Err(anyhow!(
+            "The selected audio file is too large. Choose a file under 512 MB."
+        ));
+    }
+
     let extension =
         normalized_extension(path).ok_or_else(|| anyhow!(unsupported_format_message(None)))?;
 
@@ -69,6 +78,10 @@ fn validate_audio_path(path: &Path) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn max_decoded_samples_for_rate(sample_rate: u32) -> usize {
+    sample_rate as usize * MAX_AUDIO_IMPORT_SECONDS
 }
 
 fn normalized_extension(path: &Path) -> Option<String> {
@@ -158,6 +171,11 @@ fn decode_audio_file(path: &Path) -> Result<(Vec<f32>, u32)> {
 
         sample_rate = decoded.spec().rate;
         append_mono_samples(decoded, &mut samples);
+        if samples.len() > max_decoded_samples_for_rate(sample_rate) {
+            return Err(anyhow!(
+                "The selected audio file is too long. Choose a file under 2 hours."
+            ));
+        }
     }
 
     Ok((samples, sample_rate))
@@ -231,6 +249,20 @@ mod tests {
         let result = import_audio_file(fixture.path());
         let err = result.expect_err("unsupported extension should fail");
         assert!(err.to_string().contains("Unsupported audio format"));
+    }
+
+    #[test]
+    fn rejects_files_over_import_size_limit_before_decoding() {
+        let fixture = tempfile::NamedTempFile::with_suffix(".wav").expect("fixture");
+        fixture
+            .as_file()
+            .set_len(MAX_AUDIO_IMPORT_BYTES + 1)
+            .expect("set fixture size");
+
+        let result = import_audio_file(fixture.path());
+
+        let err = result.expect_err("oversized file should fail");
+        assert!(err.to_string().contains("too large"));
     }
 
     #[test]

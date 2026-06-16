@@ -1,5 +1,4 @@
 import { listen } from "@tauri-apps/api/event";
-import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { X } from "lucide-react";
@@ -12,6 +11,7 @@ import {
   type MouseEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
+import { commands } from "@/bindings";
 import { RoseThreeLoader } from "@/components/shared";
 
 type AskSelectionState = "recording" | "thinking" | "result" | "error";
@@ -51,9 +51,16 @@ const payloadsMatch = (
     JSON.stringify(second.messages ?? []);
 
 const closePanel = () => {
-  void invoke("hide_ask_selection_panel").catch(() => {
-    void getCurrentWindow().hide();
-  });
+  void commands
+    .hideAskSelectionPanel()
+    .then((result) => {
+      if (result.status === "error") {
+        void getCurrentWindow().hide();
+      }
+    })
+    .catch(() => {
+      void getCurrentWindow().hide();
+    });
 };
 
 const startPanelDrag = (event: MouseEvent<HTMLElement>) => {
@@ -67,7 +74,13 @@ const startPanelDrag = (event: MouseEvent<HTMLElement>) => {
     return;
   }
 
-  void invoke("start_ask_selection_panel_drag")
+  void commands
+    .startAskSelectionPanelDrag()
+    .then((result) => {
+      if (result.status === "error") {
+        return getCurrentWindow().startDragging();
+      }
+    })
     .catch(() => getCurrentWindow().startDragging())
     .catch((error) => {
       console.warn("Ask Selection drag failed:", error);
@@ -118,9 +131,10 @@ const useAskSelectionPanelController = () => {
   );
 
   const refreshPayload = useCallback(() => {
-    void invoke<AskSelectionPayload | null>("get_ask_selection_payload")
+    void commands
+      .getAskSelectionPayload()
       .then((latestPayload) => {
-        applyPayload(latestPayload);
+        applyPayload(latestPayload as AskSelectionPayload | null);
       })
       .catch(() => {});
   }, [applyPayload]);
@@ -230,14 +244,12 @@ const useAskSelectionPanelController = () => {
     setIsSending(true);
 
     try {
-      const nextPayload = await invoke<AskSelectionPayload>(
-        "ask_selection_follow_up",
-        {
-          sessionId,
-          message,
-        },
-      );
-      applyPayload(nextPayload);
+      const result = await commands.askSelectionFollowUp(sessionId, message);
+      if (result.status === "ok") {
+        applyPayload(result.data as AskSelectionPayload);
+      } else {
+        throw new Error(result.error);
+      }
     } catch (error) {
       const errorPayload: AskSelectionPayload = {
         ...(payloadRef.current ?? DEFAULT_PAYLOAD),

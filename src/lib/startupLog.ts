@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { commands } from "@/bindings";
 
 const startupOrigin = performance.now();
 
@@ -9,5 +9,5 @@ function startupElapsedMs() {
 export function logFrontendStartup(event: string) {
   const message = `${event} elapsed_ms=${startupElapsedMs()}`;
   console.info(`[startup] ${message}`);
-  void invoke("log_frontend_startup", { message }).catch(() => {});
+  void commands.logFrontendStartup(message).catch(() => {});
 }
