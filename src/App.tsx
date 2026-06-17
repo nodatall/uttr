@@ -1,4 +1,12 @@
-import { useCallback, useEffect, useReducer, useRef, type FC } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useReducer,
+  useRef,
+  type FC,
+} from "react";
 import { Toaster, toast } from "sonner";
 import { useTranslation } from "react-i18next";
 import { platform } from "@tauri-apps/plugin-os";
@@ -9,7 +17,6 @@ import {
 } from "tauri-plugin-macos-permissions-api";
 import "./App.css";
 import AccessibilityPermissions from "./components/AccessibilityPermissions";
-import AccessibilityOnboarding from "./components/onboarding/AccessibilityOnboarding";
 import { OnboardingCompletionProvider } from "./components/onboarding/OnboardingCompletionContext";
 import { Sidebar } from "./components/Sidebar";
 import type { SidebarSection } from "./components/sidebarSections";
@@ -32,6 +39,19 @@ import { getLanguageDirection, initializeRTL } from "@/lib/utils/rtl";
 
 type OnboardingStep = "accessibility" | "done";
 const PERMISSION_CHECK_TIMEOUT_MS = 1500;
+
+const AccessibilityOnboarding = lazy(() =>
+  import("./components/onboarding/AccessibilityOnboarding"),
+);
+
+const SectionLoading = () => (
+  <div className="flex min-h-[220px] items-center justify-center text-text">
+    <RoseThreeLoader
+      className="h-20 w-20 text-logo-primary drop-shadow-[0_0_24px_rgba(103,215,163,0.22)]"
+      ariaLabel="Loading section"
+    />
+  </div>
+);
 
 type HistoryFocusRequest = {
   entryId: number | null;
@@ -287,12 +307,6 @@ function useAppController() {
   const sessionStageRef = useRef(sessionWindowState.stage);
   const { settings, updateSetting } = useSettings();
   const direction = getLanguageDirection(i18n.language);
-  const refreshAudioDevices = useSettingsStore(
-    (state) => state.refreshAudioDevices,
-  );
-  const refreshOutputDevices = useSettingsStore(
-    (state) => state.refreshOutputDevices,
-  );
   const refreshInstallAccess = useSettingsStore(
     (state) => state.refreshInstallAccess,
   );
@@ -355,7 +369,7 @@ function useAppController() {
     };
   }, [refreshInstallAccess]);
 
-  // Initialize Enigo, shortcuts, and refresh audio devices when main app loads
+  // Initialize Enigo and shortcuts when main app loads.
   useEffect(() => {
     if (onboardingStep === "done" && !hasCompletedPostOnboardingInit.current) {
       hasCompletedPostOnboardingInit.current = true;
@@ -366,10 +380,8 @@ function useAppController() {
           console.warn("Failed to initialize:", e);
           logFrontendStartup("post onboarding input init failed");
         });
-      refreshAudioDevices();
-      refreshOutputDevices();
     }
-  }, [onboardingStep, refreshAudioDevices, refreshOutputDevices]);
+  }, [onboardingStep]);
 
   // Handle keyboard shortcuts for debug mode toggle
   useEffect(() => {
@@ -559,7 +571,9 @@ function App() {
   if (onboardingStep === "accessibility") {
     return (
       <OnboardingCompletionProvider onComplete={handleAccessibilityComplete}>
-        <AccessibilityOnboarding />
+        <Suspense fallback={<SectionLoading />}>
+          <AccessibilityOnboarding />
+        </Suspense>
       </OnboardingCompletionProvider>
     );
   }

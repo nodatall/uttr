@@ -1,6 +1,7 @@
 import React from "react";
 import { useSettings } from "@/hooks/useSettings";
-import { DebugSettings, GeneralSettings } from "@/components/settings";
+import { DebugSettings } from "@/components/settings/debug/DebugSettings";
+import { GeneralSettings } from "@/components/settings/general/GeneralSettings";
 
 export const SettingsWorkspace: React.FC = () => {
   const { settings } = useSettings();

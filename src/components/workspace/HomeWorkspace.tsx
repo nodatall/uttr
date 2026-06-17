@@ -13,7 +13,7 @@ import {
 import { toast } from "sonner";
 import { commands } from "@/bindings";
 import { Button } from "@/components/ui/Button";
-import { HistorySettings } from "@/components/settings";
+import { HistorySettings } from "@/components/settings/history/HistorySettings";
 import type { HistoryEntry } from "@/bindings";
 
 export type SessionWindowStage =

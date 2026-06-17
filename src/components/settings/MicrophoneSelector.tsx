@@ -25,6 +25,12 @@ export const MicrophoneSelector: React.FC<MicrophoneSelectorProps> = React.memo(
 
     const selectedMicrophone = getSetting("selected_microphone") || "default";
 
+    React.useEffect(() => {
+      if (!isLoading && audioDevices.length === 0) {
+        void refreshAudioDevices();
+      }
+    }, [audioDevices.length, isLoading, refreshAudioDevices]);
+
     const handleMicrophoneSelect = async (deviceName: string) => {
       await updateSetting("selected_microphone", deviceName);
     };

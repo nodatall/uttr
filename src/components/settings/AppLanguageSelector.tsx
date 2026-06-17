@@ -2,7 +2,11 @@ import React from "react";
 import { useTranslation } from "react-i18next";
 import { Dropdown } from "../ui/Dropdown";
 import { SettingContainer } from "../ui/SettingContainer";
-import { SUPPORTED_LANGUAGES, type SupportedLanguageCode } from "../../i18n";
+import {
+  changeAppLanguage,
+  SUPPORTED_LANGUAGES,
+  type SupportedLanguageCode,
+} from "../../i18n";
 import { useSettings } from "@/hooks/useSettings";
 
 interface AppLanguageSelectorProps {
@@ -24,8 +28,15 @@ export const AppLanguageSelector: React.FC<AppLanguageSelectorProps> =
     }));
 
     const handleLanguageChange = (langCode: string) => {
-      i18n.changeLanguage(langCode);
-      updateSetting("app_language", langCode);
+      changeAppLanguage(langCode)
+        .then((supported) => {
+          if (supported) {
+            return updateSetting("app_language", supported);
+          }
+        })
+        .catch((error) => {
+          console.error("Failed to change app language:", error);
+        });
     };
 
     return (
