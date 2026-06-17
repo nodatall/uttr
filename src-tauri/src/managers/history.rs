@@ -35,6 +35,15 @@ static MIGRATIONS: &[M] = &[
     M::up(
         "ALTER TABLE transcription_history ADD COLUMN recording_source TEXT NOT NULL DEFAULT 'dictation';",
     ),
+    M::up(
+        "CREATE INDEX IF NOT EXISTS transcription_history_timestamp_idx
+            ON transcription_history (timestamp DESC);",
+    ),
+    M::up(
+        "CREATE INDEX IF NOT EXISTS transcription_history_unsaved_dictation_timestamp_idx
+            ON transcription_history (timestamp DESC)
+            WHERE saved = 0 AND recording_source != 'full_system_audio';",
+    ),
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize, Type)]
@@ -593,6 +602,32 @@ mod tests {
             ],
         )
         .expect("insert history entry");
+    }
+
+    #[test]
+    fn migrations_create_history_query_indexes() {
+        let mut conn = Connection::open_in_memory().expect("open in-memory db");
+        let migrations = Migrations::new(MIGRATIONS.to_vec());
+        migrations.validate().expect("validate migrations");
+        migrations.to_latest(&mut conn).expect("run migrations");
+
+        let timestamp_index_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'index' AND name = 'transcription_history_timestamp_idx'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query timestamp index");
+        let cleanup_index_exists: bool = conn
+            .query_row(
+                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'index' AND name = 'transcription_history_unsaved_dictation_timestamp_idx'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("query cleanup index");
+
+        assert!(timestamp_index_exists);
+        assert!(cleanup_index_exists);
     }
 
     #[test]
