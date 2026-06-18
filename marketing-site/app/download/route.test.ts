@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { selectMacDmgAsset } from "./route";
+import { GET, getDirectMacAppDownloadUrl, selectMacDmgAsset } from "./route";
 
 const assets = [
   {
@@ -51,5 +51,30 @@ describe("macOS download asset selection", () => {
         "aarch64",
       ),
     ).toBeNull();
+  });
+
+  test("falls back to a direct app download instead of the release list", async () => {
+    const originalFetch = globalThis.fetch;
+    const originalConsoleError = console.error;
+    globalThis.fetch = (async () =>
+      new Response("unavailable", {
+        status: 503,
+        statusText: "Service Unavailable",
+      })) as typeof fetch;
+    console.error = () => {};
+
+    try {
+      const response = await GET(
+        new Request("https://uttr.test/download?arch=intel"),
+      );
+
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toBe(
+        getDirectMacAppDownloadUrl("x64"),
+      );
+    } finally {
+      globalThis.fetch = originalFetch;
+      console.error = originalConsoleError;
+    }
   });
 });

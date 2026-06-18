@@ -5,7 +5,11 @@ export const dynamic = "force-dynamic";
 
 const LATEST_RELEASE_API =
   "https://api.github.com/repos/nodatall/uttr/releases/latest";
-const FALLBACK_RELEASE_URL = "https://github.com/nodatall/uttr/releases/latest";
+const DIRECT_MAC_APP_DOWNLOAD_URLS = {
+  aarch64:
+    "https://github.com/nodatall/uttr/releases/latest/download/Uttr_aarch64.app.tar.gz",
+  x64: "https://github.com/nodatall/uttr/releases/latest/download/Uttr_x64.app.tar.gz",
+} satisfies Record<MacArch, string>;
 
 type GitHubReleaseAsset = {
   name?: string;
@@ -74,6 +78,10 @@ export function selectMacDmgAsset(
   );
 }
 
+export function getDirectMacAppDownloadUrl(arch: MacArch) {
+  return DIRECT_MAC_APP_DOWNLOAD_URLS[arch];
+}
+
 export async function GET(request: Request) {
   const arch = readRequestedArch(request);
 
@@ -108,5 +116,7 @@ export async function GET(request: Request) {
     console.error("download_asset_lookup_failed", error);
   }
 
-  return NextResponse.redirect(FALLBACK_RELEASE_URL, { status: 302 });
+  return NextResponse.redirect(getDirectMacAppDownloadUrl(arch), {
+    status: 302,
+  });
 }
