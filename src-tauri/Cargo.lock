@@ -2783,7 +2783,7 @@ dependencies = [
 
 [[package]]
 name = "handy"
-version = "0.1.15"
+version = "0.1.16"
 dependencies = [
  "aes-gcm",
  "anyhow",

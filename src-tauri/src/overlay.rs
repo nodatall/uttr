@@ -865,11 +865,13 @@ fn create_ask_selection_panel(app_handle: &AppHandle) {
                 .visible_on_all_workspaces(false)
                 .skip_taskbar(true)
                 .accept_first_mouse(true)
+                .visible(false)
         })
         .collection_behavior(CollectionBehavior::new().full_screen_auxiliary())
         .build()
     {
-        Ok(_) => {
+        Ok(panel) => {
+            let _ = panel.hide();
             debug!("[overlay] macos created label={}", ASK_SELECTION_LABEL);
         }
         Err(error) => {
@@ -947,8 +949,20 @@ fn show_ask_selection_panel_inner(
     show_epoch: u64,
 ) {
     let position = calculate_ask_selection_position(app_handle);
-    let _ = show_ask_selection_panel_window(app_handle, payload.clone(), position, show_epoch);
+    let _ = show_ask_selection_panel_window(
+        app_handle,
+        payload.clone(),
+        position,
+        show_epoch,
+        AskSelectionShowBehavior::Activate,
+    );
     schedule_ask_selection_show_retries(app_handle.clone(), payload, position, show_epoch);
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AskSelectionShowBehavior {
+    Activate,
+    Refresh,
 }
 
 fn show_ask_selection_panel_window(
@@ -956,6 +970,7 @@ fn show_ask_selection_panel_window(
     payload: AskSelectionPayload,
     position: Option<(f64, f64)>,
     show_epoch: u64,
+    behavior: AskSelectionShowBehavior,
 ) -> bool {
     if let Some(panel_window) = app_handle.get_webview_window(ASK_SELECTION_LABEL) {
         if let Some((x, y)) = position {
@@ -974,8 +989,10 @@ fn show_ask_selection_panel_window(
             panel.set_level(PanelLevel::Status.value());
             panel.order_front_regardless();
         }
-        let _ = panel_window.set_focus();
-        hide_main_window_for_ask_selection(app_handle);
+        if behavior == AskSelectionShowBehavior::Activate {
+            hide_main_window_for_ask_selection(app_handle);
+            let _ = panel_window.set_focus();
+        }
         debug!(
             "[overlay] ask selection shown state={} epoch={}",
             payload.state, show_epoch
@@ -1022,8 +1039,8 @@ fn update_ask_selection_panel_inner(
             panel.set_level(PanelLevel::Status.value());
             panel.order_front_regardless();
         }
-        let _ = panel_window.set_focus();
         hide_main_window_for_ask_selection(app_handle);
+        let _ = panel_window.set_focus();
         debug!(
             "[overlay] ask selection updated state={} epoch={}",
             payload.state, show_epoch
@@ -1076,7 +1093,13 @@ fn schedule_ask_selection_show_retries(
                 let app = app_handle.clone();
                 let payload = payload.clone();
                 let _ = app_handle.run_on_main_thread(move || {
-                    let _ = show_ask_selection_panel_window(&app, payload, position, show_epoch);
+                    let _ = show_ask_selection_panel_window(
+                        &app,
+                        payload,
+                        position,
+                        show_epoch,
+                        AskSelectionShowBehavior::Refresh,
+                    );
                 });
             }
 
@@ -1087,6 +1110,7 @@ fn schedule_ask_selection_show_retries(
                     payload.clone(),
                     position,
                     show_epoch,
+                    AskSelectionShowBehavior::Refresh,
                 );
             }
         }
