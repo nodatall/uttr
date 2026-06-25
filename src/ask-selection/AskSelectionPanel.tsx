@@ -25,6 +25,7 @@ type AskSelectionMessage = {
 type AskSelectionPayload = {
   state: AskSelectionState;
   text?: string | null;
+  selectedText?: string | null;
   error?: string | null;
   sessionId?: number | null;
   messages?: AskSelectionMessage[] | null;
@@ -33,6 +34,7 @@ type AskSelectionPayload = {
 const DEFAULT_PAYLOAD: AskSelectionPayload = {
   state: "thinking",
   text: null,
+  selectedText: null,
   error: null,
   sessionId: null,
   messages: [],
@@ -45,6 +47,7 @@ const payloadsMatch = (
   first !== null &&
   first.state === second.state &&
   (first.text ?? null) === (second.text ?? null) &&
+  (first.selectedText ?? null) === (second.selectedText ?? null) &&
   (first.error ?? null) === (second.error ?? null) &&
   (first.sessionId ?? null) === (second.sessionId ?? null) &&
   JSON.stringify(first.messages ?? []) ===
@@ -274,6 +277,7 @@ const useAskSelectionPanelController = () => {
 
   const statusText = copied ? "Copied" : "";
   const messages = useMemo(() => payload?.messages ?? [], [payload?.messages]);
+  const selectedText = payload?.selectedText?.trim() ?? "";
   const hasError = payload?.state === "error";
   const hasMessages = messages.length > 0;
   const hasCompletedAssistantMessage = messages.some(
@@ -289,6 +293,7 @@ const useAskSelectionPanelController = () => {
     isSending,
     messageListRef,
     messages,
+    selectedText,
     hasError,
     hasMessages,
     canChat,
@@ -307,6 +312,7 @@ export default function AskSelectionPanel() {
     isSending,
     messageListRef,
     messages,
+    selectedText,
     hasError,
     hasMessages,
     canChat,
@@ -349,6 +355,14 @@ export default function AskSelectionPanel() {
           </button>
         </header>
         <div className="ask-selection-body" ref={messageListRef}>
+          {selectedText && (
+            <div
+              className="ask-selection-selected-text"
+              aria-label="Selected text"
+            >
+              {selectedText}
+            </div>
+          )}
           {payload.state === "recording" && !hasMessages && (
             <output className="ask-selection-centered-state">
               <div className="ask-selection-audio-bars" aria-hidden="true">

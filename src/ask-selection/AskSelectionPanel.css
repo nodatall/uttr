@@ -130,6 +130,27 @@
   font-weight: 650;
 }
 
+.ask-selection-selected-text {
+  max-height: 132px;
+  margin: 0 0 14px;
+  padding: 11px 14px 11px 16px;
+  overflow: auto;
+  border: 1px solid rgb(255 255 255 / 8%);
+  border-left: 3px solid rgb(147 160 179 / 62%);
+  border-radius: 10px;
+  background: rgb(6 10 18 / 58%);
+  color: rgb(147 160 179 / 96%);
+  font-size: 14px;
+  line-height: 1.48;
+  font-style: italic;
+  white-space: pre-wrap;
+  user-select: text;
+}
+
+.ask-selection-selected-text + .ask-selection-centered-state {
+  min-height: 220px;
+}
+
 .ask-selection-audio-bars {
   height: 34px;
   display: flex;

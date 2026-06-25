@@ -1805,9 +1805,11 @@ fn ask_selection_payload(
     text: Option<String>,
     error: Option<String>,
 ) -> utils::AskSelectionPayload {
+    let selected_text = session_id.and_then(current_ask_selection_selected_text);
     utils::AskSelectionPayload {
         state: state.to_string(),
         text,
+        selected_text,
         error,
         session_id,
         messages,
@@ -1850,6 +1852,20 @@ fn current_ask_selection_messages() -> Vec<utils::AskSelectionMessage> {
         .ok()
         .and_then(|session| session.as_ref().map(|session| session.messages.clone()))
         .unwrap_or_default()
+}
+
+fn current_ask_selection_selected_text(session_id: u64) -> Option<String> {
+    ASK_SELECTION_CHAT_SESSION
+        .lock()
+        .ok()
+        .and_then(|session| {
+            session
+                .as_ref()
+                .filter(|session| session.id == session_id)
+                .and_then(|session| session.selected_text.clone())
+        })
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
 }
 
 fn ask_selection_session_is_current(session_id: u64) -> bool {
@@ -4105,7 +4121,7 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
-        ask_selection_message, ask_selection_session_is_current,
+        ask_selection_message, ask_selection_payload, ask_selection_session_is_current,
         build_ask_selection_follow_up_prompt, build_ask_selection_prompt,
         build_live_summary_prompt, clean_ask_selection_response, clean_post_process_response,
         clear_ask_selection_session, completion_context_for_active_meeting,
@@ -4249,6 +4265,29 @@ mod tests {
         assert!(prompt.contains("chat question"));
         assert!(!prompt.contains("# Selected text"));
         assert!(prompt.contains("<uttr_ask_output>"));
+    }
+
+    #[test]
+    fn ask_selection_payload_includes_session_selected_text() {
+        clear_ask_selection_session();
+        let session_id = current_ask_selection_session_id();
+        update_ask_selection_session(
+            session_id,
+            Some("  selected text  ".to_string()),
+            AppContextSnapshot::default(),
+            vec![ask_selection_message("user", "summarize this", false)],
+        );
+
+        let payload = ask_selection_payload(
+            "result",
+            Some(session_id),
+            current_ask_selection_messages(),
+            Some("summary".to_string()),
+            None,
+        );
+
+        assert_eq!(payload.selected_text.as_deref(), Some("selected text"));
+        clear_ask_selection_session();
     }
 
     #[test]
