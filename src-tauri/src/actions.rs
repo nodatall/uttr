@@ -1934,22 +1934,18 @@ fn build_ask_selection_follow_up_prompt(
 ) -> String {
     let conversation = render_ask_selection_conversation(messages);
     let selected_text = selected_text.trim();
-    let mut prompt = if selected_text.is_empty() {
-        format!(
-            "# Task\nAnswer the latest follow-up using the prior Ask Selection chat as context. No selected text was provided. Return only the answer inside <uttr_ask_output>...</uttr_ask_output>.\n\n# Latest follow-up\n{}",
-            follow_up.trim()
-        )
-    } else {
-        format!(
-            "# Task\nAnswer the latest follow-up using the selected text and prior Ask Selection chat as context. Return only the answer inside <uttr_ask_output>...</uttr_ask_output>. Do not invent facts outside the selected text unless the user asks a general question.\n\n# Latest follow-up\n{}\n\n# Selected text\n{}",
-            follow_up.trim(),
-            selected_text
-        )
-    };
+    let mut prompt = format!(
+        "# Task\nAnswer the latest follow-up using the prior Ask Selection chat as context. Return only the answer inside <uttr_ask_output>...</uttr_ask_output>. Answer the latest follow-up using the prior chat first. Use the original selected text only as background if it is still relevant.\n\n# Latest follow-up\n{}",
+        follow_up.trim()
+    );
 
     if !conversation.trim().is_empty() {
         prompt.push_str("\n\n# Prior chat\n");
         prompt.push_str(&conversation);
+    }
+    if !selected_text.is_empty() {
+        prompt.push_str("\n\n# Original selected text\n");
+        prompt.push_str(selected_text);
     }
     if let Some(block) = app_context_prompt_block(context) {
         prompt.push_str("\n\n# Context\n");
@@ -4321,13 +4317,60 @@ mod tests {
         );
 
         assert!(prompt.contains("# Latest follow-up\nmake it sharper"));
-        assert!(prompt.contains("# Selected text\nCounselor overload"));
         assert!(prompt.contains("User: What is the risk?"));
         assert!(prompt.contains("Assistant: The buyer is unclear."));
+        assert!(prompt.contains("# Original selected text\nCounselor overload"));
+        assert!(
+            prompt.find("# Prior chat").unwrap() < prompt.find("# Original selected text").unwrap()
+        );
         assert!(!prompt.contains("Thinking..."));
         assert!(prompt.contains("Google Docs"));
         assert!(prompt.contains("FreeFlow"));
         assert!(prompt.contains("<uttr_ask_output>"));
+    }
+
+    #[test]
+    fn ask_selection_follow_up_prompt_keeps_original_selection_as_background() {
+        let messages = vec![
+            ask_selection_message(
+                "user",
+                "This is for a German passport renewal. What do I put for these two things?",
+                false,
+            ),
+            ask_selection_message(
+                "assistant",
+                "If you do not have a doctoral title or religious/stage name, leave those fields blank.",
+                false,
+            ),
+            ask_selection_message(
+                "user",
+                "what do these mean? Erwerb der deutschen Staatsangehörigkeit als Kind eines/einer Deutschen durch Geburt",
+                false,
+            ),
+            ask_selection_message(
+                "assistant",
+                "These options describe how you acquired German citizenship.",
+                false,
+            ),
+        ];
+
+        let prompt = build_ask_selection_follow_up_prompt(
+            "Doktorgrad/ Doctoral title 11. Ordens-/ Künstlername/ Religious/Stage name",
+            &messages,
+            "my mother was german",
+            &AppContextSnapshot::default(),
+            &Vec::new(),
+        );
+
+        assert!(prompt.contains("# Latest follow-up\nmy mother was german"));
+        assert!(prompt.contains("Use the original selected text only as background"));
+        assert!(prompt.contains("# Prior chat"));
+        assert!(prompt.contains("Erwerb der deutschen Staatsangehörigkeit"));
+        assert!(prompt.contains("# Original selected text\nDoktorgrad/ Doctoral title"));
+        assert!(
+            prompt.find("# Prior chat").unwrap() < prompt.find("# Original selected text").unwrap()
+        );
+        assert!(!prompt.contains("# Selected text"));
     }
 
     #[test]
@@ -4351,11 +4394,11 @@ mod tests {
         );
 
         assert!(prompt.contains("# Latest follow-up\nmake it shorter"));
-        assert!(prompt.contains("No selected text was provided"));
         assert!(prompt.contains("User: What is Rust?"));
         assert!(prompt.contains("Assistant: Rust is a systems language."));
         assert!(!prompt.contains("Thinking..."));
         assert!(!prompt.contains("# Selected text"));
+        assert!(!prompt.contains("# Original selected text"));
         assert!(prompt.contains("<uttr_ask_output>"));
     }
 
