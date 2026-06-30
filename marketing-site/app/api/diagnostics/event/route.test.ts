@@ -56,7 +56,9 @@ function jsonRequest(body: unknown, headers: Record<string, string> = {}) {
   });
 }
 
-function trialRow(overrides: Partial<AnonymousTrialRow> = {}): AnonymousTrialRow {
+function trialRow(
+  overrides: Partial<AnonymousTrialRow> = {},
+): AnonymousTrialRow {
   return {
     id: "11111111-1111-4111-8111-111111111111",
     install_id: "token-install-id",
@@ -76,8 +78,7 @@ beforeEach(() => {
   process.env.NODE_ENV = "test";
   process.env.UTTR_INSTALL_TOKEN_SECRET =
     "install-secret-test-with-enough-entropy";
-  process.env.UTTR_CLAIM_TOKEN_SECRET =
-    "claim-secret-test-with-enough-entropy";
+  process.env.UTTR_CLAIM_TOKEN_SECRET = "claim-secret-test-with-enough-entropy";
   process.env.UTTR_DIAGNOSTICS_IDENTITY_SECRET =
     "diagnostic-secret-test-with-enough-entropy";
   delete process.env.UTTR_DIAGNOSTICS_DISABLED;

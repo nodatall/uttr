@@ -46,7 +46,11 @@ function parseArgs(argv) {
     else if (arg === "--provider") args.provider = next();
     else if (arg === "--model") args.model = next();
     else if (arg === "--base-url") args.baseUrl = next();
-    else if (arg === "--ids") args.ids = next().split(",").map((id) => id.trim()).filter(Boolean);
+    else if (arg === "--ids")
+      args.ids = next()
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean);
     else if (arg === "-h" || arg === "--help") {
       printUsage();
       process.exit(0);
@@ -57,9 +61,15 @@ function parseArgs(argv) {
 
   args.provider = args.provider.trim();
   args.model = args.model || DEFAULT_MODELS[args.provider];
-  args.baseUrl = (args.baseUrl || DEFAULT_BASE_URLS[args.provider] || "").replace(/\/$/, "");
-  if (!args.model) throw new Error(`No model configured for provider '${args.provider}'`);
-  if (!args.baseUrl) throw new Error(`No base URL configured for provider '${args.provider}'`);
+  args.baseUrl = (
+    args.baseUrl ||
+    DEFAULT_BASE_URLS[args.provider] ||
+    ""
+  ).replace(/\/$/, "");
+  if (!args.model)
+    throw new Error(`No model configured for provider '${args.provider}'`);
+  if (!args.baseUrl)
+    throw new Error(`No base URL configured for provider '${args.provider}'`);
   return args;
 }
 
@@ -98,7 +108,9 @@ function readJsonl(filePath) {
 function strictCleaningPrompt() {
   const settingsPath = path.join(ROOT, "src-tauri/src/settings.rs");
   const source = fs.readFileSync(settingsPath, "utf8");
-  const match = source.match(/pub const STRICT_CLEANING_PROMPT: &str = "([\s\S]*?)";/);
+  const match = source.match(
+    /pub const STRICT_CLEANING_PROMPT: &str = "([\s\S]*?)";/,
+  );
   if (!match) {
     throw new Error(`Could not find STRICT_CLEANING_PROMPT in ${settingsPath}`);
   }
@@ -120,7 +132,8 @@ Wrap only the cleaned transcript like this:
 }
 
 function apiKeyForProvider(provider) {
-  if (provider === "groq") return process.env.UTTR_GROQ_API_KEY || process.env.GROQ_API_KEY || "";
+  if (provider === "groq")
+    return process.env.UTTR_GROQ_API_KEY || process.env.GROQ_API_KEY || "";
   if (provider === "openai") {
     return process.env.UTTR_OPENAI_API_KEY || process.env.OPENAI_API_KEY || "";
   }
@@ -137,7 +150,13 @@ function requestBody(provider, model, messages) {
   return body;
 }
 
-async function sendChatCompletion({ provider, baseUrl, model, systemPrompt, input }) {
+async function sendChatCompletion({
+  provider,
+  baseUrl,
+  model,
+  systemPrompt,
+  input,
+}) {
   const apiKey = apiKeyForProvider(provider);
   if ((provider === "groq" || provider === "openai") && !apiKey) {
     throw new Error(`Missing API key for provider '${provider}'`);
@@ -174,7 +193,8 @@ async function sendChatCompletion({ provider, baseUrl, model, systemPrompt, inpu
 
 function cleanPostProcessResponse(content) {
   const tagged = extractTaggedOutput(content, "uttr_output");
-  if (tagged !== null) return stripWrappingCodeFence(trimChatStopTokens(tagged));
+  if (tagged !== null)
+    return stripWrappingCodeFence(trimChatStopTokens(tagged));
 
   let cleaned = content;
   const markers = [
@@ -206,7 +226,9 @@ function cleanPostProcessResponse(content) {
   cleaned = removeTaggedBlock(cleaned, "think");
   cleaned = removeTaggedBlock(cleaned, "analysis");
   cleaned = trimChatStopTokens(cleaned);
-  cleaned = cleaned.replaceAll("<uttr_output>", "").replaceAll("</uttr_output>", "");
+  cleaned = cleaned
+    .replaceAll("<uttr_output>", "")
+    .replaceAll("</uttr_output>", "");
   return stripWrappingCodeFence(cleaned);
 }
 
@@ -280,7 +302,8 @@ function scoreCase(testCase, output) {
     checks.push({
       name: "must_not_equal",
       value: phrase,
-      passed: output.trim().toLowerCase() !== String(phrase).trim().toLowerCase(),
+      passed:
+        output.trim().toLowerCase() !== String(phrase).trim().toLowerCase(),
     });
   }
 
@@ -318,13 +341,17 @@ function reportMarkdown({ run, results }) {
   lines.push("");
   lines.push(`| tag | total | deterministic failures |`);
   lines.push(`|---|---:|---:|`);
-  for (const [tag, entry] of [...byTag.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [tag, entry] of [...byTag.entries()].sort(([a], [b]) =>
+    a.localeCompare(b),
+  )) {
     lines.push(`| ${tag} | ${entry.total} | ${entry.failed} |`);
   }
   lines.push("");
   lines.push(`## Human Review`);
   lines.push("");
-  lines.push(`Mark each case as pass, borderline, or fail. Deterministic failure does not always mean product failure; it means a strict contract missed.`);
+  lines.push(
+    `Mark each case as pass, borderline, or fail. Deterministic failure does not always mean product failure; it means a strict contract missed.`,
+  );
 
   for (const result of results) {
     const failedChecks = result.checks
@@ -335,8 +362,11 @@ function reportMarkdown({ run, results }) {
     lines.push("");
     lines.push(`Tags: ${result.tags.join(", ")}`);
     lines.push(`Latency: ${result.latency_ms} ms`);
-    lines.push(`Deterministic: ${result.deterministic_passed ? "PASS" : "FAIL"}`);
-    if (failedChecks.length > 0) lines.push(`Failed checks: ${failedChecks.join("; ")}`);
+    lines.push(
+      `Deterministic: ${result.deterministic_passed ? "PASS" : "FAIL"}`,
+    );
+    if (failedChecks.length > 0)
+      lines.push(`Failed checks: ${failedChecks.join("; ")}`);
     lines.push("");
     lines.push(`Input:`);
     lines.push("");
@@ -371,7 +401,10 @@ async function main() {
     }
   }
   const systemPrompt = strictCleaningPrompt();
-  const runId = new Date().toISOString().replaceAll(":", "-").replace(/\.\d{3}Z$/, "Z");
+  const runId = new Date()
+    .toISOString()
+    .replaceAll(":", "-")
+    .replace(/\.\d{3}Z$/, "Z");
   const runDir = path.join(args.outDir, runId);
   fs.mkdirSync(runDir, { recursive: true });
 
@@ -406,10 +439,15 @@ async function main() {
         latency_ms: response.latencyMs,
         deterministic_passed: score.deterministic_passed,
         checks: score.checks,
-        human_review: testCase.human_review || { status: "pending", note: null },
+        human_review: testCase.human_review || {
+          status: "pending",
+          note: null,
+        },
       };
       results.push(result);
-      console.log(`${result.deterministic_passed ? "PASS" : "FAIL"} (${result.latency_ms} ms)`);
+      console.log(
+        `${result.deterministic_passed ? "PASS" : "FAIL"} (${result.latency_ms} ms)`,
+      );
     } catch (error) {
       const result = {
         id: testCase.id,
@@ -420,7 +458,10 @@ async function main() {
         latency_ms: null,
         deterministic_passed: false,
         checks: [{ name: "runner_error", passed: false, value: error.message }],
-        human_review: testCase.human_review || { status: "pending", note: null },
+        human_review: testCase.human_review || {
+          status: "pending",
+          note: null,
+        },
       };
       results.push(result);
       console.log(`ERROR (${error.message})`);
@@ -429,12 +470,18 @@ async function main() {
 
   run.finished_at = new Date().toISOString();
   const payload = { run, results };
-  fs.writeFileSync(path.join(runDir, "results.json"), `${JSON.stringify(payload, null, 2)}\n`);
+  fs.writeFileSync(
+    path.join(runDir, "results.json"),
+    `${JSON.stringify(payload, null, 2)}\n`,
+  );
   fs.writeFileSync(
     path.join(runDir, "results.jsonl"),
     `${results.map((result) => JSON.stringify(result)).join("\n")}\n`,
   );
-  fs.writeFileSync(path.join(runDir, "review.md"), reportMarkdown({ run, results }));
+  fs.writeFileSync(
+    path.join(runDir, "review.md"),
+    reportMarkdown({ run, results }),
+  );
   fs.writeFileSync(path.join(args.outDir, "latest-run.txt"), `${runId}\n`);
 
   const passed = results.filter((result) => result.deterministic_passed).length;

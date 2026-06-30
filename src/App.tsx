@@ -40,8 +40,8 @@ import { getLanguageDirection, initializeRTL } from "@/lib/utils/rtl";
 type OnboardingStep = "accessibility" | "done";
 const PERMISSION_CHECK_TIMEOUT_MS = 1500;
 
-const AccessibilityOnboarding = lazy(() =>
-  import("./components/onboarding/AccessibilityOnboarding"),
+const AccessibilityOnboarding = lazy(
+  () => import("./components/onboarding/AccessibilityOnboarding"),
 );
 
 const SectionLoading = () => (

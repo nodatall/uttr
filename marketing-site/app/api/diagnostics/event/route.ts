@@ -39,13 +39,21 @@ function requestBodyIsClearlyTooLarge(request: Request) {
 async function readJsonBody(request: Request) {
   const raw = await request.text();
   if (new TextEncoder().encode(raw).byteLength > DIAGNOSTIC_BODY_LIMIT_BYTES) {
-    return { ok: false as const, status: 413, error: "Diagnostic event is too large." };
+    return {
+      ok: false as const,
+      status: 413,
+      error: "Diagnostic event is too large.",
+    };
   }
 
   try {
     return { ok: true as const, body: JSON.parse(raw) };
   } catch {
-    return { ok: false as const, status: 400, error: "Invalid diagnostic event." };
+    return {
+      ok: false as const,
+      status: 400,
+      error: "Invalid diagnostic event.",
+    };
   }
 }
 
@@ -66,10 +74,13 @@ function respondToRateLimit(
   );
 }
 
-async function resolveTokenIdentity(
-  request: Request,
-): Promise<
-  | { ok: true; anonymousTrialId: string | null; userId: string | null; installId: string | null }
+async function resolveTokenIdentity(request: Request): Promise<
+  | {
+      ok: true;
+      anonymousTrialId: string | null;
+      userId: string | null;
+      installId: string | null;
+    }
   | { ok: false }
 > {
   const installToken = readInstallTokenFromRequest(request);
@@ -150,7 +161,10 @@ export async function POST(request: Request) {
     }
 
     const installId = tokenIdentity.installId ?? payload.install_id;
-    const installIdHash = hashDiagnosticIdentity(installId, config.identitySecret);
+    const installIdHash = hashDiagnosticIdentity(
+      installId,
+      config.identitySecret,
+    );
     const principalRateLimit = await checkRateLimit({
       key: `diagnostics-event-install:${installIdHash}`,
       limit: DIAGNOSTIC_INSTALL_RATE_LIMIT,

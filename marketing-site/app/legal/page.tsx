@@ -105,8 +105,8 @@ export default function LegalPage() {
           email, subscription and entitlement status, Stripe customer and
           subscription identifiers, install or trial identifiers, hashed device
           fingerprints, usage event metadata such as feature source and audio
-          duration, short-lived diagnostic metadata for failure detection, support
-          messages, and basic server logs.
+          duration, short-lived diagnostic metadata for failure detection,
+          support messages, and basic server logs.
         </p>
 
         <h3>2. Audio, transcripts, and prompts</h3>

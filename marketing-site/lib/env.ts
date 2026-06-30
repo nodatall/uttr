@@ -132,7 +132,8 @@ export function readDiagnosticsConfig() {
 
   return {
     identitySecret: disabled
-      ? readOptionalEnv("UTTR_DIAGNOSTICS_IDENTITY_SECRET") || "diagnostics-disabled"
+      ? readOptionalEnv("UTTR_DIAGNOSTICS_IDENTITY_SECRET") ||
+        "diagnostics-disabled"
       : readSecretEnv("UTTR_DIAGNOSTICS_IDENTITY_SECRET"),
     disabled,
   };

@@ -25,6 +25,7 @@ Visual mockup: [ui-mockup-byok-failure-diagnostics.html](ui-mockup-byok-failure-
 Goal: Store only strict, sanitized BYOK failure metadata.
 
 Decision notes:
+
 - The route should accept a verified install token when present, but should also accept a bounded anonymous install id for BYOK users who have not bootstrapped backend access.
 - The route should not treat anonymous install id as authentication. Store a server-side HMAC/hash of the install id and never persist or log the raw value.
 - Use a backend-held diagnostic identity secret for hashing. Do not rely on a client secret, and document the required environment variable.
@@ -51,6 +52,7 @@ Goal: Keep raw diagnostic events for about one week.
 Goal: Send fire-and-forget failure events without changing the transcription user experience.
 
 Decision notes:
+
 - Failed diagnostic sends must not block transcription, fallback, or user-facing errors.
 - Provider response bodies should be discarded before diagnostics classification.
 - Arbitrary provider model strings should be normalized to a known allowlist or `other` before leaving the desktop app.

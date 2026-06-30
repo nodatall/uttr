@@ -4139,6 +4139,10 @@ mod tests {
     use crate::app_context::AppContextSnapshot;
     use crate::managers::full_system_audio::FullSystemTranscriptionSource;
     use crate::settings::get_default_settings;
+    use once_cell::sync::Lazy;
+    use std::sync::Mutex;
+
+    static ASK_SELECTION_TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
     #[test]
     fn full_system_binding_is_registered_in_action_map() {
@@ -4265,6 +4269,7 @@ mod tests {
 
     #[test]
     fn ask_selection_payload_includes_session_selected_text() {
+        let _guard = ASK_SELECTION_TEST_LOCK.lock().unwrap();
         clear_ask_selection_session();
         let session_id = current_ask_selection_session_id();
         update_ask_selection_session(
@@ -4404,6 +4409,8 @@ mod tests {
 
     #[test]
     fn clear_ask_selection_session_drops_prior_messages() {
+        let _guard = ASK_SELECTION_TEST_LOCK.lock().unwrap();
+        clear_ask_selection_session();
         let session_id = current_ask_selection_session_id();
         update_ask_selection_session(
             session_id,
