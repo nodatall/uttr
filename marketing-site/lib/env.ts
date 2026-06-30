@@ -117,3 +117,23 @@ export function readAccessTokenConfig() {
     claimTokenSecret: readSecretEnv("UTTR_CLAIM_TOKEN_SECRET"),
   };
 }
+
+function readBooleanEnv(name: string, defaultValue = false) {
+  const value = readOptionalEnv(name);
+  if (!value) {
+    return defaultValue;
+  }
+
+  return ["1", "true", "yes", "on"].includes(value.trim().toLowerCase());
+}
+
+export function readDiagnosticsConfig() {
+  const disabled = readBooleanEnv("UTTR_DIAGNOSTICS_DISABLED", false);
+
+  return {
+    identitySecret: disabled
+      ? readOptionalEnv("UTTR_DIAGNOSTICS_IDENTITY_SECRET") || "diagnostics-disabled"
+      : readSecretEnv("UTTR_DIAGNOSTICS_IDENTITY_SECRET"),
+    disabled,
+  };
+}
