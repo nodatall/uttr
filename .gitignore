@@ -53,3 +53,4 @@ marketing-site/supabase/.temp/
 .env
 /agent-scratch/
 /agents-scratch/
+/evals/post-processing/runs/

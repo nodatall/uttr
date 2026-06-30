@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 
 export default function LegalPage() {
   return (
-    <LegalShell title="Terms & Privacy" updated="April 17, 2026">
+    <LegalShell title="Terms & Privacy" updated="June 29, 2026">
       <section id="terms" className="space-y-4">
         <h2>Terms of Service</h2>
 
@@ -105,7 +105,8 @@ export default function LegalPage() {
           email, subscription and entitlement status, Stripe customer and
           subscription identifiers, install or trial identifiers, hashed device
           fingerprints, usage event metadata such as feature source and audio
-          duration, support messages, and basic server logs.
+          duration, short-lived diagnostic metadata for failure detection, support
+          messages, and basic server logs.
         </p>
 
         <h3>2. Audio, transcripts, and prompts</h3>
@@ -115,6 +116,11 @@ export default function LegalPage() {
           audio and request metadata are sent to Uttr&apos;s server and
           transcription provider so the request can be processed. We do not sell
           your audio, transcripts, or prompts.
+        </p>
+        <p>
+          Diagnostic metadata does not include audio, transcripts, prompts,
+          selected text, clipboard contents, API keys, provider response bodies,
+          file names, window titles, document names, or URLs.
         </p>
 
         <h3>3. How we use information</h3>
@@ -144,8 +150,9 @@ export default function LegalPage() {
           We keep account, billing, entitlement, support, usage, and log data
           for as long as needed to provide the service, meet legal and
           accounting obligations, resolve disputes, prevent abuse, and maintain
-          security. Local transcripts stored by the desktop app remain under
-          your control on your device unless you delete or export them.
+          security. Diagnostic events are kept for about seven days. Local
+          transcripts stored by the desktop app remain under your control on
+          your device unless you delete or export them.
         </p>
 
         <h3>6. Security</h3>

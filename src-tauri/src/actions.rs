@@ -1805,9 +1805,11 @@ fn ask_selection_payload(
     text: Option<String>,
     error: Option<String>,
 ) -> utils::AskSelectionPayload {
+    let selected_text = session_id.and_then(current_ask_selection_selected_text);
     utils::AskSelectionPayload {
         state: state.to_string(),
         text,
+        selected_text,
         error,
         session_id,
         messages,
@@ -1850,6 +1852,20 @@ fn current_ask_selection_messages() -> Vec<utils::AskSelectionMessage> {
         .ok()
         .and_then(|session| session.as_ref().map(|session| session.messages.clone()))
         .unwrap_or_default()
+}
+
+fn current_ask_selection_selected_text(session_id: u64) -> Option<String> {
+    ASK_SELECTION_CHAT_SESSION
+        .lock()
+        .ok()
+        .and_then(|session| {
+            session
+                .as_ref()
+                .filter(|session| session.id == session_id)
+                .and_then(|session| session.selected_text.clone())
+        })
+        .map(|text| text.trim().to_string())
+        .filter(|text| !text.is_empty())
 }
 
 fn ask_selection_session_is_current(session_id: u64) -> bool {
@@ -1918,22 +1934,18 @@ fn build_ask_selection_follow_up_prompt(
 ) -> String {
     let conversation = render_ask_selection_conversation(messages);
     let selected_text = selected_text.trim();
-    let mut prompt = if selected_text.is_empty() {
-        format!(
-            "# Task\nAnswer the latest follow-up using the prior Ask Selection chat as context. No selected text was provided. Return only the answer inside <uttr_ask_output>...</uttr_ask_output>.\n\n# Latest follow-up\n{}",
-            follow_up.trim()
-        )
-    } else {
-        format!(
-            "# Task\nAnswer the latest follow-up using the selected text and prior Ask Selection chat as context. Return only the answer inside <uttr_ask_output>...</uttr_ask_output>. Do not invent facts outside the selected text unless the user asks a general question.\n\n# Latest follow-up\n{}\n\n# Selected text\n{}",
-            follow_up.trim(),
-            selected_text
-        )
-    };
+    let mut prompt = format!(
+        "# Task\nAnswer the latest follow-up using the prior Ask Selection chat as context. Return only the answer inside <uttr_ask_output>...</uttr_ask_output>. Answer the latest follow-up using the prior chat first. Use the original selected text only as background if it is still relevant.\n\n# Latest follow-up\n{}",
+        follow_up.trim()
+    );
 
     if !conversation.trim().is_empty() {
         prompt.push_str("\n\n# Prior chat\n");
         prompt.push_str(&conversation);
+    }
+    if !selected_text.is_empty() {
+        prompt.push_str("\n\n# Original selected text\n");
+        prompt.push_str(selected_text);
     }
     if let Some(block) = app_context_prompt_block(context) {
         prompt.push_str("\n\n# Context\n");
@@ -4105,7 +4117,7 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
-        ask_selection_message, ask_selection_session_is_current,
+        ask_selection_message, ask_selection_payload, ask_selection_session_is_current,
         build_ask_selection_follow_up_prompt, build_ask_selection_prompt,
         build_live_summary_prompt, clean_ask_selection_response, clean_post_process_response,
         clear_ask_selection_session, completion_context_for_active_meeting,
@@ -4252,6 +4264,29 @@ mod tests {
     }
 
     #[test]
+    fn ask_selection_payload_includes_session_selected_text() {
+        clear_ask_selection_session();
+        let session_id = current_ask_selection_session_id();
+        update_ask_selection_session(
+            session_id,
+            Some("  selected text  ".to_string()),
+            AppContextSnapshot::default(),
+            vec![ask_selection_message("user", "summarize this", false)],
+        );
+
+        let payload = ask_selection_payload(
+            "result",
+            Some(session_id),
+            current_ask_selection_messages(),
+            Some("summary".to_string()),
+            None,
+        );
+
+        assert_eq!(payload.selected_text.as_deref(), Some("selected text"));
+        clear_ask_selection_session();
+    }
+
+    #[test]
     fn clean_ask_selection_response_prefers_ask_tag() {
         let cleaned = clean_ask_selection_response(
             "notes <uttr_ask_output>\nShorter text.\n</uttr_ask_output>",
@@ -4282,13 +4317,60 @@ mod tests {
         );
 
         assert!(prompt.contains("# Latest follow-up\nmake it sharper"));
-        assert!(prompt.contains("# Selected text\nCounselor overload"));
         assert!(prompt.contains("User: What is the risk?"));
         assert!(prompt.contains("Assistant: The buyer is unclear."));
+        assert!(prompt.contains("# Original selected text\nCounselor overload"));
+        assert!(
+            prompt.find("# Prior chat").unwrap() < prompt.find("# Original selected text").unwrap()
+        );
         assert!(!prompt.contains("Thinking..."));
         assert!(prompt.contains("Google Docs"));
         assert!(prompt.contains("FreeFlow"));
         assert!(prompt.contains("<uttr_ask_output>"));
+    }
+
+    #[test]
+    fn ask_selection_follow_up_prompt_keeps_original_selection_as_background() {
+        let messages = vec![
+            ask_selection_message(
+                "user",
+                "This is for a German passport renewal. What do I put for these two things?",
+                false,
+            ),
+            ask_selection_message(
+                "assistant",
+                "If you do not have a doctoral title or religious/stage name, leave those fields blank.",
+                false,
+            ),
+            ask_selection_message(
+                "user",
+                "what do these mean? Erwerb der deutschen Staatsangehörigkeit als Kind eines/einer Deutschen durch Geburt",
+                false,
+            ),
+            ask_selection_message(
+                "assistant",
+                "These options describe how you acquired German citizenship.",
+                false,
+            ),
+        ];
+
+        let prompt = build_ask_selection_follow_up_prompt(
+            "Doktorgrad/ Doctoral title 11. Ordens-/ Künstlername/ Religious/Stage name",
+            &messages,
+            "my mother was german",
+            &AppContextSnapshot::default(),
+            &Vec::new(),
+        );
+
+        assert!(prompt.contains("# Latest follow-up\nmy mother was german"));
+        assert!(prompt.contains("Use the original selected text only as background"));
+        assert!(prompt.contains("# Prior chat"));
+        assert!(prompt.contains("Erwerb der deutschen Staatsangehörigkeit"));
+        assert!(prompt.contains("# Original selected text\nDoktorgrad/ Doctoral title"));
+        assert!(
+            prompt.find("# Prior chat").unwrap() < prompt.find("# Original selected text").unwrap()
+        );
+        assert!(!prompt.contains("# Selected text"));
     }
 
     #[test]
@@ -4312,11 +4394,11 @@ mod tests {
         );
 
         assert!(prompt.contains("# Latest follow-up\nmake it shorter"));
-        assert!(prompt.contains("No selected text was provided"));
         assert!(prompt.contains("User: What is Rust?"));
         assert!(prompt.contains("Assistant: Rust is a systems language."));
         assert!(!prompt.contains("Thinking..."));
         assert!(!prompt.contains("# Selected text"));
+        assert!(!prompt.contains("# Original selected text"));
         assert!(prompt.contains("<uttr_ask_output>"));
     }
 

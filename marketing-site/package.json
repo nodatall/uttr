@@ -8,7 +8,8 @@
     "start": "NODE_ENV=production next start",
     "lint": "eslint",
     "test": "bun test",
-    "db:migrate": "node scripts/run-migrations.mjs"
+    "db:migrate": "node scripts/run-migrations.mjs",
+    "diagnostics:prune": "node scripts/prune-diagnostics.mjs"
   },
   "dependencies": {
     "next": "16.1.6",

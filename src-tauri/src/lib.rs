@@ -8,6 +8,7 @@ pub mod audio_toolkit;
 mod byok_secrets;
 mod clipboard;
 mod commands;
+mod diagnostics;
 pub mod full_system_audio_bridge;
 mod groq_client;
 mod helpers;

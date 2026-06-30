@@ -2,6 +2,7 @@ use crate::access::{bootstrap_install_state, refresh_entitlement_state, request_
 use crate::audio_toolkit::{
     apply_custom_words, filter_transcription_output, trim_proxy_upload_audio,
 };
+use crate::diagnostics::report_byok_transcription_failure;
 use crate::groq_client;
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::model::{
@@ -1036,6 +1037,7 @@ impl TranscriptionManager {
             .resolve_byok_groq_api_key()
             .ok_or_else(|| anyhow::anyhow!("Groq API key is required for hidden BYOK mode."))?;
 
+        let request_started = Instant::now();
         match groq_client::transcribe_samples_direct(
             &api_key,
             groq_model,
@@ -1047,6 +1049,14 @@ impl TranscriptionManager {
         {
             Ok(text) => Ok(text),
             Err(groq_error) => {
+                report_byok_transcription_failure(
+                    settings,
+                    model_id,
+                    audio.len(),
+                    request_started.elapsed(),
+                    &groq_error,
+                );
+
                 if !allow_local_fallback_on_cloud_error {
                     return Err(anyhow::anyhow!(
                         "Groq transcription failed during incremental chunking: {}",
@@ -1115,6 +1125,7 @@ impl TranscriptionManager {
             .resolve_byok_openai_api_key()
             .ok_or_else(|| anyhow::anyhow!("OpenAI API key is required for this model."))?;
 
+        let request_started = Instant::now();
         match groq_client::transcribe_samples_direct_openai(
             &api_key,
             openai_model,
@@ -1165,6 +1176,13 @@ impl TranscriptionManager {
                             );
                         }
                         Err(retry_error) => {
+                            report_byok_transcription_failure(
+                                settings,
+                                model_id,
+                                boosted_audio.len(),
+                                request_started.elapsed(),
+                                &retry_error,
+                            );
                             warn!("OpenAI quiet audio rescue failed: {}", retry_error);
                         }
                     }
@@ -1200,6 +1218,14 @@ impl TranscriptionManager {
                 .await
             }
             Err(openai_error) => {
+                report_byok_transcription_failure(
+                    settings,
+                    model_id,
+                    audio.len(),
+                    request_started.elapsed(),
+                    &openai_error,
+                );
+
                 if !allow_local_fallback_on_cloud_error {
                     return Err(anyhow::anyhow!(
                         "OpenAI transcription failed during incremental chunking: {}",
