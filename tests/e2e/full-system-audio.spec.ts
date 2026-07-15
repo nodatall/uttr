@@ -339,6 +339,8 @@ async function installBrowserMocks(
           case "plugin:event|unlisten":
             eventListeners.delete(Number(args.eventId));
             return null;
+          case "plugin:clipboard-manager|write_text":
+            return null;
           case "get_current_model":
             return "parakeet-tdt-0.6b-v3";
           case "has_any_models_available":
@@ -600,7 +602,7 @@ test.describe("full-system audio settings", () => {
     ).toHaveCount(0);
     await expect(
       workspace.getByRole("button", { name: /^History$/i }),
-    ).toHaveCount(0);
+    ).toBeDisabled();
 
     await workspace.getByRole("button", { name: /^Stop$/i }).click();
 
@@ -681,6 +683,25 @@ test.describe("full-system audio settings", () => {
     const dialog = page.getByRole("dialog", { name: /Raw transcript/i });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText("every single month.")).toBeVisible();
+
+    await dialog.getByRole("button", { name: /Copy raw transcript/i }).click();
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const e2eState = (
+            window as unknown as { __UTTR_E2E__: FullSystemAudioTestState }
+          ).__UTTR_E2E__;
+          return e2eState.invokedCommands.some(
+            ({ cmd, args }) =>
+              cmd === "plugin:clipboard-manager|write_text" &&
+              args.text === e2eState.sessionWindowState?.rawTranscriptText,
+          );
+        }),
+      )
+      .toBe(true);
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
   });
 
   test("hides legacy action and timeline sections in saved meetings", async ({

@@ -6,6 +6,7 @@ use crate::app_context::{collect_text_context, AppContextSnapshot};
 #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
 use crate::apple_intelligence;
 use crate::audio_feedback::{play_feedback_sound, play_feedback_sound_blocking, SoundType};
+use crate::audio_toolkit::audio::mix_transcription_pcm_sources;
 use crate::byok_secrets;
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::full_system_audio::{
@@ -1114,6 +1115,17 @@ fn silent_audio_levels(samples: &[f32]) -> Option<(f32, f32)> {
 fn is_effectively_silent_audio(samples: &[f32]) -> bool {
     const MAX_SILENT_RMS: f32 = 0.005;
     const MAX_SILENT_PEAK: f32 = 0.05;
+
+    let Some((rms, peak)) = silent_audio_levels(samples) else {
+        return true;
+    };
+
+    rms <= MAX_SILENT_RMS && peak <= MAX_SILENT_PEAK
+}
+
+fn is_effectively_silent_full_system_source_audio(samples: &[f32]) -> bool {
+    const MAX_SILENT_RMS: f32 = 0.0035;
+    const MAX_SILENT_PEAK: f32 = 0.02;
 
     let Some((rms, peak)) = silent_audio_levels(samples) else {
         return true;
@@ -2295,6 +2307,82 @@ async fn transcribe_and_summarize_live_chunk(
             }
         };
 
+    if transcription_segments.is_empty() {
+        if is_final_chunk {
+            let transcript_so_far = runtime.transcript_text.lock().unwrap().clone();
+            if !transcript_so_far.trim().is_empty()
+                && !runtime.summary_disabled.load(Ordering::Relaxed)
+            {
+                emit_session_window_state(
+                    app,
+                    SessionWindowStatePayload {
+                        stage: "processing".to_string(),
+                        title: "Preparing summary".to_string(),
+                        subtitle: "Updating the final summary.".to_string(),
+                        progress_label: "Summarizing final chunk".to_string(),
+                        progress_value: 0.88,
+                        summary_text: runtime.summary_text.lock().unwrap().clone(),
+                        raw_transcript_text: None,
+                        history_entry_id: None,
+                    },
+                );
+
+                let previous_summary = runtime.summary_text.lock().unwrap().clone();
+                let completed_chunk = runtime.chunk_count.load(Ordering::Relaxed).max(1);
+                match summarize_live_session(
+                    app,
+                    &transcript_so_far,
+                    previous_summary,
+                    completed_chunk,
+                )
+                .await
+                {
+                    Ok(result) => {
+                        let summary = result.summary;
+                        *runtime.summary_text.lock().unwrap() = Some(summary.clone());
+                        *runtime.summary_provider.lock().unwrap() = Some(result.provider_label);
+                        *runtime.summary_error.lock().unwrap() = None;
+                        emit_session_window_state(
+                            app,
+                            SessionWindowStatePayload {
+                                stage: "processing".to_string(),
+                                title: "Preparing summary".to_string(),
+                                subtitle: "Saving the session.".to_string(),
+                                progress_label: "Saving".to_string(),
+                                progress_value: 0.92,
+                                summary_text: Some(summary),
+                                raw_transcript_text: None,
+                                history_entry_id: None,
+                            },
+                        );
+                    }
+                    Err(error) => {
+                        let message = friendly_live_summary_error(&error);
+                        if should_pause_live_summaries(&error) {
+                            runtime.summary_disabled.store(true, Ordering::Relaxed);
+                        }
+                        *runtime.summary_error.lock().unwrap() = Some(message);
+                        emit_session_window_state(
+                            app,
+                            SessionWindowStatePayload {
+                                stage: "processing".to_string(),
+                                title: "Preparing summary".to_string(),
+                                subtitle: "Saving the session without a final summary update."
+                                    .to_string(),
+                                progress_label: "Saving".to_string(),
+                                progress_value: 0.92,
+                                summary_text: runtime.summary_text.lock().unwrap().clone(),
+                                raw_transcript_text: None,
+                                history_entry_id: None,
+                            },
+                        );
+                    }
+                }
+            }
+        }
+        return;
+    }
+
     if !transcription_segments.is_empty() {
         let transcript_so_far = {
             let mut transcript = runtime.transcript_text.lock().unwrap();
@@ -2466,7 +2554,8 @@ async fn transcribe_full_system_live_chunk_sources(
     }
 
     for source_samples in chunk.source_samples {
-        if source_samples.samples.is_empty() || is_effectively_silent_audio(&source_samples.samples)
+        if source_samples.samples.is_empty()
+            || is_effectively_silent_full_system_source_audio(&source_samples.samples)
         {
             if let Some((rms, peak)) = silent_audio_levels(&source_samples.samples) {
                 debug!(
@@ -2720,27 +2809,22 @@ async fn finish_full_system_live_session(
         std::mem::take(&mut *pending)
     };
     if let Some(tail_samples) = tail_samples {
-        if let Some(mixed) = tail_samples.mixed.filter(|samples| !samples.is_empty()) {
-            final_samples.extend_from_slice(&mixed);
-        }
-        for source_samples in tail_samples.sources {
-            match source_samples.source {
-                FullSystemTranscriptionSource::Microphone => {
-                    final_microphone_samples.extend_from_slice(&source_samples.samples);
-                }
-                FullSystemTranscriptionSource::SystemAudio => {
-                    final_system_audio_samples.extend_from_slice(&source_samples.samples);
-                }
-            }
-        }
+        append_full_system_stop_tail_samples(
+            &mut final_samples,
+            &mut final_microphone_samples,
+            &mut final_system_audio_samples,
+            tail_samples,
+        );
     }
-    if !final_samples.is_empty() {
+    let final_source_samples =
+        source_samples_from_buffers(final_microphone_samples, final_system_audio_samples);
+    if !final_source_samples.is_empty() {
+        final_samples = mixed_samples_from_source_samples(&final_source_samples);
+    }
+    if !final_samples.is_empty() || !final_source_samples.is_empty() {
         let final_chunk = FullSystemLiveChunk {
             mixed_samples: final_samples,
-            source_samples: source_samples_from_buffers(
-                final_microphone_samples,
-                final_system_audio_samples,
-            ),
+            source_samples: final_source_samples,
         };
         let final_chunk_timeout =
             full_system_live_final_chunk_timeout(final_chunk.mixed_samples.len());
@@ -2782,6 +2866,66 @@ async fn finish_full_system_live_session(
         recorded_samples,
         chunk_count,
     })
+}
+
+fn append_full_system_stop_tail_samples(
+    final_samples: &mut Vec<f32>,
+    final_microphone_samples: &mut Vec<f32>,
+    final_system_audio_samples: &mut Vec<f32>,
+    tail_samples: FullSystemSessionTranscriptionSamples,
+) {
+    let mut appended_source = false;
+    for source_samples in tail_samples.sources {
+        match source_samples.source {
+            FullSystemTranscriptionSource::Microphone => {
+                if final_microphone_samples.is_empty() && !source_samples.samples.is_empty() {
+                    final_microphone_samples.extend_from_slice(&source_samples.samples);
+                    appended_source = true;
+                } else if !source_samples.samples.is_empty() {
+                    debug!("Ignoring full-system stop microphone payload because live session already collected microphone audio");
+                }
+            }
+            FullSystemTranscriptionSource::SystemAudio => {
+                if final_system_audio_samples.is_empty() && !source_samples.samples.is_empty() {
+                    final_system_audio_samples.extend_from_slice(&source_samples.samples);
+                    appended_source = true;
+                } else if !source_samples.samples.is_empty() {
+                    debug!("Ignoring full-system stop system-audio payload because live session already collected system audio");
+                }
+            }
+        }
+    }
+
+    if appended_source {
+        return;
+    }
+
+    if let Some(mixed) = tail_samples.mixed.filter(|samples| !samples.is_empty()) {
+        if final_samples.is_empty()
+            && final_microphone_samples.is_empty()
+            && final_system_audio_samples.is_empty()
+        {
+            final_samples.extend_from_slice(&mixed);
+        } else {
+            debug!("Ignoring full-system stop mixed payload because live session already collected audio");
+        }
+    }
+}
+
+fn mixed_samples_from_source_samples(
+    source_samples: &[FullSystemTranscriptionSourceSamples],
+) -> Vec<f32> {
+    match source_samples {
+        [] => Vec::new(),
+        [source] => source.samples.clone(),
+        sources => {
+            let source_refs: Vec<&[f32]> = sources
+                .iter()
+                .map(|source| source.samples.as_slice())
+                .collect();
+            mix_transcription_pcm_sources(&source_refs)
+        }
+    }
 }
 
 fn handle_transcription_stop(
@@ -3874,6 +4018,9 @@ impl ShortcutAction for FullSystemTranscribeAction {
         play_feedback_sound(app, SoundType::Stop);
 
         signal_full_system_live_session_stop(binding_id);
+        if let Some(delta) = full_system_audio.drain_session_delta_sources(binding_id) {
+            append_full_system_live_session_delta(binding_id, delta);
+        }
         let stop_result: FullSystemSessionStopResult = full_system_audio.stop_session();
         log::info!(
             "[latency] full-system samples retrieved binding={} sample_count={} elapsed_ms={}",
@@ -4117,14 +4264,15 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
-        ask_selection_message, ask_selection_payload, ask_selection_session_is_current,
-        build_ask_selection_follow_up_prompt, build_ask_selection_prompt,
-        build_live_summary_prompt, clean_ask_selection_response, clean_post_process_response,
-        clear_ask_selection_session, completion_context_for_active_meeting,
-        current_ask_selection_messages, current_ask_selection_session_id,
-        custom_vocabulary_prompt_block, format_labeled_transcript_segments,
-        friendly_live_summary_error, full_system_live_final_chunk_timeout,
-        is_effectively_silent_audio, is_supported_post_process_model,
+        append_full_system_stop_tail_samples, ask_selection_message, ask_selection_payload,
+        ask_selection_session_is_current, build_ask_selection_follow_up_prompt,
+        build_ask_selection_prompt, build_live_summary_prompt, clean_ask_selection_response,
+        clean_post_process_response, clear_ask_selection_session,
+        completion_context_for_active_meeting, current_ask_selection_messages,
+        current_ask_selection_session_id, custom_vocabulary_prompt_block,
+        format_labeled_transcript_segments, friendly_live_summary_error,
+        full_system_live_final_chunk_timeout, is_effectively_silent_audio,
+        is_effectively_silent_full_system_source_audio, is_supported_post_process_model,
         normalize_live_summary_output, parse_meeting_summary_state,
         render_meeting_summary_markdown, resolved_post_process_system_prompt,
         select_preferred_groq_model, should_pause_live_summaries,
@@ -4137,7 +4285,10 @@ mod tests {
         FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL,
     };
     use crate::app_context::AppContextSnapshot;
-    use crate::managers::full_system_audio::FullSystemTranscriptionSource;
+    use crate::managers::full_system_audio::{
+        FullSystemSessionTranscriptionSamples, FullSystemTranscriptionSource,
+        FullSystemTranscriptionSourceSamples,
+    };
     use crate::settings::get_default_settings;
     use once_cell::sync::Lazy;
     use std::sync::Mutex;
@@ -4152,6 +4303,66 @@ mod tests {
     #[test]
     fn copy_last_transcript_binding_is_registered_in_action_map() {
         assert!(ACTION_MAP.contains_key("copy_last_transcript"));
+    }
+
+    #[test]
+    fn full_system_stop_payload_keeps_missing_microphone_tail() {
+        let mut mixed = vec![0.25];
+        let mut microphone = Vec::new();
+        let mut system_audio = vec![0.5];
+
+        append_full_system_stop_tail_samples(
+            &mut mixed,
+            &mut microphone,
+            &mut system_audio,
+            FullSystemSessionTranscriptionSamples {
+                mixed: Some(vec![9.0, 9.0]),
+                sources: vec![
+                    FullSystemTranscriptionSourceSamples {
+                        source: FullSystemTranscriptionSource::Microphone,
+                        samples: vec![0.1, 0.2],
+                    },
+                    FullSystemTranscriptionSourceSamples {
+                        source: FullSystemTranscriptionSource::SystemAudio,
+                        samples: vec![0.9, 0.8],
+                    },
+                ],
+            },
+        );
+
+        assert_eq!(mixed, vec![0.25]);
+        assert_eq!(microphone, vec![0.1, 0.2]);
+        assert_eq!(system_audio, vec![0.5]);
+    }
+
+    #[test]
+    fn full_system_stop_payload_does_not_duplicate_existing_source_buffers() {
+        let mut mixed = vec![0.25];
+        let mut microphone = vec![0.01, 0.02];
+        let mut system_audio = vec![0.5];
+
+        append_full_system_stop_tail_samples(
+            &mut mixed,
+            &mut microphone,
+            &mut system_audio,
+            FullSystemSessionTranscriptionSamples {
+                mixed: Some(vec![9.0, 9.0]),
+                sources: vec![
+                    FullSystemTranscriptionSourceSamples {
+                        source: FullSystemTranscriptionSource::Microphone,
+                        samples: vec![0.1, 0.2],
+                    },
+                    FullSystemTranscriptionSourceSamples {
+                        source: FullSystemTranscriptionSource::SystemAudio,
+                        samples: vec![0.9, 0.8],
+                    },
+                ],
+            },
+        );
+
+        assert_eq!(mixed, vec![0.25]);
+        assert_eq!(microphone, vec![0.01, 0.02]);
+        assert_eq!(system_audio, vec![0.5]);
     }
 
     #[test]
@@ -4646,6 +4857,15 @@ mod tests {
         assert!(!is_effectively_silent_audio(&[
             0.0, 0.08, -0.07, 0.06, -0.05, 0.04
         ]));
+    }
+
+    #[test]
+    fn observed_quiet_meeting_microphone_levels_are_not_silent_source_audio() {
+        let mut samples = vec![0.003378; 20_000];
+        samples[100] = 0.020873;
+
+        assert!(is_effectively_silent_audio(&samples));
+        assert!(!is_effectively_silent_full_system_source_audio(&samples));
     }
 
     #[test]

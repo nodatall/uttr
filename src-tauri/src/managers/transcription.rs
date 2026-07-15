@@ -243,6 +243,15 @@ fn is_punctuation_only_transcription(text: &str) -> bool {
 fn should_suppress_silence_hallucination(levels: Option<(f32, f32)>, transcription: &str) -> bool {
     const SILENCE_HALLUCINATIONS: &[&str] =
         &["thank you", "thanks for watching", "thank you for watching"];
+    const ALWAYS_SUPPRESS_HALLUCINATIONS: &[&str] = &[
+        "subtitles by the amara org community",
+        "subtitles by amara org community",
+    ];
+
+    let normalized = normalized_silence_hallucination_text(transcription);
+    if ALWAYS_SUPPRESS_HALLUCINATIONS.contains(&normalized.as_str()) {
+        return true;
+    }
 
     let Some(levels) = levels else {
         return false;
@@ -252,7 +261,6 @@ fn should_suppress_silence_hallucination(levels: Option<(f32, f32)>, transcripti
         return is_near_silent_punctuation_candidate(levels);
     }
 
-    let normalized = normalized_silence_hallucination_text(transcription);
     if !SILENCE_HALLUCINATIONS.contains(&normalized.as_str()) {
         return false;
     }
@@ -2757,6 +2765,26 @@ mod tests {
         assert!(should_suppress_silence_hallucination(
             quiet_levels,
             "Thank you!"
+        ));
+    }
+
+    #[test]
+    fn silence_hallucination_detection_suppresses_amara_subtitle_boilerplate() {
+        let quiet_levels = audio_levels(&[0.0, 0.0005, -0.0004, 0.0003, 0.0]);
+
+        assert!(should_suppress_silence_hallucination(
+            quiet_levels,
+            "Subtitles by the Amara.org community"
+        ));
+    }
+
+    #[test]
+    fn silence_hallucination_detection_suppresses_amara_boilerplate_over_music_levels() {
+        let music_like_levels = audio_levels(&[0.0, 0.08, -0.07, 0.06, -0.05, 0.04]);
+
+        assert!(should_suppress_silence_hallucination(
+            music_like_levels,
+            "Subtitles by the Amara.org community"
         ));
     }
 

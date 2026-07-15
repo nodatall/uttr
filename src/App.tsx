@@ -194,10 +194,14 @@ const getClockForStage = (
   now: number,
 ): SessionClockState => {
   if (stage === "active") {
+    const startedAt =
+      clock.recordingStoppedAt === null ? clock.recordingStartedAt : null;
+
     return {
       ...clock,
-      recordingStartedAt: clock.recordingStartedAt ?? now,
+      recordingStartedAt: startedAt ?? now,
       recordingStoppedAt: null,
+      clockNow: now,
     };
   }
 
