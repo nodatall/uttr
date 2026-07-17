@@ -24,6 +24,7 @@ use crate::settings::{
 };
 use crate::shortcut;
 use crate::summary_client;
+use crate::transcription_coordinator::OperationId;
 use crate::tray::{change_tray_icon, TrayIconState};
 use crate::utils::{
     self, show_processing_overlay, show_recording_overlay, show_transcribing_overlay,
@@ -35,6 +36,7 @@ use log::{debug, error, warn};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::future::Future;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
@@ -95,7 +97,10 @@ enum TranscriptionCompletionMode {
 #[derive(Clone)]
 enum TranscriptionCompletionContext {
     Standalone,
-    ReturnToMeeting { binding_id: String },
+    ReturnToMeeting {
+        binding_id: String,
+        operation_id: OperationId,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -175,6 +180,17 @@ static ACTIVE_APP_CONTEXT: Lazy<Mutex<HashMap<String, AppContextSnapshot>>> =
 static ACTIVE_APP_CONTEXT_REQUESTS: Lazy<Mutex<HashMap<String, u64>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static APP_CONTEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
+static MEETING_QUICK_DICTATION_CANCEL_GENERATION: AtomicU64 = AtomicU64::new(0);
+static ACTIVE_QUICK_DICTATION_UI_OPERATION: AtomicU64 = AtomicU64::new(0);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum DictationOperationTerminalState {
+    Cancelled,
+    Completed,
+}
+
+static DICTATION_OPERATION_TERMINAL_STATES: Lazy<
+    Mutex<HashMap<OperationId, DictationOperationTerminalState>>,
+> = Lazy::new(|| Mutex::new(HashMap::new()));
 static ASK_SELECTION_CHAT_SESSION: Lazy<Mutex<Option<AskSelectionChatSession>>> =
     Lazy::new(|| Mutex::new(None));
 static ASK_SELECTION_CHAT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
@@ -182,6 +198,7 @@ static ASK_SELECTION_CHAT_SESSION_ID: AtomicU64 = AtomicU64::new(1);
 #[derive(Clone)]
 struct AskSelectionChatSession {
     id: u64,
+    owner_operation_id: Option<OperationId>,
     selected_text: Option<String>,
     context: AppContextSnapshot,
     messages: Vec<utils::AskSelectionMessage>,
@@ -192,19 +209,38 @@ struct AskSelectionChatSession {
 struct FinishGuard {
     app: AppHandle,
     binding_id: String,
+    operation_id: OperationId,
 }
 
 impl FinishGuard {
-    fn new(app: AppHandle, binding_id: String) -> Self {
-        Self { app, binding_id }
+    fn new(app: AppHandle, binding_id: String, operation_id: OperationId) -> Self {
+        Self {
+            app,
+            binding_id,
+            operation_id,
+        }
     }
 }
 
 impl Drop for FinishGuard {
     fn drop(&mut self) {
         if let Some(c) = self.app.try_state::<TranscriptionCoordinator>() {
-            c.notify_processing_finished(&self.binding_id);
+            c.notify_processing_finished(&self.binding_id, self.operation_id);
         }
+    }
+}
+
+struct CompletionOwner<T>(Option<T>);
+
+impl<T> CompletionOwner<T> {
+    fn new(owner: T) -> Self {
+        Self(Some(owner))
+    }
+
+    fn transfer(&mut self) -> T {
+        self.0
+            .take()
+            .expect("completion ownership can only be transferred once")
     }
 }
 
@@ -249,11 +285,16 @@ fn restore_ui_after_transcription(
                 .and_then(|manager| manager.active_snapshot())
                 .map(|snapshot| snapshot.binding_id);
 
+            if !quick_dictation_ui_restore_is_current(completion_context) {
+                debug!("Skipping stale quick-dictation UI restoration");
+                return;
+            }
+
             if should_restore_meeting_ui(completion_context, active_meeting_binding.as_deref()) {
                 emit_active_session_window_state(app);
                 utils::hide_recording_overlay(app);
                 change_tray_icon(app, TrayIconState::Recording);
-                shortcut::register_cancel_shortcut(app);
+                shortcut::unregister_cancel_shortcut(app);
                 return;
             }
 
@@ -272,7 +313,7 @@ fn should_restore_meeting_ui(
     active_meeting_binding: Option<&str>,
 ) -> bool {
     match completion_context {
-        TranscriptionCompletionContext::ReturnToMeeting { binding_id } => {
+        TranscriptionCompletionContext::ReturnToMeeting { binding_id, .. } => {
             active_meeting_binding == Some(binding_id.as_str())
         }
         TranscriptionCompletionContext::Standalone => false,
@@ -281,10 +322,40 @@ fn should_restore_meeting_ui(
 
 fn completion_context_for_active_meeting(
     active_meeting_binding: Option<String>,
+    operation_id: OperationId,
 ) -> TranscriptionCompletionContext {
     active_meeting_binding
-        .map(|binding_id| TranscriptionCompletionContext::ReturnToMeeting { binding_id })
+        .map(
+            |binding_id| TranscriptionCompletionContext::ReturnToMeeting {
+                binding_id,
+                operation_id,
+            },
+        )
         .unwrap_or(TranscriptionCompletionContext::Standalone)
+}
+
+fn quick_dictation_ui_restore_is_current(
+    completion_context: &TranscriptionCompletionContext,
+) -> bool {
+    let TranscriptionCompletionContext::ReturnToMeeting { operation_id, .. } = completion_context
+    else {
+        return true;
+    };
+    let active = ACTIVE_QUICK_DICTATION_UI_OPERATION.load(Ordering::Acquire);
+    active == 0 || active == *operation_id
+}
+
+pub(crate) fn set_active_quick_dictation_ui_operation(operation_id: OperationId) {
+    ACTIVE_QUICK_DICTATION_UI_OPERATION.store(operation_id, Ordering::Release);
+}
+
+pub(crate) fn clear_active_quick_dictation_ui_operation(operation_id: OperationId) {
+    let _ = ACTIVE_QUICK_DICTATION_UI_OPERATION.compare_exchange(
+        operation_id,
+        0,
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    );
 }
 
 fn restore_ui_or_show_no_input_feedback(
@@ -313,7 +384,13 @@ impl Drop for CompletionGuard {
 // Shortcut Action Trait
 pub trait ShortcutAction: Send + Sync {
     fn start(&self, app: &AppHandle, binding_id: &str, shortcut_str: &str);
-    fn stop(&self, app: &AppHandle, binding_id: &str, shortcut_str: &str);
+    fn stop(
+        &self,
+        app: &AppHandle,
+        binding_id: &str,
+        shortcut_str: &str,
+        operation_id: OperationId,
+    );
 }
 
 // Transcribe Action
@@ -1183,7 +1260,11 @@ fn should_use_incremental_transcription(settings: &AppSettings, tm: &Transcripti
 
 fn start_transcription_session(app: &AppHandle, binding_id: &str, started: bool) {
     if started {
-        shortcut::register_cancel_shortcut(app);
+        if should_register_cancel_shortcut(binding_id, started) {
+            shortcut::register_cancel_shortcut(app);
+        } else {
+            shortcut::unregister_cancel_shortcut(app);
+        }
     } else {
         utils::hide_recording_overlay(app);
         change_tray_icon(app, TrayIconState::Idle);
@@ -1194,6 +1275,10 @@ fn start_transcription_session(app: &AppHandle, binding_id: &str, started: bool)
     );
 }
 
+fn should_register_cancel_shortcut(binding_id: &str, started: bool) -> bool {
+    started && binding_id != "transcribe_full_system_audio"
+}
+
 fn active_meeting_binding_for_quick_dictation(app: &AppHandle, binding_id: &str) -> Option<String> {
     if binding_id != "transcribe" {
         return None;
@@ -1202,6 +1287,254 @@ fn active_meeting_binding_for_quick_dictation(app: &AppHandle, binding_id: &str)
     app.try_state::<Arc<FullSystemAudioSessionManager>>()
         .and_then(|manager| manager.active_snapshot())
         .map(|snapshot| snapshot.binding_id)
+}
+
+pub fn cancel_meeting_quick_dictation_recording(
+    app: &AppHandle,
+    quick_binding_id: &str,
+    meeting_binding_id: &str,
+    operation_id: OperationId,
+) {
+    if !cancel_dictation_operation(operation_id) {
+        return;
+    }
+    if let Some(manager) = app.try_state::<Arc<AudioRecordingManager>>() {
+        let _ = manager.finish_borrowed_recording_and_restore(quick_binding_id, meeting_binding_id);
+    }
+    if let Some(manager) = app.try_state::<Arc<TranscriptionManager>>() {
+        manager.cancel_incremental_session();
+    }
+    clear_active_quick_dictation_ui_operation(operation_id);
+    restore_meeting_after_quick_dictation_cancel(app);
+}
+
+pub fn cancel_dictation_operation(operation_id: OperationId) -> bool {
+    let mut states = DICTATION_OPERATION_TERMINAL_STATES.lock().unwrap();
+    if states.contains_key(&operation_id) {
+        return false;
+    }
+    insert_dictation_operation_terminal_state(
+        &mut states,
+        operation_id,
+        DictationOperationTerminalState::Cancelled,
+    );
+    true
+}
+
+fn insert_dictation_operation_terminal_state(
+    states: &mut HashMap<OperationId, DictationOperationTerminalState>,
+    operation_id: OperationId,
+    state: DictationOperationTerminalState,
+) {
+    states.insert(operation_id, state);
+}
+
+pub fn cancel_standalone_dictation_recording_operation(
+    app: &AppHandle,
+    binding_id: &str,
+    operation_id: OperationId,
+) {
+    if !cancel_dictation_operation(operation_id) {
+        return;
+    }
+    cancel_ask_selection_operation(app, operation_id);
+    if let Some(manager) = app.try_state::<Arc<AudioRecordingManager>>() {
+        manager.cancel_recording();
+    }
+    if let Some(manager) = app.try_state::<Arc<TranscriptionManager>>() {
+        manager.cancel_incremental_session();
+    }
+    clear_active_quick_dictation_ui_operation(operation_id);
+    shortcut::unregister_cancel_shortcut(app);
+    utils::hide_recording_overlay(app);
+    change_tray_icon(app, TrayIconState::Idle);
+    debug!("Cancelled dictation recording '{binding_id}' during meeting finalization");
+}
+
+pub fn cancel_standalone_dictation_processing_operation(
+    app: &AppHandle,
+    operation_id: OperationId,
+) {
+    if !cancel_dictation_operation(operation_id) {
+        return;
+    }
+    cancel_ask_selection_operation(app, operation_id);
+    clear_active_quick_dictation_ui_operation(operation_id);
+    shortcut::unregister_cancel_shortcut(app);
+    utils::hide_recording_overlay(app);
+    change_tray_icon(app, TrayIconState::Idle);
+    debug!("Cancelled dictation processing during meeting finalization");
+}
+
+fn dictation_operation_was_cancelled(operation_id: OperationId) -> bool {
+    matches!(
+        DICTATION_OPERATION_TERMINAL_STATES
+            .lock()
+            .unwrap()
+            .get(&operation_id),
+        Some(DictationOperationTerminalState::Cancelled)
+    )
+}
+
+fn complete_dictation_operation_if_active<F>(operation_id: OperationId, complete: F) -> bool
+where
+    F: FnOnce(),
+{
+    let mut states = DICTATION_OPERATION_TERMINAL_STATES.lock().unwrap();
+    if states.contains_key(&operation_id) {
+        return false;
+    }
+    insert_dictation_operation_terminal_state(
+        &mut states,
+        operation_id,
+        DictationOperationTerminalState::Completed,
+    );
+    complete();
+    true
+}
+
+fn complete_transcription_ui_if_active<F>(
+    completion_mode: TranscriptionCompletionMode,
+    operation_id: OperationId,
+    complete: F,
+) -> bool
+where
+    F: FnOnce(),
+{
+    if completion_mode == TranscriptionCompletionMode::FullSystemOverlay {
+        complete();
+        true
+    } else {
+        complete_dictation_operation_if_active(operation_id, complete)
+    }
+}
+
+fn publish_transcription_error_if_operation_active<F>(operation_id: OperationId, publish: F) -> bool
+where
+    F: FnOnce(),
+{
+    complete_dictation_operation_if_active(operation_id, publish)
+}
+
+async fn await_dictation_post_processing_if_active<F, T>(
+    operation_id: OperationId,
+    post_processing: F,
+) -> Option<T>
+where
+    F: Future<Output = T>,
+{
+    if dictation_operation_was_cancelled(operation_id) {
+        return None;
+    }
+
+    let output = post_processing.await;
+    (!dictation_operation_was_cancelled(operation_id)).then_some(output)
+}
+
+fn dictation_output_was_cancelled(
+    operation_id: OperationId,
+    completion_context: &TranscriptionCompletionContext,
+    quick_cancel_generation_at_start: u64,
+    transcription_manager: &TranscriptionManager,
+    cancel_generation_at_start: u64,
+) -> bool {
+    dictation_operation_was_cancelled(operation_id)
+        || meeting_quick_dictation_was_cancelled(
+            completion_context,
+            quick_cancel_generation_at_start,
+        )
+        || transcription_manager.is_cancel_requested()
+        || transcription_manager.cancel_generation() != cancel_generation_at_start
+}
+
+async fn persist_with_cancellation_rollback<IsCancelled, Save, SaveFuture, Rollback, Error>(
+    is_cancelled: IsCancelled,
+    save: Save,
+    rollback: Rollback,
+) -> Result<Option<i64>, Error>
+where
+    IsCancelled: Fn() -> bool,
+    Save: FnOnce() -> SaveFuture,
+    SaveFuture: Future<Output = Result<i64, Error>>,
+    Rollback: FnOnce(i64) -> Result<(), Error>,
+{
+    if is_cancelled() {
+        return Ok(None);
+    }
+
+    let entry_id = save().await?;
+    if is_cancelled() {
+        rollback(entry_id)?;
+        return Ok(None);
+    }
+
+    Ok(Some(entry_id))
+}
+
+fn rollback_cancelled_dictation_history(hm: &HistoryManager, entry_id: Option<i64>) {
+    let Some(entry_id) = entry_id else {
+        return;
+    };
+    if let Err(error) = hm.rollback_dictation_entry(entry_id) {
+        error!(
+            "Failed to roll back cancelled dictation history entry {}: {}",
+            entry_id, error
+        );
+    }
+}
+
+fn complete_persisted_dictation_if_active<F>(
+    history_manager: &HistoryManager,
+    persisted_entry_id: Option<i64>,
+    operation_id: OperationId,
+    complete: F,
+) -> bool
+where
+    F: FnOnce(),
+{
+    let committed = complete_dictation_operation_if_active(operation_id, complete);
+    if !committed {
+        rollback_cancelled_dictation_history(history_manager, persisted_entry_id);
+    }
+    committed
+}
+
+pub fn cancel_meeting_quick_dictation_operation(app: &AppHandle, operation_id: OperationId) {
+    if !cancel_dictation_operation(operation_id) {
+        return;
+    }
+    MEETING_QUICK_DICTATION_CANCEL_GENERATION.fetch_add(1, Ordering::Relaxed);
+    clear_active_quick_dictation_ui_operation(operation_id);
+    restore_meeting_after_quick_dictation_cancel(app);
+}
+
+fn restore_meeting_after_quick_dictation_cancel(app: &AppHandle) {
+    shortcut::unregister_cancel_shortcut(app);
+    emit_active_session_window_state(app);
+    utils::hide_recording_overlay(app);
+    change_tray_icon(app, TrayIconState::Recording);
+}
+
+fn meeting_quick_dictation_was_cancelled(
+    completion_context: &TranscriptionCompletionContext,
+    generation_at_start: u64,
+) -> bool {
+    should_suppress_quick_dictation_output(
+        matches!(
+            completion_context,
+            TranscriptionCompletionContext::ReturnToMeeting { .. }
+        ),
+        generation_at_start,
+        MEETING_QUICK_DICTATION_CANCEL_GENERATION.load(Ordering::Relaxed),
+    )
+}
+
+fn should_suppress_quick_dictation_output(
+    returns_to_meeting: bool,
+    generation_at_start: u64,
+    current_generation: u64,
+) -> bool {
+    returns_to_meeting && current_generation != generation_at_start
 }
 
 fn meeting_microphone_binding_for_quick_dictation(
@@ -1448,6 +1781,67 @@ fn append_labeled_live_text(
         existing.push_str(incoming);
         *last_source = Some(source);
     }
+}
+
+fn append_live_transcription_segments(
+    runtime: &FullSystemLiveRuntime,
+    transcription_segments: &[LabeledTranscriptSegment],
+) -> String {
+    let mut transcript = runtime.transcript_text.lock().unwrap();
+    let mut last_source = runtime.last_transcript_source.lock().unwrap();
+    for segment in transcription_segments {
+        append_labeled_live_text(
+            &mut transcript,
+            &mut last_source,
+            segment.source,
+            &segment.text,
+        );
+    }
+    transcript.clone()
+}
+
+fn snapshot_full_system_live_runtime(
+    runtime: &FullSystemLiveRuntime,
+) -> Option<FullSystemLiveFinal> {
+    let transcript_text = runtime.transcript_text.lock().unwrap().clone();
+    let summary_text = runtime.summary_text.lock().unwrap().clone();
+    let summary_provider = runtime.summary_provider.lock().unwrap().clone();
+    let recorded_samples = runtime.recorded_samples.lock().unwrap().clone();
+    let chunk_count = runtime.chunk_count.load(Ordering::Relaxed);
+
+    if transcript_text.trim().is_empty() && recorded_samples.is_empty() {
+        return None;
+    }
+
+    Some(FullSystemLiveFinal {
+        transcript_text,
+        summary_text,
+        summary_provider,
+        recorded_samples,
+        chunk_count,
+    })
+}
+
+async fn persist_full_system_live_final(
+    history_manager: &HistoryManager,
+    live_final: &FullSystemLiveFinal,
+) -> anyhow::Result<i64> {
+    history_manager
+        .save_transcription(
+            live_final.recorded_samples.clone(),
+            live_final.transcript_text.clone(),
+            live_final.summary_text.clone(),
+            Some(format!(
+                "Live session summary via {} after {} chunk(s)",
+                live_final
+                    .summary_provider
+                    .clone()
+                    .unwrap_or_else(|| "live summary".to_string()),
+                live_final.chunk_count
+            )),
+            "full_system_audio",
+        )
+        .await
 }
 
 fn drain_front_up_to(samples: &mut Vec<f32>, max_len: usize) -> Vec<f32> {
@@ -1844,6 +2238,7 @@ pub fn clear_ask_selection_session() {
 
 fn update_ask_selection_session(
     session_id: u64,
+    owner_operation_id: Option<OperationId>,
     selected_text: Option<String>,
     context: AppContextSnapshot,
     messages: Vec<utils::AskSelectionMessage>,
@@ -1851,11 +2246,210 @@ fn update_ask_selection_session(
     if let Ok(mut session) = ASK_SELECTION_CHAT_SESSION.lock() {
         *session = Some(AskSelectionChatSession {
             id: session_id,
+            owner_operation_id,
             selected_text,
             context,
             messages,
         });
     }
+}
+
+fn publish_new_ask_selection_session_if_active<F>(
+    operation_id: OperationId,
+    session_id: u64,
+    owner_operation_id: Option<OperationId>,
+    selected_text: Option<String>,
+    context: AppContextSnapshot,
+    messages: Vec<utils::AskSelectionMessage>,
+    publish_ui: F,
+) -> bool
+where
+    F: FnOnce(),
+{
+    let operation_states = DICTATION_OPERATION_TERMINAL_STATES.lock().unwrap();
+    if operation_states.contains_key(&operation_id) {
+        return false;
+    }
+    let Ok(mut session) = ASK_SELECTION_CHAT_SESSION.lock() else {
+        return false;
+    };
+    if session.is_some() {
+        return false;
+    }
+
+    *session = Some(AskSelectionChatSession {
+        id: session_id,
+        owner_operation_id,
+        selected_text,
+        context,
+        messages,
+    });
+    publish_ui();
+    drop(session);
+    drop(operation_states);
+    true
+}
+
+fn complete_ask_selection_session_if_active<F>(
+    operation_id: OperationId,
+    session_id: u64,
+    selected_text: Option<String>,
+    context: AppContextSnapshot,
+    messages: Vec<utils::AskSelectionMessage>,
+    publish_ui: F,
+) -> bool
+where
+    F: FnOnce(),
+{
+    let mut operation_states = DICTATION_OPERATION_TERMINAL_STATES.lock().unwrap();
+    if operation_states.contains_key(&operation_id) {
+        return false;
+    }
+    let Ok(mut session) = ASK_SELECTION_CHAT_SESSION.lock() else {
+        return false;
+    };
+    if !matches!(
+        session.as_ref(),
+        Some(active)
+            if active.id == session_id
+                && active.owner_operation_id == Some(operation_id)
+    ) {
+        return false;
+    }
+
+    insert_dictation_operation_terminal_state(
+        &mut operation_states,
+        operation_id,
+        DictationOperationTerminalState::Completed,
+    );
+    *session = Some(AskSelectionChatSession {
+        id: session_id,
+        owner_operation_id: None,
+        selected_text,
+        context,
+        messages,
+    });
+    publish_ui();
+    drop(session);
+    drop(operation_states);
+    true
+}
+
+fn publish_new_ask_selection_terminal_error_if_active<F>(
+    operation_id: OperationId,
+    session_id: u64,
+    selected_text: Option<String>,
+    context: AppContextSnapshot,
+    messages: Vec<utils::AskSelectionMessage>,
+    publish_ui: F,
+) -> bool
+where
+    F: FnOnce(),
+{
+    let mut operation_states = DICTATION_OPERATION_TERMINAL_STATES.lock().unwrap();
+    if operation_states.contains_key(&operation_id) {
+        return false;
+    }
+    let Ok(mut session) = ASK_SELECTION_CHAT_SESSION.lock() else {
+        return false;
+    };
+    if session.is_some() {
+        return false;
+    }
+
+    insert_dictation_operation_terminal_state(
+        &mut operation_states,
+        operation_id,
+        DictationOperationTerminalState::Completed,
+    );
+    *session = Some(AskSelectionChatSession {
+        id: session_id,
+        owner_operation_id: None,
+        selected_text,
+        context,
+        messages,
+    });
+    publish_ui();
+    true
+}
+
+fn complete_ask_selection_session_with_rollback<F>(
+    history_manager: &HistoryManager,
+    persisted_entry_id: Option<i64>,
+    operation_id: OperationId,
+    session_id: u64,
+    selected_text: Option<String>,
+    context: AppContextSnapshot,
+    messages: Vec<utils::AskSelectionMessage>,
+    publish_ui: F,
+) -> bool
+where
+    F: FnOnce(),
+{
+    let committed = complete_ask_selection_session_if_active(
+        operation_id,
+        session_id,
+        selected_text,
+        context,
+        messages,
+        publish_ui,
+    );
+    if !committed {
+        rollback_cancelled_dictation_history(history_manager, persisted_entry_id);
+    }
+    committed
+}
+
+fn show_new_ask_selection_error_if_active(
+    app: &AppHandle,
+    operation_id: OperationId,
+    context: &AppContextSnapshot,
+    message: String,
+) -> bool {
+    let session_id = current_ask_selection_session_id();
+    let messages = current_ask_selection_messages();
+    let payload = ask_selection_payload(
+        "error",
+        Some(session_id),
+        messages.clone(),
+        None,
+        Some(message),
+    );
+    publish_new_ask_selection_terminal_error_if_active(
+        operation_id,
+        session_id,
+        context.selected_text.clone(),
+        context.clone(),
+        messages,
+        || utils::show_ask_selection_panel(app, payload),
+    )
+}
+
+fn cancel_ask_selection_session_if_owned<F>(operation_id: OperationId, cancel_ui: F) -> bool
+where
+    F: FnOnce(),
+{
+    let Ok(mut session) = ASK_SELECTION_CHAT_SESSION.lock() else {
+        return false;
+    };
+    if !matches!(
+        session.as_ref(),
+        Some(active) if active.owner_operation_id == Some(operation_id)
+    ) {
+        return false;
+    }
+
+    *session = None;
+    cancel_ui();
+    true
+}
+
+pub fn cancel_ask_selection_operation(app: &AppHandle, operation_id: OperationId) -> bool {
+    cancel_ask_selection_session_if_owned(operation_id, || {
+        // The ownership lock remains held until the hide is queued. A newer
+        // session cannot publish its show request between these two actions.
+        utils::hide_ask_selection_panel(app);
+    })
 }
 
 fn current_ask_selection_messages() -> Vec<utils::AskSelectionMessage> {
@@ -2114,6 +2708,7 @@ pub async fn answer_ask_selection_follow_up(
     };
     update_ask_selection_session(
         session.id,
+        session.owner_operation_id,
         selected_text.clone(),
         session.context.clone(),
         pending_messages.clone(),
@@ -2142,6 +2737,7 @@ pub async fn answer_ask_selection_follow_up(
                 .push(ask_selection_message("assistant", answer.clone(), false));
             update_ask_selection_session(
                 session.id,
+                None,
                 selected_text,
                 session.context,
                 session.messages.clone(),
@@ -2384,19 +2980,8 @@ async fn transcribe_and_summarize_live_chunk(
     }
 
     if !transcription_segments.is_empty() {
-        let transcript_so_far = {
-            let mut transcript = runtime.transcript_text.lock().unwrap();
-            let mut last_source = runtime.last_transcript_source.lock().unwrap();
-            for segment in &transcription_segments {
-                append_labeled_live_text(
-                    &mut transcript,
-                    &mut *last_source,
-                    segment.source,
-                    &segment.text,
-                );
-            }
-            transcript.clone()
-        };
+        let transcript_so_far =
+            append_live_transcription_segments(runtime, &transcription_segments);
 
         let completed_chunk = runtime.chunk_count.fetch_add(1, Ordering::Relaxed) + 1;
         if !should_update_live_summary(completed_chunk, is_final_chunk) {
@@ -2849,23 +3434,7 @@ async fn finish_full_system_live_session(
         }
     }
 
-    let transcript_text = session.runtime.transcript_text.lock().unwrap().clone();
-    let summary_text = session.runtime.summary_text.lock().unwrap().clone();
-    let summary_provider = session.runtime.summary_provider.lock().unwrap().clone();
-    let recorded_samples = session.runtime.recorded_samples.lock().unwrap().clone();
-    let chunk_count = session.runtime.chunk_count.load(Ordering::Relaxed);
-
-    if transcript_text.trim().is_empty() && recorded_samples.is_empty() {
-        return None;
-    }
-
-    Some(FullSystemLiveFinal {
-        transcript_text,
-        summary_text,
-        summary_provider,
-        recorded_samples,
-        chunk_count,
-    })
+    snapshot_full_system_live_runtime(&session.runtime)
 }
 
 fn append_full_system_stop_tail_samples(
@@ -2931,6 +3500,7 @@ fn mixed_samples_from_source_samples(
 fn handle_transcription_stop(
     app: &AppHandle,
     binding_id: &str,
+    operation_id: OperationId,
     samples: Option<Vec<f32>>,
     recording_duration: Option<Duration>,
     post_process: bool,
@@ -2939,6 +3509,7 @@ fn handle_transcription_stop(
     completion_context: TranscriptionCompletionContext,
     tm: Arc<TranscriptionManager>,
     hm: Arc<HistoryManager>,
+    finish_guard: Option<FinishGuard>,
 ) {
     log::info!(
         "[latency] transcription task scheduling binding={} sample_count={} recording_duration_ms={}",
@@ -2957,6 +3528,10 @@ fn handle_transcription_stop(
     let task_completed_for_worker = Arc::clone(&task_completed);
     let tm_for_worker = tm.clone();
     let cancel_generation_at_start = tm.cancel_generation();
+    let quick_cancel_generation_at_start =
+        MEETING_QUICK_DICTATION_CANCEL_GENERATION.load(Ordering::Relaxed);
+    let completion_context_for_watchdog = completion_context.clone();
+    let tm_for_watchdog = tm.clone();
     let recording_duration = recording_duration.unwrap_or_default();
     let transcription_watchdog = samples
         .as_ref()
@@ -2964,7 +3539,10 @@ fn handle_transcription_stop(
         .unwrap_or(FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT + FULL_PASS_TRANSCRIPTION_WATCHDOG_GRACE);
 
     let transcription_task = tauri::async_runtime::spawn(async move {
-        let _guard = FinishGuard::new(ah.clone(), binding_id.clone());
+        let mut finish_guard = Some(
+            finish_guard
+                .unwrap_or_else(|| FinishGuard::new(ah.clone(), binding_id.clone(), operation_id)),
+        );
         let _completion_guard = CompletionGuard(task_completed_for_worker);
         let mut ui_guard = UiResetGuard::new(ah.clone(), completion_context.clone());
         let binding_id = binding_id.clone();
@@ -2973,28 +3551,36 @@ fn handle_transcription_stop(
             binding_id
         );
 
+        if dictation_output_was_cancelled(
+            operation_id,
+            &completion_context,
+            quick_cancel_generation_at_start,
+            &tm_for_worker,
+            cancel_generation_at_start,
+        ) {
+            debug!("Transcription task was cancelled before processing started");
+            restore_ui_after_transcription(&ah, &completion_context);
+            return;
+        }
+
         let Some(samples) = samples else {
             warn!("No samples retrieved from recording stop");
             if completion_mode == TranscriptionCompletionMode::EditMode {
-                let session_id = current_ask_selection_session_id();
-                utils::show_ask_selection_panel(
+                show_new_ask_selection_error_if_active(
                     &ah,
-                    ask_selection_payload(
-                        "error",
-                        Some(session_id),
-                        current_ask_selection_messages(),
-                        None,
-                        Some(
-                            "No audio captured. Try holding the shortcut a bit longer.".to_string(),
-                        ),
-                    ),
+                    operation_id,
+                    &context_snapshot,
+                    "No audio captured. Try holding the shortcut a bit longer.".to_string(),
                 );
                 change_tray_icon(&ah, TrayIconState::Idle);
                 return;
             }
             if recording_duration >= NO_INPUT_OVERLAY_MIN_DURATION {
-                ui_guard.suppress();
-                restore_ui_or_show_no_input_feedback(&ah, &completion_context, post_process);
+                if complete_transcription_ui_if_active(completion_mode, operation_id, || {
+                    restore_ui_or_show_no_input_feedback(&ah, &completion_context, post_process);
+                }) {
+                    ui_guard.suppress();
+                }
             }
             return;
         };
@@ -3009,25 +3595,21 @@ fn handle_transcription_stop(
 
         if samples.is_empty() {
             if completion_mode == TranscriptionCompletionMode::EditMode {
-                let session_id = current_ask_selection_session_id();
-                utils::show_ask_selection_panel(
+                show_new_ask_selection_error_if_active(
                     &ah,
-                    ask_selection_payload(
-                        "error",
-                        Some(session_id),
-                        current_ask_selection_messages(),
-                        None,
-                        Some(
-                            "No audio captured. Try holding the shortcut a bit longer.".to_string(),
-                        ),
-                    ),
+                    operation_id,
+                    &context_snapshot,
+                    "No audio captured. Try holding the shortcut a bit longer.".to_string(),
                 );
                 change_tray_icon(&ah, TrayIconState::Idle);
                 return;
             }
             if recording_duration >= NO_INPUT_OVERLAY_MIN_DURATION {
-                ui_guard.suppress();
-                restore_ui_or_show_no_input_feedback(&ah, &completion_context, post_process);
+                if complete_transcription_ui_if_active(completion_mode, operation_id, || {
+                    restore_ui_or_show_no_input_feedback(&ah, &completion_context, post_process);
+                }) {
+                    ui_guard.suppress();
+                }
             } else {
                 let settings = get_settings(&ah);
                 let binding = settings
@@ -3041,7 +3623,9 @@ fn handle_transcription_stop(
                     "No audio captured. Hold the push-to-talk key a bit longer or choose a different shortcut."
                 };
                 warn!("{}", message);
-                let _ = ah.emit("transcription-error", message.to_string());
+                publish_transcription_error_if_operation_active(operation_id, || {
+                    let _ = ah.emit("transcription-error", message.to_string());
+                });
                 restore_ui_after_transcription(&ah, &completion_context);
             }
             return;
@@ -3084,6 +3668,15 @@ fn handle_transcription_stop(
                 duration.as_millis()
             );
             tokio::time::sleep(duration).await;
+        }
+
+        if meeting_quick_dictation_was_cancelled(
+            &completion_context,
+            quick_cancel_generation_at_start,
+        ) {
+            debug!("Quick dictation was cancelled before transcription started");
+            restore_ui_after_transcription(&ah, &completion_context);
+            return;
         }
 
         let transcription_result = if use_incremental
@@ -3150,18 +3743,24 @@ fn handle_transcription_stop(
         };
         match transcription_result {
             Ok(transcription) => {
+                if dictation_output_was_cancelled(
+                    operation_id,
+                    &completion_context,
+                    quick_cancel_generation_at_start,
+                    &tm_for_worker,
+                    cancel_generation_at_start,
+                ) {
+                    debug!("Quick dictation was cancelled before output handling");
+                    restore_ui_after_transcription(&ah, &completion_context);
+                    return;
+                }
                 if suspected_no_input && transcription.trim().is_empty() {
                     if completion_mode == TranscriptionCompletionMode::EditMode {
-                        let session_id = current_ask_selection_session_id();
-                        utils::show_ask_selection_panel(
+                        show_new_ask_selection_error_if_active(
                             &ah,
-                            ask_selection_payload(
-                                "error",
-                                Some(session_id),
-                                current_ask_selection_messages(),
-                                None,
-                                Some("No speech detected. Try recording again.".to_string()),
-                            ),
+                            operation_id,
+                            &context_snapshot,
+                            "No speech detected. Try recording again.".to_string(),
                         );
                         change_tray_icon(&ah, TrayIconState::Idle);
                         return;
@@ -3171,15 +3770,15 @@ fn handle_transcription_stop(
                         &binding_id,
                         completion_mode,
                     );
-                    ui_guard.suppress();
-                    restore_ui_or_show_no_input_feedback(&ah, &completion_context, post_process);
-                    return;
-                }
-                if tm_for_worker.is_cancel_requested()
-                    || tm_for_worker.cancel_generation() != cancel_generation_at_start
-                {
-                    debug!("Transcription was cancelled before output handling");
-                    restore_ui_after_transcription(&ah, &completion_context);
+                    if complete_transcription_ui_if_active(completion_mode, operation_id, || {
+                        restore_ui_or_show_no_input_feedback(
+                            &ah,
+                            &completion_context,
+                            post_process,
+                        );
+                    }) {
+                        ui_guard.suppress();
+                    }
                     return;
                 }
                 debug!(
@@ -3224,22 +3823,25 @@ fn handle_transcription_stop(
                             ask_selection_message("user", transcription.clone(), false),
                             ask_selection_message("assistant", "Thinking...", true),
                         ];
-                        update_ask_selection_session(
+                        let thinking_payload = ask_selection_payload(
+                            "thinking",
+                            Some(session_id),
+                            thinking_messages.clone(),
+                            None,
+                            None,
+                        );
+                        if !publish_new_ask_selection_session_if_active(
+                            operation_id,
                             session_id,
+                            Some(operation_id),
                             selected_text.clone(),
                             context_snapshot.clone(),
                             thinking_messages.clone(),
-                        );
-                        utils::show_ask_selection_panel(
-                            &ah,
-                            ask_selection_payload(
-                                "thinking",
-                                Some(session_id),
-                                thinking_messages.clone(),
-                                None,
-                                None,
-                            ),
-                        );
+                            || utils::show_ask_selection_panel(&ah, thinking_payload),
+                        ) {
+                            change_tray_icon(&ah, TrayIconState::Idle);
+                            return;
+                        }
                         match answer_ask_selection(
                             &ah,
                             &settings,
@@ -3250,36 +3852,61 @@ fn handle_transcription_stop(
                         .await
                         {
                             Ok((answer_text, prompt_label)) => {
-                                if !ask_selection_session_is_current(session_id) {
+                                if dictation_output_was_cancelled(
+                                    operation_id,
+                                    &completion_context,
+                                    quick_cancel_generation_at_start,
+                                    &tm_for_worker,
+                                    cancel_generation_at_start,
+                                ) || !ask_selection_session_is_current(session_id)
+                                {
+                                    cancel_ask_selection_operation(&ah, operation_id);
                                     change_tray_icon(&ah, TrayIconState::Idle);
                                     return;
                                 }
 
-                                let hm_clone = Arc::clone(&hm);
-                                let ah_for_history = ah.clone();
-                                let transcription_for_history = transcription.clone();
-                                let answer_for_history = answer_text.clone();
-                                tauri::async_runtime::spawn(async move {
-                                    if let Err(e) = hm_clone
-                                        .save_transcription(
+                                let is_cancelled = || {
+                                    dictation_output_was_cancelled(
+                                        operation_id,
+                                        &completion_context,
+                                        quick_cancel_generation_at_start,
+                                        &tm_for_worker,
+                                        cancel_generation_at_start,
+                                    )
+                                };
+                                let mut persisted_entry_id = None;
+                                let mut save_error = None;
+                                match persist_with_cancellation_rollback(
+                                    is_cancelled,
+                                    || {
+                                        hm.save_transcription(
                                             samples_clone,
-                                            transcription_for_history,
-                                            Some(answer_for_history),
+                                            transcription.clone(),
+                                            Some(answer_text.clone()),
                                             Some(prompt_label),
                                             "dictation",
                                         )
-                                        .await
-                                    {
-                                        error!("Failed to save Ask Selection transcription: {}", e);
-                                        let _ = ah_for_history.emit(
-                                            "transcription-error",
-                                            format!(
-                                                "Ask Selection succeeded, but saving history failed: {}",
-                                                e
-                                            ),
-                                        );
+                                    },
+                                    |entry_id| hm.rollback_dictation_entry(entry_id),
+                                )
+                                .await
+                                {
+                                    Ok(Some(entry_id)) => {
+                                        persisted_entry_id = Some(entry_id);
                                     }
-                                });
+                                    Ok(None) => {
+                                        debug!(
+                                            "Rolled back Ask Selection history for cancelled dictation"
+                                        );
+                                        cancel_ask_selection_operation(&ah, operation_id);
+                                        change_tray_icon(&ah, TrayIconState::Idle);
+                                        return;
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to save Ask Selection transcription: {}", e);
+                                        save_error = Some(e.to_string());
+                                    }
+                                }
 
                                 thinking_messages.pop();
                                 thinking_messages.push(ask_selection_message(
@@ -3287,27 +3914,51 @@ fn handle_transcription_stop(
                                     answer_text.clone(),
                                     false,
                                 ));
-                                update_ask_selection_session(
+                                let result_payload = ask_selection_payload(
+                                    "result",
+                                    Some(session_id),
+                                    thinking_messages.clone(),
+                                    Some(answer_text),
+                                    None,
+                                );
+                                let save_error_message = save_error.map(|error| {
+                                    format!(
+                                        "Ask Selection succeeded, but saving history failed: {}",
+                                        error
+                                    )
+                                });
+                                if !complete_ask_selection_session_with_rollback(
+                                    &hm,
+                                    persisted_entry_id,
+                                    operation_id,
                                     session_id,
                                     selected_text,
                                     context_snapshot,
-                                    thinking_messages.clone(),
-                                );
-                                utils::update_ask_selection_panel(
-                                    &ah,
-                                    ask_selection_payload(
-                                        "result",
-                                        Some(session_id),
-                                        thinking_messages,
-                                        Some(answer_text),
-                                        None,
-                                    ),
-                                );
+                                    thinking_messages,
+                                    || {
+                                        utils::update_ask_selection_panel(&ah, result_payload);
+                                        if let Some(error) = save_error_message {
+                                            let _ = ah.emit("transcription-error", error);
+                                        }
+                                    },
+                                ) {
+                                    cancel_ask_selection_operation(&ah, operation_id);
+                                    change_tray_icon(&ah, TrayIconState::Idle);
+                                    return;
+                                }
                                 change_tray_icon(&ah, TrayIconState::Idle);
                             }
                             Err(error) => {
                                 error!("Ask Selection failed: {}", error);
-                                if !ask_selection_session_is_current(session_id) {
+                                if dictation_output_was_cancelled(
+                                    operation_id,
+                                    &completion_context,
+                                    quick_cancel_generation_at_start,
+                                    &tm_for_worker,
+                                    cancel_generation_at_start,
+                                ) || !ask_selection_session_is_current(session_id)
+                                {
+                                    cancel_ask_selection_operation(&ah, operation_id);
                                     change_tray_icon(&ah, TrayIconState::Idle);
                                     return;
                                 }
@@ -3317,17 +3968,28 @@ fn handle_transcription_stop(
                                     transcription.clone(),
                                     false,
                                 )];
-                                utils::update_ask_selection_panel(
-                                    &ah,
-                                    ask_selection_payload(
-                                        "error",
-                                        Some(session_id),
-                                        error_messages,
-                                        None,
-                                        Some(error.clone()),
-                                    ),
+                                let error_payload = ask_selection_payload(
+                                    "error",
+                                    Some(session_id),
+                                    error_messages.clone(),
+                                    None,
+                                    Some(error.clone()),
                                 );
-                                let _ = ah.emit("transcription-error", error);
+                                if !complete_ask_selection_session_if_active(
+                                    operation_id,
+                                    session_id,
+                                    selected_text,
+                                    context_snapshot,
+                                    error_messages,
+                                    || {
+                                        utils::update_ask_selection_panel(&ah, error_payload);
+                                        let _ = ah.emit("transcription-error", error);
+                                    },
+                                ) {
+                                    cancel_ask_selection_operation(&ah, operation_id);
+                                    change_tray_icon(&ah, TrayIconState::Idle);
+                                    return;
+                                }
                                 change_tray_icon(&ah, TrayIconState::Idle);
                             }
                         }
@@ -3349,14 +4011,34 @@ fn handle_transcription_stop(
                             spawn_deferred_overlay_state(&ah, DeferredOverlayState::Processing);
                         }
                     }
-                    let finalized = finalize_transcription_output(
-                        &ah,
-                        &settings,
-                        &transcription,
-                        post_process,
-                        Some(&context_snapshot),
+                    let Some(finalized) = await_dictation_post_processing_if_active(
+                        operation_id,
+                        finalize_transcription_output(
+                            &ah,
+                            &settings,
+                            &transcription,
+                            post_process,
+                            Some(&context_snapshot),
+                        ),
                     )
-                    .await;
+                    .await
+                    else {
+                        debug!("Dictation was cancelled during post-processing");
+                        restore_ui_after_transcription(&ah, &completion_context);
+                        return;
+                    };
+
+                    if dictation_output_was_cancelled(
+                        operation_id,
+                        &completion_context,
+                        quick_cancel_generation_at_start,
+                        &tm_for_worker,
+                        cancel_generation_at_start,
+                    ) {
+                        debug!("Dictation was cancelled after post-processing");
+                        restore_ui_after_transcription(&ah, &completion_context);
+                        return;
+                    }
                     let final_text = finalized.final_text;
                     let post_processed_text = finalized.post_processed_text;
                     let post_process_prompt = finalized.post_process_prompt;
@@ -3401,27 +4083,94 @@ fn handle_transcription_stop(
                             }
                         }
                     } else {
-                        let hm_clone = Arc::clone(&hm);
-                        let ah_for_history = ah.clone();
-                        let transcription_for_history = transcription.clone();
-                        tauri::async_runtime::spawn(async move {
-                            match hm_clone
-                                .save_transcription(
+                        let is_cancelled = || {
+                            dictation_output_was_cancelled(
+                                operation_id,
+                                &completion_context,
+                                quick_cancel_generation_at_start,
+                                &tm_for_worker,
+                                cancel_generation_at_start,
+                            )
+                        };
+                        let dictation_history_entry_id = match persist_with_cancellation_rollback(
+                            is_cancelled,
+                            || {
+                                hm.save_transcription(
                                     samples_clone,
-                                    transcription_for_history,
+                                    transcription.clone(),
                                     post_processed_text,
                                     post_process_prompt,
                                     "dictation",
                                 )
-                                .await
-                            {
-                                Ok(history_entry_id) => {
+                            },
+                            |entry_id| hm.rollback_dictation_entry(entry_id),
+                        )
+                        .await
+                        {
+                            Ok(entry_id) => entry_id,
+                            Err(e) => {
+                                error!("Failed to save transcription to history: {}", e);
+                                None
+                            }
+                        };
+
+                        if dictation_history_entry_id.is_none() && is_cancelled() {
+                            restore_ui_after_transcription(&ah, &completion_context);
+                            return;
+                        }
+
+                        if dictation_output_was_cancelled(
+                            operation_id,
+                            &completion_context,
+                            quick_cancel_generation_at_start,
+                            &tm_for_worker,
+                            cancel_generation_at_start,
+                        ) {
+                            rollback_cancelled_dictation_history(&hm, dictation_history_entry_id);
+                            restore_ui_after_transcription(&ah, &completion_context);
+                            return;
+                        }
+
+                        let ah_clone = ah.clone();
+                        let paste_completion_context = completion_context.clone();
+                        let tm_for_paste = Arc::clone(&tm_for_worker);
+                        let hm_for_paste = Arc::clone(&hm);
+                        let hm_for_schedule_error = Arc::clone(&hm);
+                        let paste_finish_guard = finish_guard.take();
+                        let paste_time = Instant::now();
+                        let schedule_result = ah.run_on_main_thread(move || {
+                            let _finish_guard = paste_finish_guard;
+                            if dictation_output_was_cancelled(
+                                operation_id,
+                                &paste_completion_context,
+                                quick_cancel_generation_at_start,
+                                &tm_for_paste,
+                                cancel_generation_at_start,
+                            ) {
+                                debug!("Skipping paste for cancelled dictation");
+                                rollback_cancelled_dictation_history(
+                                    &hm_for_paste,
+                                    dictation_history_entry_id,
+                                );
+                                restore_ui_after_transcription(
+                                    &ah_clone,
+                                    &paste_completion_context,
+                                );
+                                return;
+                            }
+
+                            if !complete_persisted_dictation_if_active(
+                                &hm_for_paste,
+                                dictation_history_entry_id,
+                                operation_id,
+                                || {
+                                if let Some(history_entry_id) = dictation_history_entry_id {
                                     if release_smoke_enabled() {
                                         log::info!(
                                             "Release smoke history entry saved id={}",
                                             history_entry_id
                                         );
-                                        let _ = ah_for_history.emit(
+                                        let _ = ah_clone.emit(
                                             "show-history-entry",
                                             serde_json::json!({
                                                 "entryId": history_entry_id,
@@ -3429,83 +4178,108 @@ fn handle_transcription_stop(
                                         );
                                     }
                                 }
-                                Err(e) => {
-                                    error!("Failed to save transcription to history: {}", e);
+
+                                let text_for_paste = final_text.clone();
+                                match utils::paste(text_for_paste.clone(), ah_clone.clone()) {
+                                    Ok(()) => debug!(
+                                        "Text pasted successfully in {:?}",
+                                        paste_time.elapsed()
+                                    ),
+                                    Err(e) => {
+                                        error!("Failed to paste transcription: {}", e);
+                                        let _ = ah_clone.emit(
+                                            "transcription-error",
+                                            format!(
+                                                "Transcription succeeded, but paste failed: {}",
+                                                e
+                                            ),
+                                        );
+                                        if let Err(copy_err) =
+                                            ah_clone.clipboard().write_text(&text_for_paste)
+                                        {
+                                            error!(
+                                                "Failed to copy transcription to clipboard after paste error: {}",
+                                                copy_err
+                                            );
+                                        }
+                                    }
                                 }
+                                restore_ui_after_transcription(
+                                    &ah_clone,
+                                    &paste_completion_context,
+                                );
+                                },
+                            ) {
+                                debug!("Cancellation won before dictation paste commit");
+                                restore_ui_after_transcription(
+                                    &ah_clone,
+                                    &paste_completion_context,
+                                );
                             }
                         });
-                    }
-
-                    let ah_clone = ah.clone();
-                    let paste_completion_context = completion_context.clone();
-                    let paste_time = Instant::now();
-                    ah.run_on_main_thread(move || {
-                        let text_for_paste = final_text.clone();
-                        match utils::paste(text_for_paste.clone(), ah_clone.clone()) {
-                            Ok(()) => debug!(
-                                "Text pasted successfully in {:?}",
-                                paste_time.elapsed()
-                            ),
-                            Err(e) => {
-                                error!("Failed to paste transcription: {}", e);
-                                let _ = ah_clone.emit(
+                        if let Err(e) = schedule_result {
+                            error!("Failed to run paste on main thread: {:?}", e);
+                            rollback_cancelled_dictation_history(
+                                &hm_for_schedule_error,
+                                dictation_history_entry_id,
+                            );
+                            publish_transcription_error_if_operation_active(operation_id, || {
+                                let _ = ah.emit(
                                     "transcription-error",
-                                    format!(
-                                        "Transcription succeeded, but paste failed: {}",
-                                        e
-                                    ),
+                                    "Transcription succeeded, but paste could not be scheduled."
+                                        .to_string(),
                                 );
-                                if let Err(copy_err) =
-                                    ah_clone.clipboard().write_text(&text_for_paste)
-                                {
-                                    error!(
-                                        "Failed to copy transcription to clipboard after paste error: {}",
-                                        copy_err
-                                    );
-                                }
-                            }
+                            });
+                            restore_ui_after_transcription(&ah, &completion_context);
                         }
-                        restore_ui_after_transcription(&ah_clone, &paste_completion_context);
-                    })
-                    .unwrap_or_else(|e| {
-                        error!("Failed to run paste on main thread: {:?}", e);
-                        restore_ui_after_transcription(&ah, &completion_context);
-                    });
+                        ui_guard.suppress();
+                        return;
+                    }
                 } else if completion_mode == TranscriptionCompletionMode::EditMode {
-                    let session_id = current_ask_selection_session_id();
-                    utils::show_ask_selection_panel(
+                    if !show_new_ask_selection_error_if_active(
                         &ah,
-                        ask_selection_payload(
-                            "error",
-                            Some(session_id),
-                            current_ask_selection_messages(),
-                            None,
-                            Some("No speech detected. Try recording again.".to_string()),
-                        ),
-                    );
+                        operation_id,
+                        &context_snapshot,
+                        "No speech detected. Try recording again.".to_string(),
+                    ) {
+                        restore_ui_after_transcription(&ah, &completion_context);
+                        return;
+                    }
                     change_tray_icon(&ah, TrayIconState::Idle);
                 } else {
-                    restore_ui_after_transcription(&ah, &completion_context);
+                    complete_transcription_ui_if_active(completion_mode, operation_id, || {
+                        restore_ui_after_transcription(&ah, &completion_context);
+                    });
                 }
             }
             Err(err) => {
+                if dictation_output_was_cancelled(
+                    operation_id,
+                    &completion_context,
+                    quick_cancel_generation_at_start,
+                    &tm_for_worker,
+                    cancel_generation_at_start,
+                ) {
+                    debug!("Suppressing transcription error for cancelled dictation");
+                    cancel_ask_selection_operation(&ah, operation_id);
+                    restore_ui_after_transcription(&ah, &completion_context);
+                    return;
+                }
                 if completion_mode == TranscriptionCompletionMode::EditMode {
-                    let session_id = current_ask_selection_session_id();
                     let message = if suspected_no_input {
                         "No speech detected. Try recording again.".to_string()
                     } else {
                         format!("Ask Selection transcription failed: {}", err)
                     };
-                    utils::show_ask_selection_panel(
+                    if !show_new_ask_selection_error_if_active(
                         &ah,
-                        ask_selection_payload(
-                            "error",
-                            Some(session_id),
-                            current_ask_selection_messages(),
-                            None,
-                            Some(message),
-                        ),
-                    );
+                        operation_id,
+                        &context_snapshot,
+                        message,
+                    ) {
+                        restore_ui_after_transcription(&ah, &completion_context);
+                        return;
+                    }
                     change_tray_icon(&ah, TrayIconState::Idle);
                     return;
                 }
@@ -3515,17 +4289,21 @@ fn handle_transcription_stop(
                         &binding_id,
                         completion_mode,
                     );
-                    ui_guard.suppress();
-                    restore_ui_or_show_no_input_feedback(&ah, &completion_context, post_process);
-                    return;
-                }
-                if tm_for_worker.is_cancel_requested() {
-                    debug!("Transcription task cancelled");
-                    restore_ui_after_transcription(&ah, &completion_context);
+                    if complete_transcription_ui_if_active(completion_mode, operation_id, || {
+                        restore_ui_or_show_no_input_feedback(
+                            &ah,
+                            &completion_context,
+                            post_process,
+                        );
+                    }) {
+                        ui_guard.suppress();
+                    }
                     return;
                 }
                 error!("Global Shortcut Transcription error: {}", err);
-                let _ = ah.emit("transcription-error", err.to_string());
+                publish_transcription_error_if_operation_active(operation_id, || {
+                    let _ = ah.emit("transcription-error", err.to_string());
+                });
                 restore_ui_after_transcription(&ah, &completion_context);
             }
         }
@@ -3533,7 +4311,6 @@ fn handle_transcription_stop(
 
     {
         let app_for_watchdog = app.clone();
-        let tm_for_watchdog = tm.clone();
         let task_completed = Arc::clone(&task_completed);
         tauri::async_runtime::spawn(async move {
             tokio::time::sleep(transcription_watchdog).await;
@@ -3541,17 +4318,29 @@ fn handle_transcription_stop(
                 return;
             }
 
+            if dictation_output_was_cancelled(
+                operation_id,
+                &completion_context_for_watchdog,
+                quick_cancel_generation_at_start,
+                &tm_for_watchdog,
+                cancel_generation_at_start,
+            ) {
+                debug!("Suppressing watchdog error for cancelled dictation");
+                transcription_task.abort();
+                return;
+            }
+
             warn!(
-                "Transcription watchdog fired after {}s; forcing cancellation and coordinator reset",
+                "Transcription watchdog fired after {}s; aborting only this transcription task",
                 transcription_watchdog.as_secs()
             );
-            tm_for_watchdog.request_cancel();
             transcription_task.abort();
-            utils::cancel_current_operation(&app_for_watchdog);
-            let _ = app_for_watchdog.emit(
-                "transcription-error",
-                "Transcription timed out. Please try again.".to_string(),
-            );
+            publish_transcription_error_if_operation_active(operation_id, || {
+                let _ = app_for_watchdog.emit(
+                    "transcription-error",
+                    "Transcription timed out. Please try again.".to_string(),
+                );
+            });
         });
     }
 }
@@ -3772,10 +4561,13 @@ impl ShortcutAction for TranscribeAction {
         );
     }
 
-    fn stop(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
-        // Unregister the cancel shortcut when transcription stops
-        shortcut::unregister_cancel_shortcut(app);
-
+    fn stop(
+        &self,
+        app: &AppHandle,
+        binding_id: &str,
+        _shortcut_str: &str,
+        operation_id: OperationId,
+    ) {
         let stop_time = Instant::now();
         log::info!(
             "[latency] transcribe action stop begin binding={}",
@@ -3827,11 +4619,8 @@ impl ShortcutAction for TranscribeAction {
         } else {
             rm.stop_recording(binding_id)
         };
-        let completion_context = completion_context_for_active_meeting(active_meeting_binding);
-        let restore_meeting_after_quick_dictation = matches!(
-            completion_context,
-            TranscriptionCompletionContext::ReturnToMeeting { .. }
-        );
+        let completion_context =
+            completion_context_for_active_meeting(active_meeting_binding, operation_id);
         log::info!(
             "[latency] transcribe samples retrieved binding={} sample_count={} elapsed_ms={}",
             binding_id,
@@ -3841,6 +4630,7 @@ impl ShortcutAction for TranscribeAction {
         handle_transcription_stop(
             app,
             binding_id,
+            operation_id,
             samples,
             recording_duration,
             post_process,
@@ -3849,11 +4639,8 @@ impl ShortcutAction for TranscribeAction {
             completion_context,
             tm,
             hm,
+            None,
         );
-        if restore_meeting_after_quick_dictation {
-            shortcut::register_cancel_shortcut(app);
-        }
-
         debug!(
             "TranscribeAction::stop completed in {:?}",
             stop_time.elapsed()
@@ -3989,9 +4776,13 @@ impl ShortcutAction for FullSystemTranscribeAction {
         );
     }
 
-    fn stop(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
-        shortcut::unregister_cancel_shortcut(app);
-
+    fn stop(
+        &self,
+        app: &AppHandle,
+        binding_id: &str,
+        _shortcut_str: &str,
+        operation_id: OperationId,
+    ) {
         let stop_time = Instant::now();
         log::info!(
             "[latency] full-system action stop begin binding={}",
@@ -4048,7 +4839,11 @@ impl ShortcutAction for FullSystemTranscribeAction {
         let live_tm = Arc::clone(&tm);
         let live_hm = Arc::clone(&hm);
         tauri::async_runtime::spawn(async move {
-            let _finish_guard = FinishGuard::new(live_app.clone(), live_binding_id.clone());
+            let mut completion_owner = CompletionOwner::new(FinishGuard::new(
+                live_app.clone(),
+                live_binding_id.clone(),
+                operation_id,
+            ));
             let mut ui_guard =
                 UiResetGuard::new(live_app.clone(), TranscriptionCompletionContext::Standalone);
             if let Some(live_final) = finish_full_system_live_session(
@@ -4075,23 +4870,7 @@ impl ShortcutAction for FullSystemTranscribeAction {
                     return;
                 }
 
-                match live_hm
-                    .save_transcription(
-                        live_final.recorded_samples,
-                        live_final.transcript_text.clone(),
-                        live_final.summary_text.clone(),
-                        Some(format!(
-                            "Live session summary via {} after {} chunk(s)",
-                            live_final
-                                .summary_provider
-                                .clone()
-                                .unwrap_or_else(|| "live summary".to_string()),
-                            live_final.chunk_count
-                        )),
-                        "full_system_audio",
-                    )
-                    .await
-                {
+                match persist_full_system_live_final(&live_hm, &live_final).await {
                     Ok(history_entry_id) => {
                         emit_session_window_state(
                             &live_app,
@@ -4125,6 +4904,7 @@ impl ShortcutAction for FullSystemTranscribeAction {
             handle_transcription_stop(
                 &live_app,
                 &live_binding_id,
+                operation_id,
                 fallback_samples,
                 None,
                 post_process,
@@ -4133,6 +4913,7 @@ impl ShortcutAction for FullSystemTranscribeAction {
                 TranscriptionCompletionContext::Standalone,
                 live_tm,
                 live_hm,
+                Some(completion_owner.transfer()),
             );
         });
 
@@ -4153,10 +4934,18 @@ struct CancelAction;
 
 impl ShortcutAction for CancelAction {
     fn start(&self, app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {
-        utils::cancel_current_operation(app);
+        if let Some(coordinator) = app.try_state::<TranscriptionCoordinator>() {
+            coordinator.request_user_cancel();
+        }
     }
 
-    fn stop(&self, _app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {
+    fn stop(
+        &self,
+        _app: &AppHandle,
+        _binding_id: &str,
+        _shortcut_str: &str,
+        _operation_id: OperationId,
+    ) {
         // Nothing to do on stop for cancel
     }
 }
@@ -4169,7 +4958,13 @@ impl ShortcutAction for CopyLastTranscriptAction {
         crate::tray::copy_last_transcript(app);
     }
 
-    fn stop(&self, _app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {
+    fn stop(
+        &self,
+        _app: &AppHandle,
+        _binding_id: &str,
+        _shortcut_str: &str,
+        _operation_id: OperationId,
+    ) {
         // Nothing to do on stop for one-shot actions.
     }
 }
@@ -4191,7 +4986,13 @@ impl ShortcutAction for TogglePostProcessingAction {
         log::info!("Post-processing toggled via shortcut: enabled={}", enabled);
     }
 
-    fn stop(&self, _app: &AppHandle, _binding_id: &str, _shortcut_str: &str) {
+    fn stop(
+        &self,
+        _app: &AppHandle,
+        _binding_id: &str,
+        _shortcut_str: &str,
+        _operation_id: OperationId,
+    ) {
         // Toggle shortcuts act on press only.
     }
 }
@@ -4209,7 +5010,13 @@ impl ShortcutAction for TestAction {
         );
     }
 
-    fn stop(&self, app: &AppHandle, binding_id: &str, shortcut_str: &str) {
+    fn stop(
+        &self,
+        app: &AppHandle,
+        binding_id: &str,
+        shortcut_str: &str,
+        _operation_id: OperationId,
+    ) {
         log::info!(
             "Shortcut ID '{}': Stopped - {} (App: {})", // Changed "Released" to "Stopped" for consistency
             binding_id,
@@ -4264,40 +5071,357 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
-        append_full_system_stop_tail_samples, ask_selection_message, ask_selection_payload,
-        ask_selection_session_is_current, build_ask_selection_follow_up_prompt,
-        build_ask_selection_prompt, build_live_summary_prompt, clean_ask_selection_response,
-        clean_post_process_response, clear_ask_selection_session,
+        append_full_system_stop_tail_samples, append_live_transcription_segments,
+        ask_selection_message, ask_selection_payload, ask_selection_session_is_current,
+        await_dictation_post_processing_if_active, build_ask_selection_follow_up_prompt,
+        build_ask_selection_prompt, build_live_summary_prompt,
+        cancel_ask_selection_session_if_owned, cancel_dictation_operation,
+        clean_ask_selection_response, clean_post_process_response, clear_ask_selection_session,
+        complete_ask_selection_session_with_rollback, complete_dictation_operation_if_active,
+        complete_persisted_dictation_if_active, complete_transcription_ui_if_active,
         completion_context_for_active_meeting, current_ask_selection_messages,
         current_ask_selection_session_id, custom_vocabulary_prompt_block,
         format_labeled_transcript_segments, friendly_live_summary_error,
         full_system_live_final_chunk_timeout, is_effectively_silent_audio,
         is_effectively_silent_full_system_source_audio, is_supported_post_process_model,
-        normalize_live_summary_output, parse_meeting_summary_state,
+        normalize_live_summary_output, parse_meeting_summary_state, persist_full_system_live_final,
+        persist_with_cancellation_rollback, publish_new_ask_selection_session_if_active,
+        publish_transcription_error_if_operation_active, quick_dictation_ui_restore_is_current,
         render_meeting_summary_markdown, resolved_post_process_system_prompt,
         select_preferred_groq_model, should_pause_live_summaries,
-        should_refresh_microphone_stream_after_suspected_no_input, should_restore_meeting_ui,
-        should_update_live_summary, toggle_post_process_enabled, transcription_timeout_for_samples,
-        transcription_watchdog_delay, update_ask_selection_session, usable_post_processed_text,
-        LabeledTranscriptSegment, MeetingSummaryState, SummaryPoint,
+        should_refresh_microphone_stream_after_suspected_no_input, should_register_cancel_shortcut,
+        should_restore_meeting_ui, should_suppress_quick_dictation_output,
+        should_update_live_summary, snapshot_full_system_live_runtime, toggle_post_process_enabled,
+        transcription_timeout_for_samples, transcription_watchdog_delay,
+        update_ask_selection_session, usable_post_processed_text, CompletionOwner,
+        FullSystemLiveRuntime, LabeledTranscriptSegment, MeetingSummaryState, SummaryPoint,
         TranscriptionCompletionContext, TranscriptionCompletionMode, ACTION_MAP,
-        FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT, FULL_SYSTEM_LIVE_FINAL_CHUNK_EXTRA_TIMEOUT,
-        FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL,
+        ACTIVE_QUICK_DICTATION_UI_OPERATION, FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT,
+        FULL_SYSTEM_LIVE_FINAL_CHUNK_EXTRA_TIMEOUT, FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL,
     };
     use crate::app_context::AppContextSnapshot;
     use crate::managers::full_system_audio::{
         FullSystemSessionTranscriptionSamples, FullSystemTranscriptionSource,
         FullSystemTranscriptionSourceSamples,
     };
+    use crate::managers::history::HistoryManager;
     use crate::settings::get_default_settings;
+    use crate::transcription_coordinator::MeetingControlTestDriver;
     use once_cell::sync::Lazy;
-    use std::sync::Mutex;
+    use std::sync::{
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc, Mutex,
+    };
 
     static ASK_SELECTION_TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
     #[test]
     fn full_system_binding_is_registered_in_action_map() {
         assert!(ACTION_MAP.contains_key("transcribe_full_system_audio"));
+    }
+
+    #[test]
+    fn meetings_do_not_register_escape_but_dictation_does() {
+        assert!(!should_register_cancel_shortcut(
+            "transcribe_full_system_audio",
+            true
+        ));
+        assert!(should_register_cancel_shortcut("transcribe", true));
+        assert!(!should_register_cancel_shortcut("transcribe", false));
+    }
+
+    #[test]
+    fn cancelled_nested_dictation_suppresses_only_its_output() {
+        assert!(should_suppress_quick_dictation_output(true, 4, 5));
+        assert!(!should_suppress_quick_dictation_output(true, 5, 5));
+        assert!(!should_suppress_quick_dictation_output(false, 4, 5));
+    }
+
+    #[tokio::test]
+    async fn cancellation_during_blocked_post_processing_discards_dictation_output() {
+        let operation_id = u64::MAX - 1;
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let post_processing = async move {
+            let _ = started_tx.send(());
+            let _ = release_rx.await;
+            "processed"
+        };
+        let task = tokio::spawn(await_dictation_post_processing_if_active(
+            operation_id,
+            post_processing,
+        ));
+
+        let _ = started_rx.await;
+        cancel_dictation_operation(operation_id);
+        let _ = release_tx.send(());
+
+        assert_eq!(task.await.unwrap(), None);
+    }
+
+    #[tokio::test]
+    async fn cancellation_during_blocked_persistence_rolls_back_history_and_wav() {
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let history_exists = Arc::new(AtomicBool::new(false));
+        let wav_exists = Arc::new(AtomicBool::new(false));
+        let pasted = Arc::new(AtomicBool::new(false));
+        let completion_ui = Arc::new(AtomicBool::new(false));
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+
+        let task_cancelled = Arc::clone(&cancelled);
+        let save_history = Arc::clone(&history_exists);
+        let save_wav = Arc::clone(&wav_exists);
+        let rollback_history = Arc::clone(&history_exists);
+        let rollback_wav = Arc::clone(&wav_exists);
+        let task_pasted = Arc::clone(&pasted);
+        let task_completion_ui = Arc::clone(&completion_ui);
+        let task = tokio::spawn(async move {
+            let result = persist_with_cancellation_rollback(
+                || task_cancelled.load(Ordering::Acquire),
+                || async move {
+                    let _ = started_tx.send(());
+                    let _ = release_rx.await;
+                    save_history.store(true, Ordering::Release);
+                    save_wav.store(true, Ordering::Release);
+                    Ok::<i64, &'static str>(41)
+                },
+                move |_entry_id| {
+                    rollback_history.store(false, Ordering::Release);
+                    rollback_wav.store(false, Ordering::Release);
+                    Ok::<(), &'static str>(())
+                },
+            )
+            .await?;
+            if result.is_some() {
+                task_pasted.store(true, Ordering::Release);
+                task_completion_ui.store(true, Ordering::Release);
+            }
+            Ok::<Option<i64>, &'static str>(result)
+        });
+
+        let _ = started_rx.await;
+        cancelled.store(true, Ordering::Release);
+        let _ = release_tx.send(());
+
+        assert_eq!(task.await.unwrap().unwrap(), None);
+        assert!(!history_exists.load(Ordering::Acquire));
+        assert!(!wav_exists.load(Ordering::Acquire));
+        assert!(!pasted.load(Ordering::Acquire));
+        assert!(!completion_ui.load(Ordering::Acquire));
+    }
+
+    #[tokio::test]
+    async fn ask_selection_cancellation_racing_real_persistence_rolls_back_exact_artifacts() {
+        let root = tempfile::tempdir().expect("create history root");
+        let history_manager = Arc::new(
+            HistoryManager::new_for_test(root.path()).expect("create test history manager"),
+        );
+        let operation_id = u64::MAX - 20;
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let history_for_save = Arc::clone(&history_manager);
+        let history_for_rollback = Arc::clone(&history_manager);
+
+        let save_task = tokio::spawn(async move {
+            persist_with_cancellation_rollback(
+                || super::dictation_operation_was_cancelled(operation_id),
+                || async move {
+                    let _ = started_tx.send(());
+                    let _ = release_rx.await;
+                    history_for_save
+                        .save_transcription(
+                            vec![0.05; 1_600],
+                            "What does this selection mean?".to_string(),
+                            Some("It explains the selected text.".to_string()),
+                            Some("Ask Selection".to_string()),
+                            "dictation",
+                        )
+                        .await
+                },
+                move |entry_id| history_for_rollback.rollback_dictation_entry(entry_id),
+            )
+            .await
+        });
+
+        let _ = started_rx.await;
+        cancel_dictation_operation(operation_id);
+        let _ = release_tx.send(());
+
+        assert_eq!(save_task.await.unwrap().unwrap(), None);
+        assert!(history_manager
+            .get_history_entries()
+            .await
+            .expect("query cancelled Ask Selection history")
+            .is_empty());
+        assert_eq!(
+            std::fs::read_dir(root.path().join("recordings"))
+                .expect("read recordings")
+                .count(),
+            0
+        );
+
+        let successful_id = history_manager
+            .save_transcription(
+                vec![0.05; 1_600],
+                "What does this selection mean?".to_string(),
+                Some("It explains the selected text.".to_string()),
+                Some("Ask Selection".to_string()),
+                "dictation",
+            )
+            .await
+            .expect("save successful Ask Selection history");
+        let successful = history_manager
+            .get_entry_by_id(successful_id)
+            .await
+            .expect("query successful Ask Selection")
+            .expect("successful Ask Selection entry exists");
+        assert_eq!(successful.recording_source, "dictation");
+        assert_eq!(
+            successful.post_processed_text.as_deref(),
+            Some("It explains the selected text.")
+        );
+        assert_eq!(
+            successful.post_process_prompt.as_deref(),
+            Some("Ask Selection")
+        );
+        assert!(history_manager
+            .get_audio_file_path(&successful.file_name)
+            .exists());
+    }
+
+    #[tokio::test]
+    async fn production_control_commands_cancel_nested_dictation_and_save_later_meeting_chunk() {
+        let root = tempfile::tempdir().expect("create history root");
+        let history_manager = Arc::new(
+            HistoryManager::new_for_test(root.path()).expect("create test history manager"),
+        );
+        let runtime = FullSystemLiveRuntime::new();
+        append_live_transcription_segments(
+            &runtime,
+            &[LabeledTranscriptSegment {
+                source: FullSystemTranscriptionSource::Microphone,
+                text: "meeting before quick dictation".to_string(),
+            }],
+        );
+        runtime
+            .recorded_samples
+            .lock()
+            .unwrap()
+            .extend(vec![0.05; 1_600]);
+
+        let meeting_id = u64::MAX - 18;
+        let quick_id = u64::MAX - 17;
+        let mut coordinator = MeetingControlTestDriver::with_processing_quick(meeting_id, quick_id);
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let history_for_save = Arc::clone(&history_manager);
+        let history_for_rollback = Arc::clone(&history_manager);
+        let pasted = Arc::new(AtomicBool::new(false));
+        let pasted_after_save = Arc::clone(&pasted);
+        let quick_save = tokio::spawn(async move {
+            let persisted = persist_with_cancellation_rollback(
+                || super::dictation_operation_was_cancelled(quick_id),
+                || async move {
+                    let _ = started_tx.send(());
+                    let _ = release_rx.await;
+                    history_for_save
+                        .save_transcription(
+                            vec![0.05; 800],
+                            "cancel this nested dictation".to_string(),
+                            None,
+                            None,
+                            "dictation",
+                        )
+                        .await
+                },
+                move |entry_id| history_for_rollback.rollback_dictation_entry(entry_id),
+            )
+            .await?;
+            if persisted.is_some() {
+                pasted_after_save.store(true, Ordering::Release);
+            }
+            Ok::<Option<i64>, anyhow::Error>(persisted)
+        });
+
+        let _ = started_rx.await;
+        let cancelled_quick_id = coordinator.request_user_cancel();
+        assert_eq!(cancelled_quick_id, quick_id);
+        cancel_dictation_operation(cancelled_quick_id);
+        let _ = release_tx.send(());
+
+        assert_eq!(quick_save.await.unwrap().unwrap(), None);
+        assert!(!pasted.load(Ordering::Acquire));
+        assert!(history_manager
+            .get_history_entries()
+            .await
+            .expect("query cancelled quick history")
+            .is_empty());
+        coordinator.notify_stale_quick_finished(quick_id);
+
+        append_live_transcription_segments(
+            &runtime,
+            &[LabeledTranscriptSegment {
+                source: FullSystemTranscriptionSource::Microphone,
+                text: "meeting chunk captured after nested cancellation".to_string(),
+            }],
+        );
+        let stopped_meeting_id = coordinator.request_meeting_stop();
+        assert_eq!(stopped_meeting_id, meeting_id);
+        coordinator.assert_duplicate_stop_is_ignored();
+        let live_final = snapshot_full_system_live_runtime(&runtime).expect("snapshot meeting");
+        let meeting_history_id = persist_full_system_live_final(&history_manager, &live_final)
+            .await
+            .expect("persist stopped meeting");
+        coordinator.notify_meeting_finished(stopped_meeting_id);
+
+        let entries = history_manager
+            .get_history_entries()
+            .await
+            .expect("query final meeting history");
+        assert_eq!(entries.len(), 1);
+        let meeting_entry = &entries[0];
+        assert_eq!(meeting_entry.id, meeting_history_id);
+        assert_eq!(meeting_entry.recording_source, "full_system_audio");
+        assert!(meeting_entry
+            .transcription_text
+            .contains("meeting chunk captured after nested cancellation"));
+        assert!(!meeting_entry
+            .transcription_text
+            .contains("cancel this nested dictation"));
+        assert!(history_manager
+            .get_audio_file_path(&meeting_entry.file_name)
+            .exists());
+    }
+
+    #[tokio::test]
+    async fn fallback_completion_ownership_survives_until_blocked_save_finishes() {
+        struct DropProbe(Arc<AtomicUsize>);
+
+        impl Drop for DropProbe {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+
+        let drops = Arc::new(AtomicUsize::new(0));
+        let mut owner = CompletionOwner::new(DropProbe(Arc::clone(&drops)));
+        let transferred = owner.transfer();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            let _completion_owner = transferred;
+            let _ = started_tx.send(());
+            let _ = release_rx.await;
+        });
+
+        let _ = started_rx.await;
+        drop(owner);
+        assert_eq!(drops.load(Ordering::Relaxed), 0);
+
+        let _ = release_tx.send(());
+        task.await.unwrap();
+        assert_eq!(drops.load(Ordering::Relaxed), 1);
     }
 
     #[test]
@@ -4379,6 +5503,7 @@ mod tests {
     fn quick_dictation_restore_requires_matching_active_meeting_binding() {
         let context = TranscriptionCompletionContext::ReturnToMeeting {
             binding_id: "transcribe_full_system_audio".to_string(),
+            operation_id: 11,
         };
 
         assert!(should_restore_meeting_ui(
@@ -4387,6 +5512,24 @@ mod tests {
         ));
         assert!(!should_restore_meeting_ui(&context, Some("transcribe")));
         assert!(!should_restore_meeting_ui(&context, None));
+    }
+
+    #[test]
+    fn stale_quick_dictation_cannot_restore_over_newer_quick_ui() {
+        ACTIVE_QUICK_DICTATION_UI_OPERATION.store(12, Ordering::Release);
+        let stale = TranscriptionCompletionContext::ReturnToMeeting {
+            binding_id: "transcribe_full_system_audio".to_string(),
+            operation_id: 11,
+        };
+        let current = TranscriptionCompletionContext::ReturnToMeeting {
+            binding_id: "transcribe_full_system_audio".to_string(),
+            operation_id: 12,
+        };
+
+        assert!(!quick_dictation_ui_restore_is_current(&stale));
+        assert!(quick_dictation_ui_restore_is_current(&current));
+
+        ACTIVE_QUICK_DICTATION_UI_OPERATION.store(0, Ordering::Release);
     }
 
     #[test]
@@ -4399,12 +5542,14 @@ mod tests {
 
     #[test]
     fn system_only_meeting_quick_dictation_still_restores_meeting_context() {
-        let context =
-            completion_context_for_active_meeting(Some("transcribe_full_system_audio".to_string()));
+        let context = completion_context_for_active_meeting(
+            Some("transcribe_full_system_audio".to_string()),
+            11,
+        );
 
         assert!(matches!(
             context,
-            TranscriptionCompletionContext::ReturnToMeeting { ref binding_id }
+            TranscriptionCompletionContext::ReturnToMeeting { ref binding_id, .. }
                 if binding_id == "transcribe_full_system_audio"
         ));
     }
@@ -4485,6 +5630,7 @@ mod tests {
         let session_id = current_ask_selection_session_id();
         update_ask_selection_session(
             session_id,
+            None,
             Some("  selected text  ".to_string()),
             AppContextSnapshot::default(),
             vec![ask_selection_message("user", "summarize this", false)],
@@ -4625,6 +5771,7 @@ mod tests {
         let session_id = current_ask_selection_session_id();
         update_ask_selection_session(
             session_id,
+            None,
             Some("selected text".to_string()),
             AppContextSnapshot::default(),
             vec![ask_selection_message("assistant", "Previous answer", false)],
@@ -4638,6 +5785,231 @@ mod tests {
         assert!(current_ask_selection_messages().is_empty());
         assert!(!ask_selection_session_is_current(session_id));
         assert_ne!(current_ask_selection_session_id(), session_id);
+    }
+
+    #[test]
+    fn stale_ask_selection_cancel_cannot_hide_newer_session() {
+        let _guard = ASK_SELECTION_TEST_LOCK.lock().unwrap();
+        clear_ask_selection_session();
+        let old_session_id = current_ask_selection_session_id();
+        update_ask_selection_session(
+            old_session_id,
+            Some(41),
+            None,
+            AppContextSnapshot::default(),
+            vec![ask_selection_message("assistant", "Thinking...", true)],
+        );
+        clear_ask_selection_session();
+        let new_session_id = current_ask_selection_session_id();
+        update_ask_selection_session(
+            new_session_id,
+            Some(42),
+            None,
+            AppContextSnapshot::default(),
+            vec![ask_selection_message("assistant", "Thinking...", true)],
+        );
+
+        let stale_hide_called = AtomicBool::new(false);
+        assert!(!cancel_ask_selection_session_if_owned(41, || {
+            stale_hide_called.store(true, Ordering::Relaxed);
+        }));
+        assert!(!stale_hide_called.load(Ordering::Relaxed));
+        assert!(ask_selection_session_is_current(new_session_id));
+
+        let current_hide_called = AtomicBool::new(false);
+        assert!(cancel_ask_selection_session_if_owned(42, || {
+            current_hide_called.store(true, Ordering::Relaxed);
+        }));
+        assert!(current_hide_called.load(Ordering::Relaxed));
+        assert!(!ask_selection_session_is_current(new_session_id));
+    }
+
+    #[test]
+    fn cancelled_ask_selection_cannot_publish_thinking_panel() {
+        let _guard = ASK_SELECTION_TEST_LOCK.lock().unwrap();
+        clear_ask_selection_session();
+        let operation_id = u64::MAX - 61;
+        cancel_dictation_operation(operation_id);
+        let session_id = current_ask_selection_session_id();
+        let publish_called = AtomicBool::new(false);
+
+        assert!(!publish_new_ask_selection_session_if_active(
+            operation_id,
+            session_id,
+            Some(operation_id),
+            None,
+            AppContextSnapshot::default(),
+            vec![ask_selection_message("assistant", "Thinking...", true)],
+            || publish_called.store(true, Ordering::Relaxed),
+        ));
+        assert!(!publish_called.load(Ordering::Relaxed));
+        assert!(!ask_selection_session_is_current(session_id));
+    }
+
+    #[tokio::test]
+    async fn cancellation_after_ask_selection_save_rolls_back_row_and_wav() {
+        let _guard = ASK_SELECTION_TEST_LOCK.lock().unwrap();
+        clear_ask_selection_session();
+        let root = tempfile::tempdir().expect("create history root");
+        let history_manager =
+            HistoryManager::new_for_test(root.path()).expect("create test history manager");
+        let operation_id = u64::MAX - 62;
+        let session_id = current_ask_selection_session_id();
+        assert!(publish_new_ask_selection_session_if_active(
+            operation_id,
+            session_id,
+            Some(operation_id),
+            None,
+            AppContextSnapshot::default(),
+            vec![ask_selection_message("assistant", "Thinking...", true)],
+            || {},
+        ));
+        let entry_id = history_manager
+            .save_transcription(
+                vec![0.05; 1_600],
+                "Explain this.".to_string(),
+                Some("Explanation".to_string()),
+                Some("Ask Selection".to_string()),
+                "dictation",
+            )
+            .await
+            .expect("save Ask Selection before cancellation");
+
+        cancel_dictation_operation(operation_id);
+        assert!(cancel_ask_selection_session_if_owned(operation_id, || {}));
+        let result_publish_called = AtomicBool::new(false);
+        assert!(!complete_ask_selection_session_with_rollback(
+            &history_manager,
+            Some(entry_id),
+            operation_id,
+            session_id,
+            None,
+            AppContextSnapshot::default(),
+            vec![ask_selection_message("assistant", "Explanation", false)],
+            || result_publish_called.store(true, Ordering::Relaxed),
+        ));
+
+        assert!(!result_publish_called.load(Ordering::Relaxed));
+        assert!(history_manager
+            .get_history_entries()
+            .await
+            .expect("query rolled back Ask Selection history")
+            .is_empty());
+        assert_eq!(
+            std::fs::read_dir(root.path().join("recordings"))
+                .expect("read rolled back recordings")
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn operation_cancel_suppresses_nested_and_stopping_dictation_errors() {
+        for operation_id in [u64::MAX - 63, u64::MAX - 64] {
+            cancel_dictation_operation(operation_id);
+            let publish_called = AtomicBool::new(false);
+            assert!(!publish_transcription_error_if_operation_active(
+                operation_id,
+                || publish_called.store(true, Ordering::Relaxed),
+            ));
+            assert!(!publish_called.load(Ordering::Relaxed));
+        }
+    }
+
+    #[test]
+    fn dictation_completion_and_cancel_have_exactly_one_terminal_winner() {
+        let cancelled_operation = u64::MAX - 65;
+        assert!(cancel_dictation_operation(cancelled_operation));
+        let cancelled_completion = AtomicBool::new(false);
+        assert!(!complete_dictation_operation_if_active(
+            cancelled_operation,
+            || cancelled_completion.store(true, Ordering::Relaxed),
+        ));
+        assert!(!cancelled_completion.load(Ordering::Relaxed));
+        assert!(!cancel_dictation_operation(cancelled_operation));
+
+        let completed_operation = u64::MAX - 66;
+        let completion = AtomicBool::new(false);
+        assert!(complete_dictation_operation_if_active(
+            completed_operation,
+            || completion.store(true, Ordering::Relaxed),
+        ));
+        assert!(completion.load(Ordering::Relaxed));
+        assert!(!cancel_dictation_operation(completed_operation));
+        assert!(!complete_dictation_operation_if_active(
+            completed_operation,
+            || panic!("a terminal operation must not complete twice"),
+        ));
+    }
+
+    #[test]
+    fn cancelled_operation_remains_terminal_after_many_newer_operations() {
+        let cancelled_operation = u64::MAX - 10_000;
+        assert!(cancel_dictation_operation(cancelled_operation));
+
+        for offset in 1..=2_048 {
+            let operation_id = cancelled_operation + offset;
+            assert!(complete_dictation_operation_if_active(operation_id, || {}));
+        }
+
+        assert!(!complete_dictation_operation_if_active(
+            cancelled_operation,
+            || panic!("an old cancelled operation must never be revived"),
+        ));
+    }
+
+    #[tokio::test]
+    async fn cancellation_after_standard_dictation_save_rolls_back_before_paste_commit() {
+        let root = tempfile::tempdir().expect("create history root");
+        let history_manager =
+            HistoryManager::new_for_test(root.path()).expect("create test history manager");
+        let operation_id = u64::MAX - 67;
+        let entry_id = history_manager
+            .save_transcription(
+                vec![0.05; 1_600],
+                "do not paste this".to_string(),
+                None,
+                None,
+                "dictation",
+            )
+            .await
+            .expect("save dictation before cancellation");
+
+        assert!(cancel_dictation_operation(operation_id));
+        let pasted = AtomicBool::new(false);
+        assert!(!complete_persisted_dictation_if_active(
+            &history_manager,
+            Some(entry_id),
+            operation_id,
+            || pasted.store(true, Ordering::Relaxed),
+        ));
+
+        assert!(!pasted.load(Ordering::Relaxed));
+        assert!(history_manager
+            .get_history_entries()
+            .await
+            .expect("query rolled back standard dictation")
+            .is_empty());
+        assert_eq!(
+            std::fs::read_dir(root.path().join("recordings"))
+                .expect("read rolled back recordings")
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn cancelled_dictation_cannot_publish_no_input_feedback() {
+        let operation_id = u64::MAX - 68;
+        assert!(cancel_dictation_operation(operation_id));
+        let feedback_published = AtomicBool::new(false);
+
+        assert!(!complete_transcription_ui_if_active(
+            TranscriptionCompletionMode::Standard,
+            operation_id,
+            || feedback_published.store(true, Ordering::Relaxed),
+        ));
+        assert!(!feedback_published.load(Ordering::Relaxed));
     }
 
     #[test]

@@ -14,10 +14,15 @@ use crate::managers::model::{
 };
 use crate::managers::transcription::{stitch_transcription_text, TranscriptionManager};
 use crate::settings::{get_settings, write_settings, ModelUnloadTimeout, SavedFileTranscription};
+use once_cell::sync::Lazy;
 use serde::Serialize;
 use specta::Type;
+use std::future::Future;
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
 use tauri::{AppHandle, Emitter, State};
 
 const FILE_TRANSCRIPTION_SAMPLE_RATE: usize = 16_000;
@@ -26,6 +31,64 @@ const DIRECT_CHUNK_SAFETY_MARGIN_BYTES: usize = 1 * 1024 * 1024;
 const PROXY_CHUNK_SAFETY_MARGIN_BYTES: usize = 4 * 1024 * 1024;
 const FILE_TRANSCRIPTION_SOURCE: &str = "file_transcription";
 const MAX_FILE_TRANSCRIPTION_HISTORY: usize = 5;
+static ACTIVE_FILE_TRANSCRIPTION: Lazy<Mutex<Option<Arc<AtomicBool>>>> =
+    Lazy::new(|| Mutex::new(None));
+
+struct FileTranscriptionCancellation {
+    token: Arc<AtomicBool>,
+}
+
+impl FileTranscriptionCancellation {
+    fn begin() -> Result<Self, String> {
+        let mut active = ACTIVE_FILE_TRANSCRIPTION.lock().unwrap();
+        if active.is_some() {
+            return Err("Another file transcription is already running.".to_string());
+        }
+
+        let token = Arc::new(AtomicBool::new(false));
+        *active = Some(Arc::clone(&token));
+        Ok(Self { token })
+    }
+
+    fn ensure_active(&self) -> Result<(), String> {
+        if self.token.load(Ordering::Acquire) {
+            Err("Transcription cancelled".to_string())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Drop for FileTranscriptionCancellation {
+    fn drop(&mut self) {
+        let mut active = ACTIVE_FILE_TRANSCRIPTION.lock().unwrap();
+        if active
+            .as_ref()
+            .is_some_and(|token| Arc::ptr_eq(token, &self.token))
+        {
+            *active = None;
+        }
+    }
+}
+
+pub fn request_file_transcription_cancel() {
+    if let Some(token) = ACTIVE_FILE_TRANSCRIPTION.lock().unwrap().as_ref() {
+        token.store(true, Ordering::Release);
+    }
+}
+
+async fn await_file_post_processing_if_active<F, T>(
+    cancellation: &FileTranscriptionCancellation,
+    post_processing: F,
+) -> Result<T, String>
+where
+    F: Future<Output = T>,
+{
+    cancellation.ensure_active()?;
+    let output = post_processing.await;
+    cancellation.ensure_active()?;
+    Ok(output)
+}
 
 #[derive(Serialize, Type)]
 pub struct ModelLoadStatus {
@@ -401,7 +464,7 @@ pub fn clear_file_transcription_history(app: AppHandle) -> Result<(), String> {
 #[specta::specta]
 pub async fn transcribe_audio_file(
     app: AppHandle,
-    transcription_manager: State<'_, Arc<TranscriptionManager>>,
+    _transcription_manager: State<'_, Arc<TranscriptionManager>>,
     path: String,
 ) -> Result<FileTranscriptionResult, String> {
     let access = refresh_entitlement_state(&app)
@@ -411,21 +474,17 @@ pub async fn transcribe_audio_file(
         return Err(premium_feature_access_message().to_string());
     }
 
-    transcription_manager.clear_cancel_request();
+    let cancellation = FileTranscriptionCancellation::begin()?;
     emit_file_transcription_progress(&app, 5, "Importing audio file", None, None);
 
-    if transcription_manager.is_cancel_requested() {
-        return Err("Transcription cancelled".to_string());
-    }
+    cancellation.ensure_active()?;
 
     let import_path = path.clone();
     let imported = tokio::task::spawn_blocking(move || import_audio_file(&import_path))
         .await
         .map_err(|err| format!("Failed to import audio file: {}", err))?
         .map_err(|err| format!("Failed to import audio file: {}", err))?;
-    if transcription_manager.is_cancel_requested() {
-        return Err("Transcription cancelled".to_string());
-    }
+    cancellation.ensure_active()?;
 
     let file_name = Path::new(&path)
         .file_name()
@@ -459,9 +518,7 @@ pub async fn transcribe_audio_file(
     let mut stitched_transcription = String::new();
 
     for (index, chunk) in chunks.iter().enumerate() {
-        if transcription_manager.is_cancel_requested() {
-            return Err("Transcription cancelled".to_string());
-        }
+        cancellation.ensure_active()?;
 
         let current_chunk = (index + 1) as u32;
         let progress_percentage = 15u8.saturating_add(
@@ -489,9 +546,7 @@ pub async fn transcribe_audio_file(
         )
         .await?;
 
-        if transcription_manager.is_cancel_requested() {
-            return Err("Transcription cancelled".to_string());
-        }
+        cancellation.ensure_active()?;
 
         stitch_transcription_text(&mut stitched_transcription, &chunk_text);
     }
@@ -504,14 +559,18 @@ pub async fn transcribe_audio_file(
         None,
         Some(total_chunks),
     );
-    let finalized = finalize_transcription_output(
-        &app,
-        &settings,
-        &stitched_transcription,
-        settings.post_process_enabled,
-        None,
+    let finalized = await_file_post_processing_if_active(
+        &cancellation,
+        finalize_transcription_output(
+            &app,
+            &settings,
+            &stitched_transcription,
+            settings.post_process_enabled,
+            None,
+        ),
     )
-    .await;
+    .await?;
+    cancellation.ensure_active()?;
     emit_file_transcription_progress(
         &app,
         100,
@@ -526,6 +585,7 @@ pub async fn transcribe_audio_file(
         post_processed_text: finalized.post_processed_text.clone(),
     };
 
+    cancellation.ensure_active()?;
     persist_file_transcription_history(
         &app,
         Some(SavedFileTranscription {
@@ -542,6 +602,47 @@ pub async fn transcribe_audio_file(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    static FILE_CANCEL_TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
+
+    #[tokio::test]
+    async fn cancellation_during_file_post_processing_prevents_persistence_result() {
+        let _lock = FILE_CANCEL_TEST_LOCK.lock().unwrap();
+        let cancellation = FileTranscriptionCancellation::begin().unwrap();
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+
+        let post_processing = async move {
+            let _ = started_tx.send(());
+            let _ = release_rx.await;
+            "finalized"
+        };
+        let task = tokio::spawn(async move {
+            await_file_post_processing_if_active(&cancellation, post_processing).await
+        });
+
+        let _ = started_rx.await;
+        request_file_transcription_cancel();
+        let _ = release_tx.send(());
+
+        assert_eq!(
+            task.await.unwrap(),
+            Err("Transcription cancelled".to_string())
+        );
+    }
+
+    #[test]
+    fn concurrent_file_transcription_cannot_replace_active_cancel_token() {
+        let _lock = FILE_CANCEL_TEST_LOCK.lock().unwrap();
+        let cancellation = FileTranscriptionCancellation::begin().unwrap();
+
+        request_file_transcription_cancel();
+        assert!(FileTranscriptionCancellation::begin().is_err());
+        assert_eq!(
+            cancellation.ensure_active(),
+            Err("Transcription cancelled".to_string())
+        );
+    }
 
     #[test]
     fn direct_chunk_plan_stays_under_direct_limit() {

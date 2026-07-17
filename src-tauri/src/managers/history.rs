@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use chrono::{DateTime, Local, Utc};
 use log::{debug, error, info};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -6,7 +6,7 @@ use rusqlite_migration::{Migrations, M};
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Emitter, Manager};
 use uuid::Uuid;
 
@@ -60,7 +60,7 @@ pub struct HistoryEntry {
 }
 
 pub struct HistoryManager {
-    app_handle: AppHandle,
+    app_handle: Option<AppHandle>,
     recordings_dir: PathBuf,
     db_path: PathBuf,
 }
@@ -79,7 +79,7 @@ impl HistoryManager {
         }
 
         let manager = Self {
-            app_handle: app_handle.clone(),
+            app_handle: Some(app_handle.clone()),
             recordings_dir,
             db_path,
         };
@@ -87,6 +87,21 @@ impl HistoryManager {
         // Initialize database and run migrations synchronously
         manager.init_database()?;
 
+        Ok(manager)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn new_for_test(root: &Path) -> Result<Self> {
+        let recordings_dir = root.join("recordings");
+        let db_path = root.join("history.db");
+        fs::create_dir_all(&recordings_dir)?;
+
+        let manager = Self {
+            app_handle: None,
+            recordings_dir,
+            db_path,
+        };
+        manager.init_database()?;
         Ok(manager)
     }
 
@@ -205,10 +220,10 @@ impl HistoryManager {
 
         // Save WAV file
         let file_path = self.recordings_dir.join(&file_name);
-        save_wav_file(file_path, &audio_samples).await?;
+        save_wav_file(file_path.clone(), &audio_samples).await?;
 
         // Save to database
-        let entry_id = self.save_to_database(
+        let entry_id = match self.save_to_database(
             file_name,
             timestamp,
             title,
@@ -216,14 +231,33 @@ impl HistoryManager {
             post_processed_text,
             post_process_prompt,
             recording_source.to_string(),
-        )?;
+        ) {
+            Ok(entry_id) => entry_id,
+            Err(save_error) => {
+                if let Err(remove_error) = fs::remove_file(&file_path) {
+                    error!(
+                        "Failed to remove orphaned recording {:?} after history insert failed: {}",
+                        file_path, remove_error
+                    );
+                }
+                return Err(save_error);
+            }
+        };
 
-        // Clean up old entries
-        self.cleanup_old_entries()?;
+        // The row and WAV are committed at this point. Retention cleanup is
+        // maintenance and must not hide the rollback identity from callers.
+        if let Err(cleanup_error) = self.cleanup_old_entries() {
+            error!(
+                "Failed to clean up old history entries after saving entry {}: {}",
+                entry_id, cleanup_error
+            );
+        }
 
         // Emit history updated event
-        if let Err(e) = self.app_handle.emit("history-updated", ()) {
-            error!("Failed to emit history-updated event: {}", e);
+        if let Some(app_handle) = &self.app_handle {
+            if let Err(e) = app_handle.emit("history-updated", ()) {
+                error!("Failed to emit history-updated event: {}", e);
+            }
         }
 
         Ok(entry_id)
@@ -250,7 +284,10 @@ impl HistoryManager {
     }
 
     pub fn cleanup_old_entries(&self) -> Result<()> {
-        let retention_period = crate::settings::get_recording_retention_period(&self.app_handle);
+        let Some(app_handle) = &self.app_handle else {
+            return Ok(());
+        };
+        let retention_period = crate::settings::get_recording_retention_period(app_handle);
 
         match retention_period {
             crate::settings::RecordingRetentionPeriod::Never => {
@@ -259,7 +296,7 @@ impl HistoryManager {
             }
             crate::settings::RecordingRetentionPeriod::PreserveLimit => {
                 // Use the old count-based logic with history_limit
-                let limit = crate::settings::get_history_limit(&self.app_handle);
+                let limit = crate::settings::get_history_limit(app_handle);
                 return self.cleanup_by_count(limit);
             }
             _ => {
@@ -468,8 +505,10 @@ impl HistoryManager {
         debug!("Toggled saved status for entry {}: {}", id, new_saved);
 
         // Emit history updated event
-        if let Err(e) = self.app_handle.emit("history-updated", ()) {
-            error!("Failed to emit history-updated event: {}", e);
+        if let Some(app_handle) = &self.app_handle {
+            if let Err(e) = app_handle.emit("history-updated", ()) {
+                error!("Failed to emit history-updated event: {}", e);
+            }
         }
 
         Ok(())
@@ -506,31 +545,27 @@ impl HistoryManager {
     }
 
     pub async fn delete_entry(&self, id: i64) -> Result<()> {
+        self.delete_entry_and_audio(id, false)
+    }
+
+    /// Roll back a dictation save that lost a race with operation cancellation.
+    /// Meeting entries are deliberately rejected so a dictation cancellation can
+    /// never remove durable meeting history.
+    pub fn rollback_dictation_entry(&self, id: i64) -> Result<()> {
+        self.delete_entry_and_audio(id, true)
+    }
+
+    fn delete_entry_and_audio(&self, id: i64, require_dictation: bool) -> Result<()> {
         let conn = self.get_connection()?;
-
-        // Get the entry to find the file name
-        if let Some(entry) = self.get_entry_by_id(id).await? {
-            // Delete the audio file first
-            let file_path = self.get_audio_file_path(&entry.file_name);
-            if file_path.exists() {
-                if let Err(e) = fs::remove_file(&file_path) {
-                    error!("Failed to delete audio file {}: {}", entry.file_name, e);
-                    // Continue with database deletion even if file deletion fails
-                }
-            }
-        }
-
-        // Delete from database
-        conn.execute(
-            "DELETE FROM transcription_history WHERE id = ?1",
-            params![id],
-        )?;
+        delete_entry_and_audio_with_connection(&conn, &self.recordings_dir, id, require_dictation)?;
 
         debug!("Deleted history entry with id: {}", id);
 
         // Emit history updated event
-        if let Err(e) = self.app_handle.emit("history-updated", ()) {
-            error!("Failed to emit history-updated event: {}", e);
+        if let Some(app_handle) = &self.app_handle {
+            if let Err(e) = app_handle.emit("history-updated", ()) {
+                error!("Failed to emit history-updated event: {}", e);
+            }
         }
 
         Ok(())
@@ -545,6 +580,40 @@ impl HistoryManager {
             format!("Recording {}", timestamp)
         }
     }
+}
+
+fn delete_entry_and_audio_with_connection(
+    conn: &Connection,
+    recordings_dir: &Path,
+    id: i64,
+    require_dictation: bool,
+) -> Result<()> {
+    let entry: Option<(String, String)> = conn
+        .query_row(
+            "SELECT file_name, recording_source FROM transcription_history WHERE id = ?1",
+            params![id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+
+    if let Some((file_name, recording_source)) = entry {
+        if require_dictation && recording_source == "full_system_audio" {
+            bail!("refusing to roll back meeting history entry {id}");
+        }
+
+        let file_path = recordings_dir.join(&file_name);
+        if file_path.exists() {
+            if let Err(e) = fs::remove_file(&file_path) {
+                error!("Failed to delete audio file {}: {}", file_name, e);
+            }
+        }
+    }
+
+    conn.execute(
+        "DELETE FROM transcription_history WHERE id = ?1",
+        params![id],
+    )?;
+    Ok(())
 }
 
 fn recording_file_name(timestamp: i64) -> String {
@@ -638,6 +707,84 @@ mod tests {
         assert_ne!(first, second);
         assert!(first.starts_with("uttr-123-"));
         assert!(first.ends_with(".wav"));
+    }
+
+    #[tokio::test]
+    async fn database_insert_failure_removes_newly_written_audio() {
+        let root = tempfile::tempdir().expect("create history root");
+        let manager = HistoryManager::new_for_test(root.path()).expect("create history manager");
+        manager
+            .get_connection()
+            .expect("open history database")
+            .execute("DROP TABLE transcription_history", [])
+            .expect("remove history table");
+
+        assert!(manager
+            .save_transcription(
+                vec![0.05; 1_600],
+                "must not leave an orphaned wav".to_string(),
+                None,
+                None,
+                "dictation",
+            )
+            .await
+            .is_err());
+        assert_eq!(
+            fs::read_dir(root.path().join("recordings"))
+                .expect("read recordings directory")
+                .count(),
+            0
+        );
+    }
+
+    #[test]
+    fn dictation_rollback_deletes_exact_row_and_audio_but_refuses_meeting_history() {
+        let conn = setup_conn();
+        let recordings = tempfile::TempDir::new().expect("create recordings dir");
+
+        insert_entry(&conn, 100, "cancelled dictation", None);
+        let dictation_id = conn.last_insert_rowid();
+        let dictation_audio = recordings.path().join("uttr-100.wav");
+        fs::write(&dictation_audio, b"wav").expect("write dictation audio");
+
+        delete_entry_and_audio_with_connection(&conn, recordings.path(), dictation_id, true)
+            .expect("roll back dictation");
+
+        let dictation_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM transcription_history WHERE id = ?1",
+                params![dictation_id],
+                |row| row.get(0),
+            )
+            .expect("count dictation row");
+        assert_eq!(dictation_count, 0);
+        assert!(!dictation_audio.exists());
+
+        insert_entry_with_source(
+            &conn,
+            200,
+            "meeting transcript",
+            Some("meeting summary"),
+            false,
+            "full_system_audio",
+        );
+        let meeting_id = conn.last_insert_rowid();
+        let meeting_audio = recordings.path().join("uttr-200.wav");
+        fs::write(&meeting_audio, b"wav").expect("write meeting audio");
+
+        assert!(
+            delete_entry_and_audio_with_connection(&conn, recordings.path(), meeting_id, true,)
+                .is_err()
+        );
+        let meeting_count: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM transcription_history WHERE id = ?1",
+                params![meeting_id],
+                |row| row.get(0),
+            )
+            .expect("count meeting row");
+        assert_eq!(meeting_count, 1);
+        assert!(meeting_audio.exists());
     }
 
     #[test]
