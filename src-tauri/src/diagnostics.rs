@@ -1,5 +1,5 @@
 use crate::access::backend_base_url;
-use crate::groq_client::DirectTranscriptionError;
+use crate::groq_client::{DirectTranscriptionError, DirectTranscriptionProvider};
 use crate::managers::model::{
     GROQ_MODEL_WHISPER_LARGE_V3, GROQ_MODEL_WHISPER_LARGE_V3_TURBO, OPENAI_MODEL_GPT_4O_TRANSCRIBE,
 };
@@ -162,6 +162,18 @@ pub(crate) fn report_byok_transcription_failure(
     true
 }
 
+pub(crate) fn report_missing_byok_api_key(
+    settings: &AppSettings,
+    provider: DirectTranscriptionProvider,
+    model_id: &str,
+    sample_count: usize,
+    message: &str,
+) -> DirectTranscriptionError {
+    let error = DirectTranscriptionError::missing_api_key(provider, message);
+    report_byok_transcription_failure(settings, model_id, sample_count, Duration::ZERO, &error);
+    error
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,6 +244,29 @@ mod tests {
         assert_eq!(payload.http_status, None);
         assert_eq!(payload.latency_bucket, "1_3s");
         assert_eq!(payload.audio_duration_bucket, "5_15s");
+    }
+
+    #[test]
+    fn missing_api_key_payload_is_classified_without_exposing_the_message() {
+        let sentinel = "missing sk-secret from /Users/alice/private/settings.json";
+        let error =
+            DirectTranscriptionError::missing_api_key(DirectTranscriptionProvider::Groq, sentinel);
+
+        let serialized = serde_json::to_string(
+            &build_byok_failure_payload(
+                &settings(),
+                GROQ_MODEL_WHISPER_LARGE_V3,
+                SAMPLE_RATE,
+                Duration::ZERO,
+                &error,
+            )
+            .expect("payload"),
+        )
+        .expect("serialize");
+
+        assert!(serialized.contains("missing_api_key"));
+        assert!(!serialized.contains("sk-secret"));
+        assert!(!serialized.contains("/Users/alice"));
     }
 
     #[test]

@@ -408,11 +408,9 @@ struct TogglePostProcessingAction;
 const GROQ_PROVIDER_ID: &str = "groq";
 const GROQ_MODEL_PREFERENCES: &[&str] = &[
     "openai/gpt-oss-20b",
-    "qwen/qwen3-32b",
-    "groq/compound-mini",
-    "meta-llama/llama-4-scout-17b-16e-instruct",
-    "llama-3.3-70b-versatile",
     "openai/gpt-oss-120b",
+    "qwen/qwen3.6-27b",
+    "groq/compound-mini",
     "groq/compound",
     "moonshotai/kimi-k2-instruct-0905",
     "moonshotai/kimi-k2-instruct",
@@ -1306,6 +1304,7 @@ pub fn cancel_meeting_quick_dictation_recording(
     }
     clear_active_quick_dictation_ui_operation(operation_id);
     restore_meeting_after_quick_dictation_cancel(app);
+    release_dictation_operation(operation_id);
 }
 
 pub fn cancel_dictation_operation(operation_id: OperationId) -> bool {
@@ -1319,6 +1318,13 @@ pub fn cancel_dictation_operation(operation_id: OperationId) -> bool {
         DictationOperationTerminalState::Cancelled,
     );
     true
+}
+
+pub(crate) fn release_dictation_operation(operation_id: OperationId) {
+    DICTATION_OPERATION_TERMINAL_STATES
+        .lock()
+        .unwrap()
+        .remove(&operation_id);
 }
 
 fn insert_dictation_operation_terminal_state(
@@ -1348,6 +1354,7 @@ pub fn cancel_standalone_dictation_recording_operation(
     shortcut::unregister_cancel_shortcut(app);
     utils::hide_recording_overlay(app);
     change_tray_icon(app, TrayIconState::Idle);
+    release_dictation_operation(operation_id);
     debug!("Cancelled dictation recording '{binding_id}' during meeting finalization");
 }
 
@@ -3445,24 +3452,19 @@ fn append_full_system_stop_tail_samples(
 ) {
     let mut appended_source = false;
     for source_samples in tail_samples.sources {
+        if source_samples.samples.is_empty() {
+            continue;
+        }
+
         match source_samples.source {
             FullSystemTranscriptionSource::Microphone => {
-                if final_microphone_samples.is_empty() && !source_samples.samples.is_empty() {
-                    final_microphone_samples.extend_from_slice(&source_samples.samples);
-                    appended_source = true;
-                } else if !source_samples.samples.is_empty() {
-                    debug!("Ignoring full-system stop microphone payload because live session already collected microphone audio");
-                }
+                final_microphone_samples.extend_from_slice(&source_samples.samples);
             }
             FullSystemTranscriptionSource::SystemAudio => {
-                if final_system_audio_samples.is_empty() && !source_samples.samples.is_empty() {
-                    final_system_audio_samples.extend_from_slice(&source_samples.samples);
-                    appended_source = true;
-                } else if !source_samples.samples.is_empty() {
-                    debug!("Ignoring full-system stop system-audio payload because live session already collected system audio");
-                }
+                final_system_audio_samples.extend_from_slice(&source_samples.samples);
             }
         }
+        appended_source = true;
     }
 
     if appended_source {
@@ -3470,14 +3472,7 @@ fn append_full_system_stop_tail_samples(
     }
 
     if let Some(mixed) = tail_samples.mixed.filter(|samples| !samples.is_empty()) {
-        if final_samples.is_empty()
-            && final_microphone_samples.is_empty()
-            && final_system_audio_samples.is_empty()
-        {
-            final_samples.extend_from_slice(&mixed);
-        } else {
-            debug!("Ignoring full-system stop mixed payload because live session already collected audio");
-        }
+        final_samples.extend_from_slice(&mixed);
     }
 }
 
@@ -5087,11 +5082,12 @@ mod tests {
         normalize_live_summary_output, parse_meeting_summary_state, persist_full_system_live_final,
         persist_with_cancellation_rollback, publish_new_ask_selection_session_if_active,
         publish_transcription_error_if_operation_active, quick_dictation_ui_restore_is_current,
-        render_meeting_summary_markdown, resolved_post_process_system_prompt,
-        select_preferred_groq_model, should_pause_live_summaries,
-        should_refresh_microphone_stream_after_suspected_no_input, should_register_cancel_shortcut,
-        should_restore_meeting_ui, should_suppress_quick_dictation_output,
-        should_update_live_summary, snapshot_full_system_live_runtime, toggle_post_process_enabled,
+        release_dictation_operation, render_meeting_summary_markdown,
+        resolved_post_process_system_prompt, select_preferred_groq_model,
+        should_pause_live_summaries, should_refresh_microphone_stream_after_suspected_no_input,
+        should_register_cancel_shortcut, should_restore_meeting_ui,
+        should_suppress_quick_dictation_output, should_update_live_summary,
+        snapshot_full_system_live_runtime, toggle_post_process_enabled,
         transcription_timeout_for_samples, transcription_watchdog_delay,
         update_ask_selection_session, usable_post_processed_text, CompletionOwner,
         FullSystemLiveRuntime, LabeledTranscriptSegment, MeetingSummaryState, SummaryPoint,
@@ -5456,11 +5452,11 @@ mod tests {
 
         assert_eq!(mixed, vec![0.25]);
         assert_eq!(microphone, vec![0.1, 0.2]);
-        assert_eq!(system_audio, vec![0.5]);
+        assert_eq!(system_audio, vec![0.5, 0.9, 0.8]);
     }
 
     #[test]
-    fn full_system_stop_payload_does_not_duplicate_existing_source_buffers() {
+    fn full_system_stop_payload_appends_source_tail_to_existing_buffers() {
         let mut mixed = vec![0.25];
         let mut microphone = vec![0.01, 0.02];
         let mut system_audio = vec![0.5];
@@ -5485,8 +5481,8 @@ mod tests {
         );
 
         assert_eq!(mixed, vec![0.25]);
-        assert_eq!(microphone, vec![0.01, 0.02]);
-        assert_eq!(system_audio, vec![0.5]);
+        assert_eq!(microphone, vec![0.01, 0.02, 0.1, 0.2]);
+        assert_eq!(system_audio, vec![0.5, 0.9, 0.8]);
     }
 
     #[test]
@@ -5943,19 +5939,32 @@ mod tests {
     }
 
     #[test]
-    fn cancelled_operation_remains_terminal_after_many_newer_operations() {
+    fn terminal_operations_remain_terminal_until_released() {
         let cancelled_operation = u64::MAX - 10_000;
         assert!(cancel_dictation_operation(cancelled_operation));
 
+        let mut completed_operations = Vec::new();
         for offset in 1..=2_048 {
             let operation_id = cancelled_operation + offset;
             assert!(complete_dictation_operation_if_active(operation_id, || {}));
+            completed_operations.push(operation_id);
         }
 
         assert!(!complete_dictation_operation_if_active(
             cancelled_operation,
             || panic!("an old cancelled operation must never be revived"),
         ));
+
+        for operation_id in completed_operations {
+            release_dictation_operation(operation_id);
+        }
+        release_dictation_operation(cancelled_operation);
+
+        assert!(complete_dictation_operation_if_active(
+            cancelled_operation,
+            || {},
+        ));
+        release_dictation_operation(cancelled_operation);
     }
 
     #[tokio::test]
@@ -6285,12 +6294,12 @@ mod tests {
             "meta-llama/llama-prompt-guard-2-86m".to_string(),
             "canopylabs/orpheus-v1-english".to_string(),
             "openai/gpt-oss-safeguard-20b".to_string(),
-            "qwen/qwen3-32b".to_string(),
+            "qwen/qwen3.6-27b".to_string(),
         ];
 
         assert_eq!(
             select_preferred_groq_model(&available_models).as_deref(),
-            Some("qwen/qwen3-32b")
+            Some("qwen/qwen3.6-27b")
         );
     }
 

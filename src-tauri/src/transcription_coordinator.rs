@@ -121,6 +121,7 @@ enum ControlEffect {
     CancelStoppingDictationRecording(Operation),
     CancelStoppingDictationProcessing(Operation),
     ClearQuickUi(OperationId),
+    ReleaseDictationOperation(OperationId),
     IgnoreCancel,
 }
 
@@ -715,6 +716,7 @@ fn apply_control_command(stage: &mut Stage, command: &Command) -> Vec<ControlEff
             {
                 effects.push(ControlEffect::DispatchMeetingStop(meeting));
             }
+            effects.push(ControlEffect::ReleaseDictationOperation(*operation_id));
             effects
         }
         Command::Input { .. } => Vec::new(),
@@ -968,6 +970,9 @@ fn execute_control_effects(app: &AppHandle, effects: Vec<ControlEffect>) {
             }
             ControlEffect::ClearQuickUi(operation_id) => {
                 crate::actions::clear_active_quick_dictation_ui_operation(operation_id);
+            }
+            ControlEffect::ReleaseDictationOperation(operation_id) => {
+                crate::actions::release_dictation_operation(operation_id);
             }
             ControlEffect::IgnoreCancel => {
                 shortcut::unregister_cancel_shortcut(app);
@@ -1335,7 +1340,13 @@ impl MeetingControlTestDriver {
                 operation_id: quick_id,
             },
         );
-        assert_eq!(effects, vec![ControlEffect::ClearQuickUi(quick_id)]);
+        assert_eq!(
+            effects,
+            vec![
+                ControlEffect::ClearQuickUi(quick_id),
+                ControlEffect::ReleaseDictationOperation(quick_id),
+            ]
+        );
         assert_eq!(self.stage, stage_before);
     }
 
@@ -1351,7 +1362,13 @@ impl MeetingControlTestDriver {
                 operation_id: meeting_id,
             },
         );
-        assert_eq!(effects, vec![ControlEffect::ClearQuickUi(meeting_id)]);
+        assert_eq!(
+            effects,
+            vec![
+                ControlEffect::ClearQuickUi(meeting_id),
+                ControlEffect::ReleaseDictationOperation(meeting_id),
+            ]
+        );
         assert_eq!(self.stage, Stage::Idle);
     }
 }
@@ -1862,7 +1879,10 @@ mod tests {
                     operation_id: dictation.id,
                 },
             ),
-            vec![ControlEffect::ClearQuickUi(dictation.id)]
+            vec![
+                ControlEffect::ClearQuickUi(dictation.id),
+                ControlEffect::ReleaseDictationOperation(dictation.id),
+            ]
         );
         assert_eq!(stage, meeting_only);
 
@@ -1874,7 +1894,10 @@ mod tests {
                     operation_id: meeting.id,
                 },
             ),
-            vec![ControlEffect::ClearQuickUi(meeting.id)]
+            vec![
+                ControlEffect::ClearQuickUi(meeting.id),
+                ControlEffect::ReleaseDictationOperation(meeting.id),
+            ]
         );
         assert_eq!(stage, Stage::Idle);
     }

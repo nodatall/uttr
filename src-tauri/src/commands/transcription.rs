@@ -5,9 +5,10 @@ use crate::access::{
 use crate::actions::finalize_transcription_output;
 use crate::audio_toolkit::import_audio_file;
 use crate::byok_secrets::{load_groq_api_key, load_openai_api_key};
-use crate::diagnostics::report_byok_transcription_failure;
+use crate::diagnostics::{report_byok_transcription_failure, report_missing_byok_api_key};
 use crate::groq_client::{
-    self, ProxyTranscriptionMetadata, DIRECT_GROQ_UPLOAD_LIMIT_BYTES, PROXY_GROQ_UPLOAD_LIMIT_BYTES,
+    self, DirectTranscriptionProvider, ProxyTranscriptionMetadata, DIRECT_GROQ_UPLOAD_LIMIT_BYTES,
+    PROXY_GROQ_UPLOAD_LIMIT_BYTES,
 };
 use crate::managers::model::{
     groq_api_model_name, is_cloud_model_id, openai_api_model_name, GROQ_MODEL_WHISPER_LARGE_V3,
@@ -334,9 +335,20 @@ async fn transcribe_chunk_with_groq(
         FileTranscriptionRoute::DirectGroq => {
             let groq_model = groq_api_model_name(model_id)
                 .ok_or_else(|| format!("Unknown Groq model id: {}", model_id))?;
-            let api_key = nonempty_groq_api_key(app).ok_or_else(|| {
-                "Groq API key is required for direct file transcription.".to_string()
-            })?;
+            let api_key = match nonempty_groq_api_key(app) {
+                Some(api_key) => api_key,
+                None => {
+                    let settings = get_settings(app);
+                    let error = report_missing_byok_api_key(
+                        &settings,
+                        DirectTranscriptionProvider::Groq,
+                        model_id,
+                        samples.len(),
+                        "Groq API key is required for direct file transcription.",
+                    );
+                    return Err(error.to_string());
+                }
+            };
             let request_started = std::time::Instant::now();
             match groq_client::transcribe_samples_direct(
                 &api_key,
@@ -364,9 +376,20 @@ async fn transcribe_chunk_with_groq(
         FileTranscriptionRoute::DirectOpenAi => {
             let openai_model = openai_api_model_name(model_id)
                 .ok_or_else(|| format!("Unknown OpenAI model id: {}", model_id))?;
-            let api_key = nonempty_openai_api_key(app).ok_or_else(|| {
-                "OpenAI API key is required for direct file transcription.".to_string()
-            })?;
+            let api_key = match nonempty_openai_api_key(app) {
+                Some(api_key) => api_key,
+                None => {
+                    let settings = get_settings(app);
+                    let error = report_missing_byok_api_key(
+                        &settings,
+                        DirectTranscriptionProvider::OpenAi,
+                        model_id,
+                        samples.len(),
+                        "OpenAI API key is required for direct file transcription.",
+                    );
+                    return Err(error.to_string());
+                }
+            };
             let request_started = std::time::Instant::now();
             match groq_client::transcribe_samples_direct_openai(
                 &api_key,

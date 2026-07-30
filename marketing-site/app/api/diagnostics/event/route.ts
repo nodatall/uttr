@@ -37,13 +37,41 @@ function requestBodyIsClearlyTooLarge(request: Request) {
 }
 
 async function readJsonBody(request: Request) {
-  const raw = await request.text();
-  if (new TextEncoder().encode(raw).byteLength > DIAGNOSTIC_BODY_LIMIT_BYTES) {
+  const reader = request.body?.getReader();
+  if (!reader) {
     return {
       ok: false as const,
-      status: 413,
-      error: "Diagnostic event is too large.",
+      status: 400,
+      error: "Invalid diagnostic event.",
     };
+  }
+
+  const decoder = new TextDecoder();
+  let raw = "";
+  let bytesRead = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+
+      bytesRead += value.byteLength;
+      if (bytesRead > DIAGNOSTIC_BODY_LIMIT_BYTES) {
+        await reader.cancel().catch(() => undefined);
+        return {
+          ok: false as const,
+          status: 413,
+          error: "Diagnostic event is too large.",
+        };
+      }
+
+      raw += decoder.decode(value, { stream: true });
+    }
+    raw += decoder.decode();
+  } finally {
+    reader.releaseLock();
   }
 
   try {

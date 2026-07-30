@@ -197,6 +197,24 @@ describe("diagnostics event route", () => {
     );
     expect(oversized.status).toBe(413);
 
+    const encoder = new TextEncoder();
+    const lengthlessOversized = await POST(
+      new Request("https://uttr.test/api/diagnostics/event", {
+        method: "POST",
+        body: new ReadableStream({
+          start(controller) {
+            controller.enqueue(encoder.encode('{"install_id":"'));
+            controller.enqueue(encoder.encode("x".repeat(16 * 1024)));
+            controller.enqueue(encoder.encode('"}'));
+            controller.close();
+          },
+        }),
+        headers: { "content-type": "application/json" },
+        duplex: "half",
+      } as RequestInit & { duplex: "half" }),
+    );
+    expect(lengthlessOversized.status).toBe(413);
+
     const invalidEnum = await POST(
       jsonRequest({ ...payload, provider: "server_proxy" }),
     );

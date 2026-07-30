@@ -741,6 +741,13 @@ fn default_model_for_provider(provider_id: &str) -> String {
     String::new()
 }
 
+fn is_retired_groq_post_process_model(model_id: &str) -> bool {
+    matches!(
+        model_id,
+        "qwen/qwen3-32b" | "meta-llama/llama-4-scout-17b-16e-instruct"
+    )
+}
+
 fn default_post_process_models() -> HashMap<String, String> {
     let mut map = HashMap::new();
     for provider in default_post_process_providers() {
@@ -782,7 +789,10 @@ fn ensure_post_process_defaults(settings: &mut AppSettings) -> bool {
         let default_model = default_model_for_provider(&provider.id);
         match settings.post_process_models.get_mut(&provider.id) {
             Some(existing) => {
-                if existing.is_empty() && !default_model.is_empty() {
+                if provider.id == "groq" && is_retired_groq_post_process_model(existing) {
+                    *existing = default_model.clone();
+                    changed = true;
+                } else if existing.is_empty() && !default_model.is_empty() {
                     *existing = default_model.clone();
                     changed = true;
                 }
@@ -1465,6 +1475,34 @@ mod tests {
             Some("openai/gpt-oss-20b")
         );
         assert_eq!(settings.post_process_timeout_secs, 20);
+    }
+
+    #[test]
+    fn migrates_retired_groq_post_process_model() {
+        let mut settings = get_default_settings();
+        settings
+            .post_process_models
+            .insert("groq".to_string(), "qwen/qwen3-32b".to_string());
+
+        assert!(ensure_post_process_defaults(&mut settings));
+        assert_eq!(
+            settings.post_process_models.get("groq").map(String::as_str),
+            Some("openai/gpt-oss-20b")
+        );
+    }
+
+    #[test]
+    fn preserves_custom_groq_post_process_model() {
+        let mut settings = get_default_settings();
+        settings
+            .post_process_models
+            .insert("groq".to_string(), "custom/model".to_string());
+
+        assert!(!ensure_post_process_defaults(&mut settings));
+        assert_eq!(
+            settings.post_process_models.get("groq").map(String::as_str),
+            Some("custom/model")
+        );
     }
 
     #[test]

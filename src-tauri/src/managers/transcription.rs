@@ -2,8 +2,8 @@ use crate::access::{bootstrap_install_state, refresh_entitlement_state, request_
 use crate::audio_toolkit::{
     apply_custom_words, filter_transcription_output, trim_proxy_upload_audio,
 };
-use crate::diagnostics::report_byok_transcription_failure;
-use crate::groq_client;
+use crate::diagnostics::{report_byok_transcription_failure, report_missing_byok_api_key};
+use crate::groq_client::{self, DirectTranscriptionProvider};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::model::{
     groq_api_model_name, is_cloud_model_id, openai_api_model_name, EngineType, ModelInfo,
@@ -1041,9 +1041,19 @@ impl TranscriptionManager {
     ) -> Result<String> {
         let groq_model = groq_api_model_name(model_id)
             .ok_or_else(|| anyhow::anyhow!("Unknown Groq model id: {}", model_id))?;
-        let api_key = self
-            .resolve_byok_groq_api_key()
-            .ok_or_else(|| anyhow::anyhow!("Groq API key is required for hidden BYOK mode."))?;
+        let api_key = match self.resolve_byok_groq_api_key() {
+            Some(api_key) => api_key,
+            None => {
+                let error = report_missing_byok_api_key(
+                    settings,
+                    DirectTranscriptionProvider::Groq,
+                    model_id,
+                    audio.len(),
+                    "Groq API key is required for hidden BYOK mode.",
+                );
+                return Err(anyhow::anyhow!(error.to_string()));
+            }
+        };
 
         let request_started = Instant::now();
         match groq_client::transcribe_samples_direct(
@@ -1129,9 +1139,19 @@ impl TranscriptionManager {
     ) -> Result<String> {
         let openai_model = openai_api_model_name(model_id)
             .ok_or_else(|| anyhow::anyhow!("Unknown OpenAI model id: {}", model_id))?;
-        let api_key = self
-            .resolve_byok_openai_api_key()
-            .ok_or_else(|| anyhow::anyhow!("OpenAI API key is required for this model."))?;
+        let api_key = match self.resolve_byok_openai_api_key() {
+            Some(api_key) => api_key,
+            None => {
+                let error = report_missing_byok_api_key(
+                    settings,
+                    DirectTranscriptionProvider::OpenAi,
+                    model_id,
+                    audio.len(),
+                    "OpenAI API key is required for this model.",
+                );
+                return Err(anyhow::anyhow!(error.to_string()));
+            }
+        };
 
         let request_started = Instant::now();
         match groq_client::transcribe_samples_direct_openai(

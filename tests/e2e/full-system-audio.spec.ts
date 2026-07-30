@@ -1,5 +1,16 @@
 import { expect, test, type Page } from "@playwright/test";
 
+type SessionWindowState = {
+  stage: string;
+  title: string;
+  subtitle: string;
+  progressLabel: string;
+  progressValue: number;
+  summaryText: string | null;
+  rawTranscriptText: string | null;
+  historyEntryId: number | null;
+};
+
 type FullSystemAudioTestState = {
   settings: {
     record_full_system_audio: boolean;
@@ -77,26 +88,9 @@ type FullSystemAudioTestState = {
     post_process_prompt: string | null;
     recording_source: string;
   }>;
-  startFullSystemAudioSessionEvent?: {
-    stage: string;
-    title: string;
-    subtitle: string;
-    progressLabel: string;
-    progressValue: number;
-    summaryText: string | null;
-    rawTranscriptText: string | null;
-    historyEntryId: number | null;
-  };
-  sessionWindowState?: {
-    stage: string;
-    title: string;
-    subtitle: string;
-    progressLabel: string;
-    progressValue: number;
-    summaryText: string | null;
-    rawTranscriptText: string | null;
-    historyEntryId: number | null;
-  };
+  startFullSystemAudioSessionEvent?: SessionWindowState;
+  stopFullSystemAudioSessionEvent?: SessionWindowState;
+  sessionWindowState?: SessionWindowState;
   fullSystemAudio: {
     supportStatus: {
       supported: boolean;
@@ -412,6 +406,14 @@ async function installBrowserMocks(
             return null;
           case "stop_full_system_audio_session":
             e2eState.stoppedFullSystemAudioSessions += 1;
+            if (e2eState.stopFullSystemAudioSessionEvent) {
+              e2eState.sessionWindowState =
+                e2eState.stopFullSystemAudioSessionEvent;
+              dispatchTauriEvent(
+                "session-window-state",
+                e2eState.stopFullSystemAudioSessionEvent,
+              );
+            }
             return null;
           case "change_binding":
             return { success: true, error: null };
@@ -649,6 +651,103 @@ test.describe("full-system audio settings", () => {
     await expect(
       returnedWorkspace.getByText(/^0:0[1-9]$/).first(),
     ).toBeVisible();
+  });
+
+  test("starts each new meeting timer at zero", async ({ page }) => {
+    const state = createTestState(false, true);
+    state.sessionWindowState = {
+      stage: "active",
+      title: "Live session",
+      subtitle: "Capturing system audio and microphone audio.",
+      progressLabel: "Recording",
+      progressValue: 0,
+      summaryText: null,
+      rawTranscriptText: null,
+      historyEntryId: null,
+    };
+    state.stopFullSystemAudioSessionEvent = {
+      stage: "complete",
+      title: "Session saved",
+      subtitle: "The transcript is ready under Meetings.",
+      progressLabel: "Complete",
+      progressValue: 1,
+      summaryText: "First session summary.",
+      rawTranscriptText: "First session transcript.",
+      historyEntryId: 42,
+    };
+    state.startFullSystemAudioSessionEvent = {
+      stage: "active",
+      title: "Live session",
+      subtitle: "Capturing system audio and microphone audio.",
+      progressLabel: "Recording",
+      progressValue: 0,
+      summaryText: null,
+      rawTranscriptText: null,
+      historyEntryId: null,
+    };
+    await installBrowserMocks(page, state);
+
+    await page.goto("/");
+
+    const workspace = page.getByTestId("home-workspace");
+    await expect(workspace.getByText(/^0:0[1-9]$/).first()).toBeVisible({
+      timeout: 10000,
+    });
+    await workspace.getByRole("button", { name: /^Stop$/i }).click();
+    await expect(
+      workspace.getByRole("button", { name: /^Start$/i }),
+    ).toBeVisible();
+
+    await page.evaluate(() => {
+      const root = document.querySelector('[data-testid="home-workspace"]');
+      const startButton = Array.from(
+        root?.querySelectorAll("button") ?? [],
+      ).find((button) => button.textContent?.trim() === "Start");
+      const observedLabels: string[] = [];
+      const recordTimer = () => {
+        const label = Array.from(root?.querySelectorAll("span") ?? [])
+          .map((element) => element.textContent?.trim() ?? "")
+          .find((text) => /^\d+:\d{2}$/.test(text));
+        if (label && observedLabels.at(-1) !== label) {
+          observedLabels.push(label);
+        }
+      };
+      const observer = new MutationObserver(recordTimer);
+      if (root) {
+        observer.observe(root, {
+          childList: true,
+          characterData: true,
+          subtree: true,
+        });
+      }
+      startButton?.addEventListener(
+        "click",
+        () => {
+          observedLabels.length = 0;
+        },
+        { capture: true, once: true },
+      );
+      (
+        window as unknown as {
+          __UTTR_TIMER_LABELS__: string[];
+        }
+      ).__UTTR_TIMER_LABELS__ = observedLabels;
+    });
+
+    await workspace.getByRole("button", { name: /^Start$/i }).click();
+    await expect(workspace.getByText(/^0:00$/).first()).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __UTTR_TIMER_LABELS__: string[];
+              }
+            ).__UTTR_TIMER_LABELS__[0],
+        ),
+      )
+      .toBe("0:00");
   });
 
   test("shows saved session summary separately from the raw transcript", async ({

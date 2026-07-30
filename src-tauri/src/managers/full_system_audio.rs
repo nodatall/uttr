@@ -11,7 +11,7 @@ use crate::managers::transcription::sanitize_transcription_audio;
 use anyhow::anyhow;
 use log::{debug, warn};
 use std::sync::{
-    atomic::{AtomicU64, Ordering},
+    atomic::{AtomicU64, AtomicUsize, Ordering},
     Arc, Mutex,
 };
 
@@ -208,6 +208,7 @@ where
     bridge: Arc<B>,
     state: Arc<Mutex<FullSystemSessionState>>,
     next_session_id: Arc<AtomicU64>,
+    microphone_drained_samples: Arc<AtomicUsize>,
 }
 
 impl FullSystemAudioSessionManager<AudioRecordingManager, BridgeBackend> {
@@ -227,6 +228,7 @@ where
             bridge,
             state: Arc::new(Mutex::new(FullSystemSessionState::Idle)),
             next_session_id: Arc::new(AtomicU64::new(0)),
+            microphone_drained_samples: Arc::new(AtomicUsize::new(0)),
         }
     }
 
@@ -251,6 +253,7 @@ where
         binding_id: &str,
         config: FullSystemAudioCaptureConfig,
     ) -> FullSystemSessionStartResult {
+        self.microphone_drained_samples.store(0, Ordering::Relaxed);
         {
             let mut state = self.state.lock().unwrap();
             match &*state {
@@ -414,8 +417,10 @@ where
         };
 
         let microphone_samples = if snapshot.microphone.is_active() {
+            let drained_samples = self.microphone_drained_samples.swap(0, Ordering::Relaxed);
             self.microphone
                 .stop_microphone_capture(&snapshot.binding_id)
+                .map(|samples| microphone_stop_delta(samples, drained_samples))
         } else {
             None
         };
@@ -463,7 +468,11 @@ where
         let microphone_samples = if snapshot.microphone.is_active() {
             self.microphone
                 .drain_microphone_capture(&snapshot.binding_id)
-                .map(|delta| delta.samples)
+                .map(|delta| {
+                    self.microphone_drained_samples
+                        .store(delta.total_speech_samples, Ordering::Relaxed);
+                    delta.samples
+                })
         } else {
             None
         };
@@ -518,6 +527,7 @@ where
 
         self.bridge.cancel_capture();
         self.microphone.cancel_microphone_capture();
+        self.microphone_drained_samples.store(0, Ordering::Relaxed);
         self.cleanup_last_session();
 
         let mut state = self.state.lock().unwrap();
@@ -536,6 +546,17 @@ where
     pub fn cleanup_last_session(&self) {
         self.bridge.cleanup_last_session();
     }
+}
+
+fn microphone_stop_delta(mut samples: Vec<f32>, drained_samples: usize) -> Vec<f32> {
+    if drained_samples <= samples.len() {
+        return samples.split_off(drained_samples);
+    }
+
+    warn!(
+        "Microphone stop payload was shorter than its drain watermark; retaining the full payload"
+    );
+    samples
 }
 
 fn build_session_transcription_samples(
@@ -918,6 +939,52 @@ mod tests {
                 FullSystemTranscriptionSourceSamples {
                     source: FullSystemTranscriptionSource::SystemAudio,
                     samples: vec![0.4, 0.4],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn stop_session_returns_only_audio_after_the_last_drain() {
+        let microphone = Arc::new(FakeMicrophone {
+            drain_result: Mutex::new(Some(drain_result(&[0.2, -0.2]))),
+            stop_result: Mutex::new(Some(vec![0.2, -0.2, 0.75])),
+            ..FakeMicrophone::default()
+        });
+        let bridge = Arc::new(FakeBridge {
+            supported: true,
+            start_result: Mutex::new(Some(supported_start_result())),
+            drain_result: Mutex::new(Some(stop_result_with_pcm(&[0.4, 0.4], 16000, 1))),
+            stop_result: Mutex::new(Some(stop_result_with_pcm(&[0.9], 16000, 1))),
+            ..FakeBridge::default()
+        });
+        let manager =
+            FullSystemAudioSessionManager::with_backend(microphone.clone(), bridge.clone());
+
+        assert!(
+            manager
+                .start_session(
+                    "transcribe_full_system_audio",
+                    FullSystemAudioCaptureConfig::default(),
+                )
+                .started
+        );
+        assert!(manager
+            .drain_session_delta_sources("transcribe_full_system_audio")
+            .is_some());
+
+        let stop_result = manager.stop_session();
+
+        assert_eq!(
+            stop_result.transcription_source_samples,
+            vec![
+                FullSystemTranscriptionSourceSamples {
+                    source: FullSystemTranscriptionSource::Microphone,
+                    samples: vec![0.75],
+                },
+                FullSystemTranscriptionSourceSamples {
+                    source: FullSystemTranscriptionSource::SystemAudio,
+                    samples: vec![0.9],
                 },
             ]
         );
