@@ -253,11 +253,11 @@ where
         binding_id: &str,
         config: FullSystemAudioCaptureConfig,
     ) -> FullSystemSessionStartResult {
-        self.microphone_drained_samples.store(0, Ordering::Relaxed);
         {
             let mut state = self.state.lock().unwrap();
             match &*state {
                 FullSystemSessionState::Idle => {
+                    self.microphone_drained_samples.store(0, Ordering::Relaxed);
                     let session_id = self.next_session_id.fetch_add(1, Ordering::Relaxed) + 1;
                     *state = FullSystemSessionState::Starting { session_id };
                 }
@@ -972,6 +972,60 @@ mod tests {
         assert!(manager
             .drain_session_delta_sources("transcribe_full_system_audio")
             .is_some());
+
+        let stop_result = manager.stop_session();
+
+        assert_eq!(
+            stop_result.transcription_source_samples,
+            vec![
+                FullSystemTranscriptionSourceSamples {
+                    source: FullSystemTranscriptionSource::Microphone,
+                    samples: vec![0.75],
+                },
+                FullSystemTranscriptionSourceSamples {
+                    source: FullSystemTranscriptionSource::SystemAudio,
+                    samples: vec![0.9],
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn repeated_start_preserves_microphone_drain_watermark() {
+        let microphone = Arc::new(FakeMicrophone {
+            drain_result: Mutex::new(Some(drain_result(&[0.2, -0.2]))),
+            stop_result: Mutex::new(Some(vec![0.2, -0.2, 0.75])),
+            ..FakeMicrophone::default()
+        });
+        let bridge = Arc::new(FakeBridge {
+            supported: true,
+            start_result: Mutex::new(Some(supported_start_result())),
+            drain_result: Mutex::new(Some(stop_result_with_pcm(&[0.4, 0.4], 16000, 1))),
+            stop_result: Mutex::new(Some(stop_result_with_pcm(&[0.9], 16000, 1))),
+            ..FakeBridge::default()
+        });
+        let manager =
+            FullSystemAudioSessionManager::with_backend(microphone.clone(), bridge.clone());
+
+        assert!(
+            manager
+                .start_session(
+                    "transcribe_full_system_audio",
+                    FullSystemAudioCaptureConfig::default(),
+                )
+                .started
+        );
+        assert!(manager
+            .drain_session_delta_sources("transcribe_full_system_audio")
+            .is_some());
+        assert!(
+            !manager
+                .start_session(
+                    "transcribe_full_system_audio",
+                    FullSystemAudioCaptureConfig::default(),
+                )
+                .new_session_started
+        );
 
         let stop_result = manager.stop_session();
 

@@ -27,6 +27,6 @@ This document records the repo boundaries that are easy to blur during desktop f
 ## Dependency Direction
 
 - Backend actions may call overlay/window helpers, history, transcription, summary providers, and clipboard utilities.
-- Frontend panel code should not know about recording internals. It receives state payloads from Rust and sends only local UI actions such as close, copy, and current-session follow-up messages. Selected text for Ask Selection follow-ups stays backend-side.
+- Frontend panel code should not know about recording internals. It receives state payloads from Rust and sends only local UI actions such as close, copy, and current-session follow-up messages. Ask Selection may include selected text in its local webview state for display and current-session follow-ups; diagnostics and logs must remain content-free.
 - Normal dictation and meeting recording should not depend on Ask Selection UI code.
 - Meeting raw transcript labeling is source-based. `Me` maps to local microphone audio, and `Them` maps to captured system audio; individual remote-speaker diarization is a separate feature.
