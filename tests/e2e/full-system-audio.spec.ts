@@ -833,6 +833,33 @@ test.describe("full-system audio settings", () => {
     ).toHaveCount(0);
   });
 
+  test("shows a final transcription timeout before a structured saved summary", async ({
+    page,
+  }) => {
+    const state = createTestState(false, true);
+    state.sessionWindowState = {
+      stage: "complete",
+      title: "Session saved",
+      subtitle: "The transcript is ready under Meetings.",
+      progressLabel: "Complete",
+      progressValue: 1,
+      summaryText:
+        "Audio was saved, but final transcription timed out. The transcript may be incomplete.\n\n## Current gist\nEarlier meeting gist.\n\n## Key points\n- Earlier captured point.",
+      rawTranscriptText: "Me: earlier captured transcript",
+      historyEntryId: 44,
+    };
+    await installBrowserMocks(page, state);
+
+    await page.goto("/");
+
+    const workspace = page.getByTestId("home-workspace");
+    await expect(
+      workspace.getByTestId("session-summary-preamble"),
+    ).toContainText("final transcription timed out");
+    await expect(workspace.getByText("Earlier meeting gist.")).toBeVisible();
+    await expect(workspace.getByText("Earlier captured point.")).toBeVisible();
+  });
+
   test("opens a saved meeting from Meetings history with its summary", async ({
     page,
   }) => {

@@ -20,7 +20,7 @@ create table if not exists public.diagnostic_events (
   constraint diagnostic_events_user_hash_check
     check (user_id_hash is null or char_length(user_id_hash) = 64),
   constraint diagnostic_events_app_version_check
-    check (char_length(app_version) between 1 and 64),
+    check (app_version ~ '^(0|[1-9][0-9]{0,5})[.](0|[1-9][0-9]{0,5})[.](0|[1-9][0-9]{0,5})$'),
   constraint diagnostic_events_os_name_check
     check (os_name in ('macos', 'windows', 'linux', 'unknown')),
   constraint diagnostic_events_os_version_bucket_check

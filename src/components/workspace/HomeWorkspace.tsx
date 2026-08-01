@@ -104,6 +104,11 @@ interface SummarySection {
   lines: string[];
 }
 
+interface ParsedSummary {
+  preamble: string;
+  sections: SummarySection[];
+}
+
 const SUMMARY_SECTION_TITLES: Record<string, SummarySection> = {
   "current gist": {
     key: "current_gist",
@@ -117,13 +122,16 @@ const SUMMARY_SECTION_TITLES: Record<string, SummarySection> = {
   },
 };
 
-const parseSummarySections = (summary: string): SummarySection[] => {
+const parseSummarySections = (summary: string): ParsedSummary => {
   const sections: SummarySection[] = [];
+  const preambleLines: string[] = [];
   let current: SummarySection | null = null;
+  let sawHeading = false;
 
   for (const rawLine of summary.split(/\r?\n/)) {
     const heading = rawLine.match(/^#{1,3}\s+(.+?)\s*$/);
     if (heading) {
+      sawHeading = true;
       const template = SUMMARY_SECTION_TITLES[heading[1].trim().toLowerCase()];
       if (template) {
         current = {
@@ -140,6 +148,8 @@ const parseSummarySections = (summary: string): SummarySection[] => {
 
     if (current) {
       current.lines.push(rawLine);
+    } else if (!sawHeading) {
+      preambleLines.push(rawLine);
     }
   }
 
@@ -157,7 +167,10 @@ const parseSummarySections = (summary: string): SummarySection[] => {
     });
   }
 
-  return uniqueSections;
+  return {
+    preamble: preambleLines.join("\n").trim(),
+    sections: uniqueSections,
+  };
 };
 
 const cleanBulletText = (line: string): string => line.replace(/^\s*-\s*/, "");
@@ -708,6 +721,7 @@ interface SessionSummaryPanelProps {
   isStarting: boolean;
   hasRawTranscript: boolean;
   sessionBody: string;
+  summaryPreamble: string;
   summarySections: SummarySection[];
   onOpenRawTranscript: () => void;
 }
@@ -718,6 +732,7 @@ const SessionSummaryPanel: React.FC<SessionSummaryPanelProps> = ({
   isStarting,
   hasRawTranscript,
   sessionBody,
+  summaryPreamble,
   summarySections,
   onOpenRawTranscript,
 }) => {
@@ -762,6 +777,15 @@ const SessionSummaryPanel: React.FC<SessionSummaryPanelProps> = ({
             </div>
             {summarySections.length > 0 ? (
               <div className="space-y-7">
+                {summaryPreamble && (
+                  <p
+                    role="alert"
+                    data-testid="session-summary-preamble"
+                    className="whitespace-pre-wrap rounded-2xl border border-amber-400/20 bg-amber-300/8 px-3.5 py-3 text-sm leading-6 text-amber-100/88"
+                  >
+                    {summaryPreamble}
+                  </p>
+                )}
                 {summarySections.map((section) => (
                   <SummarySectionView key={section.key} section={section} />
                 ))}
@@ -981,7 +1005,7 @@ export const HomeWorkspace: React.FC<HomeWorkspaceProps> = ({
           defaultValue:
             "Uttr is recording system audio and microphone audio. The summary appears here as the session is processed.",
         }));
-  const summarySections = useMemo(
+  const parsedSummary = useMemo(
     () => parseSummarySections(sessionBody),
     [sessionBody],
   );
@@ -1109,7 +1133,8 @@ export const HomeWorkspace: React.FC<HomeWorkspaceProps> = ({
           isStarting={isStarting}
           hasRawTranscript={hasRawTranscript}
           sessionBody={sessionBody}
-          summarySections={summarySections}
+          summaryPreamble={parsedSummary.preamble}
+          summarySections={parsedSummary.sections}
           onOpenRawTranscript={() => setIsTranscriptModalOpen(true)}
         />
       )}

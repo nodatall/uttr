@@ -4,11 +4,13 @@ import { dbQuery, type DbExecutor } from "@/lib/db";
 import { readDiagnosticsConfig } from "@/lib/env";
 
 export const DIAGNOSTIC_BODY_LIMIT_BYTES = 16 * 1024;
+const APP_VERSION_PATTERN =
+  /^(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})\.(0|[1-9]\d{0,5})$/;
 
 export const diagnosticEventSchema = z
   .object({
     install_id: z.string().trim().min(8).max(128),
-    app_version: z.string().trim().min(1).max(64),
+    app_version: z.string().trim().regex(APP_VERSION_PATTERN),
     os_name: z.enum(["macos", "windows", "linux", "unknown"]),
     os_version_bucket: z.enum([
       "unknown",

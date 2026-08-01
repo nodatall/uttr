@@ -55,6 +55,22 @@ describe("diagnostics helpers", () => {
     ).toThrow();
   });
 
+  test("accepts only bounded numeric release versions", () => {
+    expect(
+      parseDiagnosticBody({ ...payload, app_version: " 12.345.67890 " })
+        .app_version,
+    ).toBe("12.345.67890");
+    expect(() =>
+      parseDiagnosticBody({ ...payload, app_version: "0.1.16-secret" }),
+    ).toThrow();
+    expect(() =>
+      parseDiagnosticBody({
+        ...payload,
+        app_version: "secret transcript fragment",
+      }),
+    ).toThrow();
+  });
+
   test("inserts only sanitized scalar columns", async () => {
     let insertedValues: readonly unknown[] = [];
     await insertDiagnosticEvent(

@@ -3520,6 +3520,8 @@ where
     Fut: Future<Output = Result<String, anyhow::Error>>,
 {
     let mut segments = Vec::new();
+    let mut successful_source_transcriptions = 0usize;
+    let mut source_errors = Vec::new();
 
     if chunk.source_samples.is_empty() {
         let sample_count = chunk.mixed_samples.len();
@@ -3564,29 +3566,52 @@ where
             source_label,
             sample_count
         );
-        let text = transcribe(
+        let transcription_result = transcribe(
             source_samples.samples,
             Some(source_id),
             transcription_timeout_for_samples(sample_count),
         )
-        .await?;
-        log::info!(
-            "[latency] full-system source transcription complete chunk={} source={} sample_count={} elapsed_ms={}",
-            chunk_index,
-            source_label,
-            sample_count,
-            started.elapsed().as_millis()
-        );
+        .await;
+        match transcription_result {
+            Ok(text) => {
+                successful_source_transcriptions += 1;
+                log::info!(
+                    "[latency] full-system source transcription complete chunk={} source={} sample_count={} elapsed_ms={}",
+                    chunk_index,
+                    source_label,
+                    sample_count,
+                    started.elapsed().as_millis()
+                );
 
-        if !text.trim().is_empty() {
-            segments.push(LabeledTranscriptSegment {
-                source: source_samples.source,
-                text,
-            });
+                if !text.trim().is_empty() {
+                    segments.push(LabeledTranscriptSegment {
+                        source: source_samples.source,
+                        text,
+                    });
+                }
+            }
+            Err(error) => {
+                warn!(
+                    "Live full-system source transcription failed chunk={} source={} elapsed_ms={}: {}",
+                    chunk_index,
+                    source_label,
+                    started.elapsed().as_millis(),
+                    error
+                );
+                source_errors.push(format!("{}: {}", source_label, error));
+            }
         }
     }
 
-    Ok(segments)
+    if successful_source_transcriptions == 0 && !source_errors.is_empty() {
+        Err(anyhow::anyhow!(
+            "Live source transcription failed for chunk {}: {}",
+            chunk_index,
+            source_errors.join("; ")
+        ))
+    } else {
+        Ok(segments)
+    }
 }
 
 fn full_system_live_session_status(binding_id: &str) -> FullSystemLiveSessionStatus {
@@ -5526,6 +5551,23 @@ mod tests {
         )))
     }
 
+    fn two_source_live_chunk() -> FullSystemLiveChunk {
+        let samples = vec![0.1; 16_000];
+        FullSystemLiveChunk {
+            mixed_samples: samples.clone(),
+            source_samples: vec![
+                FullSystemTranscriptionSourceSamples {
+                    source: FullSystemTranscriptionSource::Microphone,
+                    samples: samples.clone(),
+                },
+                FullSystemTranscriptionSourceSamples {
+                    source: FullSystemTranscriptionSource::SystemAudio,
+                    samples,
+                },
+            ],
+        }
+    }
+
     #[test]
     fn full_system_binding_is_registered_in_action_map() {
         assert!(ACTION_MAP.contains_key("transcribe_full_system_audio"));
@@ -6655,6 +6697,110 @@ mod tests {
             "Me: local speaker\n\nThem: remote speaker"
         );
         assert_eq!(runtime.chunk_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn live_microphone_failure_preserves_system_transcript() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let calls_for_transcriber = Arc::clone(&calls);
+        let segments = transcribe_full_system_live_chunk_sources_with(
+            two_source_live_chunk(),
+            1,
+            move |_, source, _| {
+                let calls = Arc::clone(&calls_for_transcriber);
+                async move {
+                    let source = source.expect("labeled source id");
+                    calls.lock().unwrap().push(source);
+                    match source {
+                        "full_system_audio_microphone" => {
+                            Err(anyhow::anyhow!("microphone provider failed"))
+                        }
+                        "full_system_audio_system" => Ok("remote speaker".to_string()),
+                        unexpected => panic!("unexpected transcription source: {unexpected}"),
+                    }
+                }
+            },
+        )
+        .await
+        .expect("system transcript survives microphone failure");
+
+        assert_eq!(
+            calls.lock().unwrap().as_slice(),
+            &["full_system_audio_microphone", "full_system_audio_system"]
+        );
+        assert_eq!(
+            segments,
+            vec![LabeledTranscriptSegment {
+                source: FullSystemTranscriptionSource::SystemAudio,
+                text: "remote speaker".to_string(),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn live_system_failure_preserves_microphone_transcript() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let calls_for_transcriber = Arc::clone(&calls);
+        let segments = transcribe_full_system_live_chunk_sources_with(
+            two_source_live_chunk(),
+            1,
+            move |_, source, _| {
+                let calls = Arc::clone(&calls_for_transcriber);
+                async move {
+                    let source = source.expect("labeled source id");
+                    calls.lock().unwrap().push(source);
+                    match source {
+                        "full_system_audio_microphone" => Ok("local speaker".to_string()),
+                        "full_system_audio_system" => {
+                            Err(anyhow::anyhow!("system provider failed"))
+                        }
+                        unexpected => panic!("unexpected transcription source: {unexpected}"),
+                    }
+                }
+            },
+        )
+        .await
+        .expect("microphone transcript survives system failure");
+
+        assert_eq!(
+            calls.lock().unwrap().as_slice(),
+            &["full_system_audio_microphone", "full_system_audio_system"]
+        );
+        assert_eq!(
+            segments,
+            vec![LabeledTranscriptSegment {
+                source: FullSystemTranscriptionSource::Microphone,
+                text: "local speaker".to_string(),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn live_all_source_failures_return_error_after_both_attempts() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let calls_for_transcriber = Arc::clone(&calls);
+        let error = transcribe_full_system_live_chunk_sources_with(
+            two_source_live_chunk(),
+            1,
+            move |_, source, _| {
+                let calls = Arc::clone(&calls_for_transcriber);
+                async move {
+                    let source = source.expect("labeled source id");
+                    calls.lock().unwrap().push(source);
+                    Err::<String, anyhow::Error>(anyhow::anyhow!("{source} failed"))
+                }
+            },
+        )
+        .await
+        .expect_err("all source failures must fail the chunk");
+
+        assert_eq!(
+            calls.lock().unwrap().as_slice(),
+            &["full_system_audio_microphone", "full_system_audio_system"]
+        );
+        assert!(error
+            .to_string()
+            .contains("Live source transcription failed for chunk 1"));
     }
 
     #[tokio::test]

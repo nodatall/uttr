@@ -102,25 +102,32 @@ function respondToRateLimit(
   );
 }
 
-async function resolveTokenIdentity(request: Request): Promise<
-  | {
-      ok: true;
-      anonymousTrialId: string | null;
-      userId: string | null;
-      installId: string | null;
-    }
-  | { ok: false }
-> {
+async function resolveTokenIdentity(request: Request): Promise<{
+  verified: boolean;
+  anonymousTrialId: string | null;
+  userId: string | null;
+  installId: string | null;
+}> {
   const installToken = readInstallTokenFromRequest(request);
   if (!installToken) {
-    return { ok: true, anonymousTrialId: null, userId: null, installId: null };
+    return {
+      verified: false,
+      anonymousTrialId: null,
+      userId: null,
+      installId: null,
+    };
   }
 
   let tokenPayload: InstallTokenPayload;
   try {
     tokenPayload = verifyInstallToken(installToken);
   } catch {
-    return { ok: false };
+    return {
+      verified: false,
+      anonymousTrialId: null,
+      userId: null,
+      installId: null,
+    };
   }
 
   const trial = await fetchAnonymousTrialById(tokenPayload.anonymous_trial_id);
@@ -129,11 +136,16 @@ async function resolveTokenIdentity(request: Request): Promise<
     trial.install_id !== tokenPayload.install_id ||
     trial.device_fingerprint_hash !== tokenPayload.device_fingerprint_hash
   ) {
-    return { ok: false };
+    return {
+      verified: false,
+      anonymousTrialId: null,
+      userId: null,
+      installId: null,
+    };
   }
 
   return {
-    ok: true,
+    verified: true,
     anonymousTrialId: trial.id,
     userId: trial.user_id,
     installId: trial.install_id,
@@ -181,28 +193,24 @@ export async function POST(request: Request) {
 
     const payload = parseDiagnosticBody(parsedBody.body);
     const tokenIdentity = await resolveTokenIdentity(request);
-    if (!tokenIdentity.ok) {
-      return NextResponse.json(
-        { error: "Invalid install token." },
-        { status: 401 },
-      );
-    }
 
     const installId = tokenIdentity.installId ?? payload.install_id;
     const installIdHash = hashDiagnosticIdentity(
       installId,
       config.identitySecret,
     );
-    const principalRateLimit = await checkRateLimit({
-      key: `diagnostics-event-install:${installIdHash}`,
-      limit: DIAGNOSTIC_INSTALL_RATE_LIMIT,
-      windowMs: DIAGNOSTIC_RATE_LIMIT_WINDOW_MS,
-    });
-    if (!principalRateLimit.allowed) {
-      return respondToRateLimit(
-        principalRateLimit,
-        "Too many diagnostic events for this install.",
-      );
+    if (tokenIdentity.verified) {
+      const principalRateLimit = await checkRateLimit({
+        key: `diagnostics-event-install:${installIdHash}`,
+        limit: DIAGNOSTIC_INSTALL_RATE_LIMIT,
+        windowMs: DIAGNOSTIC_RATE_LIMIT_WINDOW_MS,
+      });
+      if (!principalRateLimit.allowed) {
+        return respondToRateLimit(
+          principalRateLimit,
+          "Too many diagnostic events for this install.",
+        );
+      }
     }
 
     await insertDiagnosticEvent({

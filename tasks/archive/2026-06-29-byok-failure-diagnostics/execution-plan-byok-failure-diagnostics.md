@@ -34,8 +34,8 @@ Decision notes:
 
 - [x] Add a Postgres `diagnostic_events` migration with seven-day-query-friendly indexes, hashed install identity, optional token-derived internal IDs, and constrained enum-like fields for feature, provider, event, error kind, model bucket, latency bucket, and audio-duration bucket.
 - [x] Add a small diagnostics persistence module that hashes identity fields, inserts sanitized rows, and does not accept arbitrary metadata.
-- [x] Add `POST /api/diagnostics/event` with strict schema validation, body-size protection, IP and hashed-install rate limiting, optional install-token identity resolution, a server-side kill switch, `204` success responses, and generic server errors.
-- [x] Add route tests for valid anonymous events, valid token-derived identity, raw install id not being stored, unknown-field rejection, forbidden-key rejection, invalid-token rejection, body-size rejection, enum validation, kill-switch behavior, and rate-limit response behavior.
+- [x] Add `POST /api/diagnostics/event` with strict schema validation, body-size protection, IP rate limiting for anonymous events, verified-token install rate limiting, optional install-token identity resolution, a server-side kill switch, `204` success responses, and generic server errors.
+- [x] Add route tests for valid anonymous events, valid token-derived identity, raw install id not being stored, unknown-field rejection, forbidden-key rejection, invalid-or-expired-token anonymous fallback, body-size rejection, enum validation, kill-switch behavior, and anonymous-IP versus verified-install rate-limit behavior.
 - [x] Document the diagnostics identity secret and kill-switch environment variables in the marketing-site environment docs and example env file without adding real secret values.
 
 ### 2. Add retention cleanup
