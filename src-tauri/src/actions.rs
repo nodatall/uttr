@@ -63,6 +63,10 @@ const FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL: u64 =
     (FULL_SYSTEM_LIVE_SUMMARY_SECONDS / FULL_SYSTEM_LIVE_CHUNK_SECONDS) as u64;
 const FULL_SYSTEM_SUMMARY_MODEL_FALLBACK: &str = "gpt-4o-mini";
 const FULL_SYSTEM_SUMMARY_SYSTEM_PROMPT: &str = "You are the live meeting summarizer inside Uttr, a macOS transcription app. Update meeting notes from transcript text only. Return valid JSON only with current_gist and expanded key_points.";
+const FINAL_TRANSCRIPTION_TIMEOUT_NOTICE: &str =
+    "Audio was saved, but final transcription timed out. The transcript may be incomplete.";
+const TRANSCRIPTION_FAILURE_NOTICE: &str =
+    "Audio was saved, but transcription failed. The transcript may be incomplete.";
 
 fn format_transcription_completion_log(elapsed: Duration, character_count: usize) -> String {
     format!(
@@ -160,6 +164,7 @@ struct SessionWindowStatePayload {
 struct FullSystemLiveRuntime {
     stop_requested: AtomicBool,
     final_transcription_timed_out: AtomicBool,
+    final_transcription_failed: AtomicBool,
     chunk_count: AtomicU64,
     transcript_text: Mutex<String>,
     summary_text: Mutex<Option<String>>,
@@ -176,6 +181,7 @@ impl FullSystemLiveRuntime {
         Self {
             stop_requested: AtomicBool::new(false),
             final_transcription_timed_out: AtomicBool::new(false),
+            final_transcription_failed: AtomicBool::new(false),
             chunk_count: AtomicU64::new(0),
             transcript_text: Mutex::new(String::new()),
             summary_text: Mutex::new(None),
@@ -202,6 +208,7 @@ struct FullSystemLiveFinal {
     recorded_samples: Vec<f32>,
     chunk_count: u64,
     final_transcription_timed_out: bool,
+    final_transcription_failed: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1984,12 +1991,14 @@ fn snapshot_full_system_live_runtime(
         final_transcription_timed_out: runtime
             .final_transcription_timed_out
             .load(Ordering::Relaxed),
+        final_transcription_failed: runtime.final_transcription_failed.load(Ordering::Relaxed),
     })
 }
 
 fn should_persist_full_system_live_final(live_final: &FullSystemLiveFinal) -> bool {
     !live_final.transcript_text.trim().is_empty()
-        || (live_final.final_transcription_timed_out && !live_final.recorded_samples.is_empty())
+        || ((live_final.final_transcription_timed_out || live_final.final_transcription_failed)
+            && !live_final.recorded_samples.is_empty())
 }
 
 async fn persist_full_system_live_final(
@@ -3151,6 +3160,35 @@ fn reap_full_system_live_transcription_task(transcription_task: FullSystemLiveTr
     });
 }
 
+fn mark_full_system_live_transcription_failure(runtime: &FullSystemLiveRuntime, timed_out: bool) {
+    let notice = if timed_out {
+        runtime
+            .final_transcription_timed_out
+            .store(true, Ordering::Relaxed);
+        FINAL_TRANSCRIPTION_TIMEOUT_NOTICE
+    } else {
+        runtime
+            .final_transcription_failed
+            .store(true, Ordering::Relaxed);
+        TRANSCRIPTION_FAILURE_NOTICE
+    };
+
+    let mut summary_text = runtime.summary_text.lock().unwrap();
+    if summary_text
+        .as_deref()
+        .is_some_and(|summary| summary.contains(notice))
+    {
+        return;
+    }
+    let existing_summary = summary_text.take();
+    *summary_text = Some(
+        existing_summary
+            .filter(|summary| !summary.trim().is_empty())
+            .map(|summary| format!("{}\n\n{}", notice, summary))
+            .unwrap_or_else(|| notice.to_string()),
+    );
+}
+
 async fn transcribe_and_summarize_live_chunk(
     app: &AppHandle,
     runtime: &Arc<FullSystemLiveRuntime>,
@@ -3233,24 +3271,10 @@ async fn transcribe_and_summarize_live_chunk(
         )
     };
 
-    if timed_out {
-        runtime
-            .final_transcription_timed_out
-            .store(true, Ordering::Relaxed);
-        let notice =
-            "Audio was saved, but final transcription timed out. The transcript may be incomplete.";
-        let existing_summary = runtime.summary_text.lock().unwrap().clone();
-        *runtime.summary_text.lock().unwrap() = Some(
-            existing_summary
-                .filter(|summary| !summary.trim().is_empty())
-                .map(|summary| format!("{}\n\n{}", notice, summary))
-                .unwrap_or_else(|| notice.to_string()),
-        );
-    }
-
     let transcription_segments = match transcription_result {
         Ok(segments) => segments,
         Err(error) => {
+            mark_full_system_live_transcription_failure(runtime, timed_out);
             if tracked_in_flight {
                 clear_full_system_live_in_flight_chunk(runtime);
             }
@@ -5289,8 +5313,14 @@ impl ShortcutAction for FullSystemTranscribeAction {
                 }
 
                 if live_final.transcript_text.trim().is_empty() {
+                    let failure_kind = if live_final.final_transcription_timed_out {
+                        "final transcription timeout"
+                    } else {
+                        "transcription failure"
+                    };
                     warn!(
-                        "Saving full-system session audio without transcript after final transcription timeout"
+                        "Saving full-system session audio without transcript after {}",
+                        failure_kind
                     );
                 }
 
@@ -5512,8 +5542,8 @@ mod tests {
         full_system_live_chunk_transcription_timeout, full_system_live_final_chunk_timeout,
         full_system_live_session_status, full_system_live_start_decision,
         is_effectively_silent_audio, is_effectively_silent_full_system_source_audio,
-        is_supported_post_process_model, normalize_live_summary_output,
-        parse_meeting_summary_state, persist_full_system_live_final,
+        is_supported_post_process_model, mark_full_system_live_transcription_failure,
+        normalize_live_summary_output, parse_meeting_summary_state, persist_full_system_live_final,
         persist_with_cancellation_rollback, publish_new_ask_selection_session_if_active,
         publish_transcription_error_if_operation_active, quick_dictation_ui_restore_is_current,
         reap_full_system_live_transcription_task, record_full_system_live_chunk_samples,
@@ -7126,6 +7156,7 @@ mod tests {
 
         let live_final = snapshot_full_system_live_runtime(&runtime).expect("audio-only snapshot");
         assert!(live_final.transcript_text.is_empty());
+        assert!(!live_final.final_transcription_failed);
         assert!(should_persist_full_system_live_final(&live_final));
 
         let history_entry_id = persist_full_system_live_final(&history_manager, &live_final)
@@ -7156,6 +7187,51 @@ mod tests {
         let ordinary_audio_only = snapshot_full_system_live_runtime(&ordinary_audio_only_runtime)
             .expect("ordinary audio-only snapshot");
         assert!(!should_persist_full_system_live_final(&ordinary_audio_only));
+    }
+
+    #[tokio::test]
+    async fn live_non_timeout_transcription_failure_persists_audio_without_a_transcript() {
+        let root = tempfile::tempdir().expect("create history root");
+        let history_manager =
+            HistoryManager::new_for_test(root.path()).expect("create test history manager");
+        let runtime = FullSystemLiveRuntime::new();
+        runtime
+            .recorded_samples
+            .lock()
+            .unwrap()
+            .extend_from_slice(&[0.1, 0.2, 0.3, 0.4]);
+        mark_full_system_live_transcription_failure(&runtime, false);
+
+        let live_final = snapshot_full_system_live_runtime(&runtime)
+            .expect("audio-only failed-transcription snapshot");
+        assert!(live_final.transcript_text.is_empty());
+        assert!(live_final.final_transcription_failed);
+        assert!(!live_final.final_transcription_timed_out);
+        assert!(should_persist_full_system_live_final(&live_final));
+        assert!(live_final
+            .summary_text
+            .as_deref()
+            .is_some_and(|notice| notice.contains("transcription failed")));
+
+        let history_entry_id = persist_full_system_live_final(&history_manager, &live_final)
+            .await
+            .expect("persist audio-only failed-transcription meeting");
+        let entries = history_manager
+            .get_history_entries()
+            .await
+            .expect("query audio-only failed-transcription meeting");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, history_entry_id);
+        assert!(entries[0].transcription_text.is_empty());
+        assert!(entries[0]
+            .post_processed_text
+            .as_deref()
+            .is_some_and(|notice| notice.contains("transcription failed")));
+        let audio_path = history_manager.get_audio_file_path(&entries[0].file_name);
+        assert!(audio_path.exists());
+        let audio_reader =
+            hound::WavReader::open(audio_path).expect("open persisted transcription-failure WAV");
+        assert_eq!(audio_reader.duration(), 4);
     }
 
     #[tokio::test]
