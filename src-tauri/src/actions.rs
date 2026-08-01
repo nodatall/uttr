@@ -10,9 +10,9 @@ use crate::audio_toolkit::audio::mix_transcription_pcm_sources;
 use crate::byok_secrets;
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::full_system_audio::{
-    FullSystemAudioSessionManager, FullSystemSessionStopResult,
-    FullSystemSessionTranscriptionSamples, FullSystemTranscriptionSource,
-    FullSystemTranscriptionSourceSamples,
+    FullSystemAudioSessionManager, FullSystemSessionSnapshot, FullSystemSessionStartResult,
+    FullSystemSessionStopResult, FullSystemSessionTranscriptionSamples,
+    FullSystemTranscriptionSource, FullSystemTranscriptionSourceSamples,
 };
 use crate::managers::history::HistoryManager;
 use crate::managers::model::is_cloud_model_id;
@@ -57,6 +57,7 @@ const FULL_SYSTEM_LIVE_CHUNK_SAMPLES: usize = 16_000 * FULL_SYSTEM_LIVE_CHUNK_SE
 const FULL_SYSTEM_LIVE_CHUNK_POLL_INTERVAL: Duration = Duration::from_millis(250);
 const FULL_SYSTEM_LIVE_WORKER_STOP_TIMEOUT: Duration = Duration::from_secs(15);
 const FULL_SYSTEM_LIVE_FINAL_CHUNK_EXTRA_TIMEOUT: Duration = Duration::from_secs(10);
+const FULL_SYSTEM_LIVE_SUMMARY_TIMEOUT: Duration = Duration::from_secs(75);
 const FULL_SYSTEM_LIVE_SUMMARY_SECONDS: usize = 60;
 const FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL: u64 =
     (FULL_SYSTEM_LIVE_SUMMARY_SECONDS / FULL_SYSTEM_LIVE_CHUNK_SECONDS) as u64;
@@ -79,6 +80,30 @@ impl FullSystemLiveChunk {
 struct LabeledTranscriptSegment {
     source: FullSystemTranscriptionSource,
     text: String,
+}
+
+type FullSystemLiveTranscriptionTask =
+    Arc<tokio::sync::Mutex<JoinHandle<Result<Vec<LabeledTranscriptSegment>, anyhow::Error>>>>;
+
+#[derive(Debug, Clone)]
+struct FullSystemLiveInFlightChunk {
+    chunk: FullSystemLiveChunk,
+    transcription_task: FullSystemLiveTranscriptionTask,
+}
+
+#[derive(Debug, Default)]
+struct FullSystemLiveAudioState {
+    pending_samples: Vec<f32>,
+    pending_microphone_samples: Vec<f32>,
+    pending_system_audio_samples: Vec<f32>,
+    in_flight_chunk: Option<FullSystemLiveInFlightChunk>,
+}
+
+#[derive(Debug)]
+struct FullSystemLiveFinalizationChunk {
+    chunk: FullSystemLiveChunk,
+    record_samples: bool,
+    transcription_task: Option<FullSystemLiveTranscriptionTask>,
 }
 
 #[derive(Clone, Copy)]
@@ -127,6 +152,7 @@ struct SessionWindowStatePayload {
 #[derive(Debug)]
 struct FullSystemLiveRuntime {
     stop_requested: AtomicBool,
+    final_transcription_timed_out: AtomicBool,
     chunk_count: AtomicU64,
     transcript_text: Mutex<String>,
     summary_text: Mutex<Option<String>>,
@@ -134,9 +160,7 @@ struct FullSystemLiveRuntime {
     summary_error: Mutex<Option<String>>,
     summary_disabled: AtomicBool,
     recorded_samples: Mutex<Vec<f32>>,
-    pending_samples: Mutex<Vec<f32>>,
-    pending_microphone_samples: Mutex<Vec<f32>>,
-    pending_system_audio_samples: Mutex<Vec<f32>>,
+    audio_state: Mutex<FullSystemLiveAudioState>,
     last_transcript_source: Mutex<Option<FullSystemTranscriptionSource>>,
 }
 
@@ -144,6 +168,7 @@ impl FullSystemLiveRuntime {
     fn new() -> Self {
         Self {
             stop_requested: AtomicBool::new(false),
+            final_transcription_timed_out: AtomicBool::new(false),
             chunk_count: AtomicU64::new(0),
             transcript_text: Mutex::new(String::new()),
             summary_text: Mutex::new(None),
@@ -151,9 +176,7 @@ impl FullSystemLiveRuntime {
             summary_error: Mutex::new(None),
             summary_disabled: AtomicBool::new(false),
             recorded_samples: Mutex::new(Vec::new()),
-            pending_samples: Mutex::new(Vec::new()),
-            pending_microphone_samples: Mutex::new(Vec::new()),
-            pending_system_audio_samples: Mutex::new(Vec::new()),
+            audio_state: Mutex::new(FullSystemLiveAudioState::default()),
             last_transcript_source: Mutex::new(None),
         }
     }
@@ -171,10 +194,27 @@ struct FullSystemLiveFinal {
     summary_provider: Option<String>,
     recorded_samples: Vec<f32>,
     chunk_count: u64,
+    final_transcription_timed_out: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FullSystemLiveStartDecision {
+    recording_started: bool,
+    initialize_live_runtime: bool,
+    perform_start_side_effects: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FullSystemLiveSessionStatus {
+    Missing,
+    Running,
+    Finalizing,
 }
 
 static FULL_SYSTEM_LIVE_SESSION: Lazy<Mutex<Option<FullSystemLiveSession>>> =
     Lazy::new(|| Mutex::new(None));
+static FULL_SYSTEM_FINALIZATION_BARRIERS: Lazy<Mutex<HashMap<(String, OperationId), usize>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 static ACTIVE_APP_CONTEXT: Lazy<Mutex<HashMap<String, AppContextSnapshot>>> =
     Lazy::new(|| Mutex::new(HashMap::new()));
 static ACTIVE_APP_CONTEXT_REQUESTS: Lazy<Mutex<HashMap<String, u64>>> =
@@ -210,12 +250,58 @@ struct FinishGuard {
     app: AppHandle,
     binding_id: String,
     operation_id: OperationId,
+    _full_system_finalization_barrier: Option<FullSystemFinalizationBarrier>,
+}
+
+struct FullSystemFinalizationBarrier {
+    binding_id: String,
+    operation_id: OperationId,
+}
+
+impl FullSystemFinalizationBarrier {
+    fn new(binding_id: String, operation_id: OperationId) -> Self {
+        *FULL_SYSTEM_FINALIZATION_BARRIERS
+            .lock()
+            .unwrap()
+            .entry((binding_id.clone(), operation_id))
+            .or_insert(0) += 1;
+        Self {
+            binding_id,
+            operation_id,
+        }
+    }
+}
+
+impl Drop for FullSystemFinalizationBarrier {
+    fn drop(&mut self) {
+        let key = (self.binding_id.clone(), self.operation_id);
+        let mut barriers = FULL_SYSTEM_FINALIZATION_BARRIERS.lock().unwrap();
+        if let Some(count) = barriers.get_mut(&key) {
+            *count -= 1;
+            if *count == 0 {
+                barriers.remove(&key);
+            }
+        }
+    }
 }
 
 impl FinishGuard {
     fn new(app: AppHandle, binding_id: String, operation_id: OperationId) -> Self {
         Self {
             app,
+            binding_id,
+            operation_id,
+            _full_system_finalization_barrier: None,
+        }
+    }
+
+    fn new_full_system(app: AppHandle, binding_id: String, operation_id: OperationId) -> Self {
+        Self {
+            app,
+            _full_system_finalization_barrier: Some(FullSystemFinalizationBarrier::new(
+                binding_id.clone(),
+                operation_id,
+            )),
             binding_id,
             operation_id,
         }
@@ -1072,8 +1158,25 @@ fn transcription_watchdog_delay(sample_count: usize) -> Duration {
     transcription_timeout_for_samples(sample_count) + FULL_PASS_TRANSCRIPTION_WATCHDOG_GRACE
 }
 
-fn full_system_live_final_chunk_timeout(sample_count: usize) -> Duration {
-    transcription_watchdog_delay(sample_count) + FULL_SYSTEM_LIVE_FINAL_CHUNK_EXTRA_TIMEOUT
+fn full_system_live_chunk_transcription_timeout(chunk: &FullSystemLiveChunk) -> Duration {
+    let source_budget = chunk
+        .source_samples
+        .iter()
+        .filter(|source| !source.samples.is_empty())
+        .fold(Duration::ZERO, |budget, source| {
+            budget.saturating_add(transcription_timeout_for_samples(source.samples.len()))
+        });
+    let transcription_budget = if source_budget.is_zero() {
+        transcription_timeout_for_samples(chunk.mixed_samples.len())
+    } else {
+        source_budget
+    };
+
+    transcription_budget + FULL_PASS_TRANSCRIPTION_WATCHDOG_GRACE
+}
+
+fn full_system_live_final_chunk_timeout(chunk: &FullSystemLiveChunk) -> Duration {
+    full_system_live_chunk_transcription_timeout(chunk) + FULL_SYSTEM_LIVE_FINAL_CHUNK_EXTRA_TIMEOUT
 }
 
 fn transcription_source_for_binding(binding_id: &str) -> Option<&'static str> {
@@ -1807,6 +1910,51 @@ fn append_live_transcription_segments(
     transcript.clone()
 }
 
+fn commit_full_system_live_transcription_segments(
+    runtime: &FullSystemLiveRuntime,
+    transcription_segments: &[LabeledTranscriptSegment],
+    tracked_in_flight: bool,
+) -> Option<(String, u64)> {
+    if transcription_segments.is_empty() {
+        if tracked_in_flight {
+            clear_full_system_live_in_flight_chunk(runtime);
+        }
+        return None;
+    }
+
+    let transcript_so_far = append_live_transcription_segments(runtime, transcription_segments);
+    if tracked_in_flight {
+        // Clearing the recovery marker is the commit point. Keep it synchronous
+        // and before any summary await so Stop can distinguish committed audio
+        // from a chunk whose retained transcription task still needs settling.
+        clear_full_system_live_in_flight_chunk(runtime);
+    }
+    let completed_chunk = runtime.chunk_count.fetch_add(1, Ordering::Relaxed) + 1;
+    Some((transcript_so_far, completed_chunk))
+}
+
+fn record_full_system_live_chunk_samples(
+    runtime: &FullSystemLiveRuntime,
+    chunk: &FullSystemLiveChunk,
+) {
+    runtime
+        .recorded_samples
+        .lock()
+        .unwrap()
+        .extend_from_slice(&chunk.mixed_samples);
+}
+
+fn record_full_system_live_finalization_audio(
+    runtime: &FullSystemLiveRuntime,
+    finalization_chunks: &[FullSystemLiveFinalizationChunk],
+) {
+    for finalization in finalization_chunks {
+        if finalization.record_samples {
+            record_full_system_live_chunk_samples(runtime, &finalization.chunk);
+        }
+    }
+}
+
 fn snapshot_full_system_live_runtime(
     runtime: &FullSystemLiveRuntime,
 ) -> Option<FullSystemLiveFinal> {
@@ -1826,7 +1974,15 @@ fn snapshot_full_system_live_runtime(
         summary_provider,
         recorded_samples,
         chunk_count,
+        final_transcription_timed_out: runtime
+            .final_transcription_timed_out
+            .load(Ordering::Relaxed),
     })
+}
+
+fn should_persist_full_system_live_final(live_final: &FullSystemLiveFinal) -> bool {
+    !live_final.transcript_text.trim().is_empty()
+        || (live_final.final_transcription_timed_out && !live_final.recorded_samples.is_empty())
 }
 
 async fn persist_full_system_live_final(
@@ -1878,6 +2034,116 @@ fn source_samples_from_buffers(
         });
     }
     source_samples
+}
+
+fn append_full_system_live_audio_delta(
+    state: &mut FullSystemLiveAudioState,
+    delta: FullSystemSessionTranscriptionSamples,
+) {
+    if let Some(mixed) = delta.mixed.filter(|samples| !samples.is_empty()) {
+        state.pending_samples.extend_from_slice(&mixed);
+    }
+    for source_samples in delta.sources {
+        match source_samples.source {
+            FullSystemTranscriptionSource::Microphone => state
+                .pending_microphone_samples
+                .extend_from_slice(&source_samples.samples),
+            FullSystemTranscriptionSource::SystemAudio => state
+                .pending_system_audio_samples
+                .extend_from_slice(&source_samples.samples),
+        }
+    }
+}
+
+fn take_next_full_system_live_chunk<F>(
+    runtime: &FullSystemLiveRuntime,
+    start_transcription: F,
+) -> Option<FullSystemLiveInFlightChunk>
+where
+    F: FnOnce(FullSystemLiveChunk, u64) -> FullSystemLiveTranscriptionTask,
+{
+    let mut state = runtime.audio_state.lock().unwrap();
+    if state.pending_samples.len() < FULL_SYSTEM_LIVE_CHUNK_SAMPLES {
+        return None;
+    }
+
+    let chunk = FullSystemLiveChunk {
+        mixed_samples: drain_front_up_to(
+            &mut state.pending_samples,
+            FULL_SYSTEM_LIVE_CHUNK_SAMPLES,
+        ),
+        source_samples: source_samples_from_buffers(
+            drain_front_up_to(
+                &mut state.pending_microphone_samples,
+                FULL_SYSTEM_LIVE_CHUNK_SAMPLES,
+            ),
+            drain_front_up_to(
+                &mut state.pending_system_audio_samples,
+                FULL_SYSTEM_LIVE_CHUNK_SAMPLES,
+            ),
+        ),
+    };
+    let chunk_index = runtime.chunk_count.load(Ordering::Relaxed) + 1;
+    let in_flight = FullSystemLiveInFlightChunk {
+        transcription_task: start_transcription(chunk.clone(), chunk_index),
+        chunk,
+    };
+    state.in_flight_chunk = Some(in_flight.clone());
+    Some(in_flight)
+}
+
+fn clear_full_system_live_in_flight_chunk(runtime: &FullSystemLiveRuntime) {
+    runtime.audio_state.lock().unwrap().in_flight_chunk = None;
+}
+
+fn take_full_system_live_finalization_chunks(
+    runtime: &FullSystemLiveRuntime,
+    tail_samples: Option<FullSystemSessionTranscriptionSamples>,
+) -> Vec<FullSystemLiveFinalizationChunk> {
+    let (in_flight_chunk, mut pending_samples, mut pending_microphone, mut pending_system) = {
+        let mut state = runtime.audio_state.lock().unwrap();
+        (
+            state.in_flight_chunk.take(),
+            std::mem::take(&mut state.pending_samples),
+            std::mem::take(&mut state.pending_microphone_samples),
+            std::mem::take(&mut state.pending_system_audio_samples),
+        )
+    };
+
+    if let Some(tail_samples) = tail_samples {
+        append_full_system_stop_tail_samples(
+            &mut pending_samples,
+            &mut pending_microphone,
+            &mut pending_system,
+            tail_samples,
+        );
+    }
+
+    let pending_source_samples = source_samples_from_buffers(pending_microphone, pending_system);
+    if !pending_source_samples.is_empty() {
+        pending_samples = mixed_samples_from_source_samples(&pending_source_samples);
+    }
+    let pending_chunk = FullSystemLiveChunk {
+        mixed_samples: pending_samples,
+        source_samples: pending_source_samples,
+    };
+
+    let mut chunks = Vec::with_capacity(2);
+    if let Some(in_flight) = in_flight_chunk.filter(|in_flight| !in_flight.chunk.is_empty()) {
+        chunks.push(FullSystemLiveFinalizationChunk {
+            chunk: in_flight.chunk,
+            record_samples: false,
+            transcription_task: Some(in_flight.transcription_task),
+        });
+    }
+    if !pending_chunk.is_empty() {
+        chunks.push(FullSystemLiveFinalizationChunk {
+            chunk: pending_chunk,
+            record_samples: true,
+            transcription_task: None,
+        });
+    }
+    chunks
 }
 
 fn emit_live_session_summary_state(
@@ -2195,6 +2461,26 @@ async fn summarize_live_session(
         ),
         provider_label: "Uttr backend".to_string(),
     })
+}
+
+async fn summarize_live_session_with_timeout(
+    app: &AppHandle,
+    transcript_text: &str,
+    previous_summary: Option<String>,
+    chunk_count: u64,
+) -> Result<LiveSummaryResult, String> {
+    match timeout(
+        FULL_SYSTEM_LIVE_SUMMARY_TIMEOUT,
+        summarize_live_session(app, transcript_text, previous_summary, chunk_count),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(_) => Err(format!(
+            "Live summary timed out after {}s",
+            FULL_SYSTEM_LIVE_SUMMARY_TIMEOUT.as_secs()
+        )),
+    }
 }
 
 const ASK_SELECTION_SYSTEM_PROMPT: &str = "You answer a spoken request. If selected text is provided, use it as context; otherwise answer the request directly like a chat question. Return only the answer. Do not replace, rewrite, or quote selected text unless the request asks for that. Do not explain your process, wrap in markdown fences, or include labels.";
@@ -2821,6 +3107,43 @@ fn should_pause_live_summaries(error: &str) -> bool {
         || (lower.contains("api key") && lower.contains("settings"))
 }
 
+fn spawn_full_system_live_transcription_task(
+    tm: Arc<TranscriptionManager>,
+    chunk: FullSystemLiveChunk,
+    chunk_index: u64,
+) -> FullSystemLiveTranscriptionTask {
+    Arc::new(tokio::sync::Mutex::new(tauri::async_runtime::spawn(
+        async move { transcribe_full_system_live_chunk_sources(&tm, chunk, chunk_index).await },
+    )))
+}
+
+async fn await_full_system_live_transcription_task(
+    transcription_task: &FullSystemLiveTranscriptionTask,
+) -> Result<Vec<LabeledTranscriptSegment>, anyhow::Error> {
+    let mut task = transcription_task.lock().await;
+    match (&mut *task).await {
+        Ok(result) => result,
+        Err(error) => Err(anyhow::anyhow!(
+            "Live transcription task failed to join: {}",
+            error
+        )),
+    }
+}
+
+fn reap_full_system_live_transcription_task(transcription_task: FullSystemLiveTranscriptionTask) {
+    tauri::async_runtime::spawn(async move {
+        match await_full_system_live_transcription_task(&transcription_task).await {
+            Ok(_) => {
+                warn!("Discarding live transcription that completed after the finalization timeout")
+            }
+            Err(error) => warn!(
+                "Late live transcription finished with an error after finalization timeout: {}",
+                error
+            ),
+        }
+    });
+}
+
 async fn transcribe_and_summarize_live_chunk(
     app: &AppHandle,
     runtime: &Arc<FullSystemLiveRuntime>,
@@ -2828,17 +3151,19 @@ async fn transcribe_and_summarize_live_chunk(
     chunk: FullSystemLiveChunk,
     is_final_chunk: bool,
     record_samples: bool,
-) {
+    tracked_in_flight: bool,
+    transcription_task: Option<FullSystemLiveTranscriptionTask>,
+    transcription_timeout: Option<Duration>,
+) -> bool {
     if chunk.is_empty() {
-        return;
+        if tracked_in_flight {
+            clear_full_system_live_in_flight_chunk(runtime);
+        }
+        return true;
     }
 
     if record_samples {
-        runtime
-            .recorded_samples
-            .lock()
-            .unwrap()
-            .extend_from_slice(&chunk.mixed_samples);
+        record_full_system_live_chunk_samples(runtime, &chunk);
     }
 
     let chunk_index = runtime.chunk_count.load(Ordering::Relaxed) + 1;
@@ -2872,43 +3197,95 @@ async fn transcribe_and_summarize_live_chunk(
         );
     }
 
-    let transcription_segments =
-        match transcribe_full_system_live_chunk_sources(tm, chunk, chunk_index).await {
-            Ok(segments) => segments,
-            Err(error) => {
-                warn!(
-                    "Live full-system chunk {} transcription failed: {}",
-                    chunk_index, error
-                );
-                *runtime.summary_error.lock().unwrap() = Some(format!(
-                    "Live transcription failed for chunk {}: {}",
-                    chunk_index, error
-                ));
-                if is_final_chunk {
-                    emit_session_window_state(
-                        app,
-                        SessionWindowStatePayload {
-                            stage: "processing".to_string(),
-                            title: "Preparing summary".to_string(),
-                            subtitle: "Unable to transcribe the final audio chunk.".to_string(),
-                            progress_label: "Processing".to_string(),
-                            progress_value: 0.88,
-                            summary_text: runtime.summary_error.lock().unwrap().clone(),
-                            raw_transcript_text: None,
-                            history_entry_id: None,
-                        },
-                    );
-                } else if !runtime.stop_requested.load(Ordering::Relaxed) {
-                    emit_live_session_summary_state(
-                        app,
-                        runtime.chunk_count.load(Ordering::Relaxed),
-                        runtime.summary_text.lock().unwrap().clone(),
-                        runtime.summary_error.lock().unwrap().clone(),
-                    );
-                }
-                return;
+    let transcription_task = transcription_task.unwrap_or_else(|| {
+        spawn_full_system_live_transcription_task(Arc::clone(tm), chunk.clone(), chunk_index)
+    });
+    let (transcription_result, timed_out) = if let Some(timeout_duration) = transcription_timeout {
+        match timeout(
+            timeout_duration,
+            await_full_system_live_transcription_task(&transcription_task),
+        )
+        .await
+        {
+            Ok(result) => (result, false),
+            Err(_) => {
+                reap_full_system_live_transcription_task(Arc::clone(&transcription_task));
+                (
+                    Err(anyhow::anyhow!(
+                        "Live chunk transcription timed out after {}s; audio was saved",
+                        timeout_duration.as_secs()
+                    )),
+                    true,
+                )
             }
-        };
+        }
+    } else {
+        (
+            await_full_system_live_transcription_task(&transcription_task).await,
+            false,
+        )
+    };
+
+    if timed_out {
+        runtime
+            .final_transcription_timed_out
+            .store(true, Ordering::Relaxed);
+        let notice =
+            "Audio was saved, but final transcription timed out. The transcript may be incomplete.";
+        let existing_summary = runtime.summary_text.lock().unwrap().clone();
+        *runtime.summary_text.lock().unwrap() = Some(
+            existing_summary
+                .filter(|summary| !summary.trim().is_empty())
+                .map(|summary| format!("{}\n\n{}", notice, summary))
+                .unwrap_or_else(|| notice.to_string()),
+        );
+    }
+
+    let transcription_segments = match transcription_result {
+        Ok(segments) => segments,
+        Err(error) => {
+            if tracked_in_flight {
+                clear_full_system_live_in_flight_chunk(runtime);
+            }
+            warn!(
+                "Live full-system chunk {} transcription failed: {}",
+                chunk_index, error
+            );
+            *runtime.summary_error.lock().unwrap() = Some(format!(
+                "Live transcription failed for chunk {}: {}",
+                chunk_index, error
+            ));
+            if is_final_chunk {
+                emit_session_window_state(
+                    app,
+                    SessionWindowStatePayload {
+                        stage: "processing".to_string(),
+                        title: "Preparing summary".to_string(),
+                        subtitle: "Unable to transcribe the final audio chunk.".to_string(),
+                        progress_label: "Processing".to_string(),
+                        progress_value: 0.88,
+                        summary_text: runtime.summary_error.lock().unwrap().clone(),
+                        raw_transcript_text: None,
+                        history_entry_id: None,
+                    },
+                );
+            } else if !runtime.stop_requested.load(Ordering::Relaxed) {
+                emit_live_session_summary_state(
+                    app,
+                    runtime.chunk_count.load(Ordering::Relaxed),
+                    runtime.summary_text.lock().unwrap().clone(),
+                    runtime.summary_error.lock().unwrap().clone(),
+                );
+            }
+            return !timed_out;
+        }
+    };
+
+    let committed = commit_full_system_live_transcription_segments(
+        runtime,
+        &transcription_segments,
+        tracked_in_flight,
+    );
 
     if transcription_segments.is_empty() {
         if is_final_chunk {
@@ -2932,7 +3309,7 @@ async fn transcribe_and_summarize_live_chunk(
 
                 let previous_summary = runtime.summary_text.lock().unwrap().clone();
                 let completed_chunk = runtime.chunk_count.load(Ordering::Relaxed).max(1);
-                match summarize_live_session(
+                match summarize_live_session_with_timeout(
                     app,
                     &transcript_so_far,
                     previous_summary,
@@ -2983,14 +3360,10 @@ async fn transcribe_and_summarize_live_chunk(
                 }
             }
         }
-        return;
+        return true;
     }
 
-    if !transcription_segments.is_empty() {
-        let transcript_so_far =
-            append_live_transcription_segments(runtime, &transcription_segments);
-
-        let completed_chunk = runtime.chunk_count.fetch_add(1, Ordering::Relaxed) + 1;
+    if let Some((transcript_so_far, completed_chunk)) = committed {
         if !should_update_live_summary(completed_chunk, is_final_chunk) {
             if !runtime.stop_requested.load(Ordering::Relaxed) {
                 emit_live_session_transcribed_state(
@@ -3000,7 +3373,7 @@ async fn transcribe_and_summarize_live_chunk(
                     runtime.summary_error.lock().unwrap().clone(),
                 );
             }
-            return;
+            return true;
         }
 
         if runtime.summary_disabled.load(Ordering::Relaxed) {
@@ -3026,7 +3399,7 @@ async fn transcribe_and_summarize_live_chunk(
                     runtime.summary_error.lock().unwrap().clone(),
                 );
             }
-            return;
+            return true;
         }
 
         if is_final_chunk {
@@ -3060,8 +3433,13 @@ async fn transcribe_and_summarize_live_chunk(
         }
 
         let previous_summary = runtime.summary_text.lock().unwrap().clone();
-        match summarize_live_session(app, &transcript_so_far, previous_summary, completed_chunk)
-            .await
+        match summarize_live_session_with_timeout(
+            app,
+            &transcript_so_far,
+            previous_summary,
+            completed_chunk,
+        )
+        .await
         {
             Ok(result) => {
                 let summary = result.summary;
@@ -3118,6 +3496,7 @@ async fn transcribe_and_summarize_live_chunk(
             }
         }
     }
+    true
 }
 
 async fn transcribe_full_system_live_chunk_sources(
@@ -3125,12 +3504,26 @@ async fn transcribe_full_system_live_chunk_sources(
     chunk: FullSystemLiveChunk,
     chunk_index: u64,
 ) -> Result<Vec<LabeledTranscriptSegment>, anyhow::Error> {
+    transcribe_full_system_live_chunk_sources_with(chunk, chunk_index, |samples, source, _| {
+        tm.transcribe_with_source(samples, source)
+    })
+    .await
+}
+
+async fn transcribe_full_system_live_chunk_sources_with<F, Fut>(
+    chunk: FullSystemLiveChunk,
+    chunk_index: u64,
+    mut transcribe: F,
+) -> Result<Vec<LabeledTranscriptSegment>, anyhow::Error>
+where
+    F: FnMut(Vec<f32>, Option<&'static str>, Duration) -> Fut,
+    Fut: Future<Output = Result<String, anyhow::Error>>,
+{
     let mut segments = Vec::new();
 
     if chunk.source_samples.is_empty() {
         let sample_count = chunk.mixed_samples.len();
-        let transcription = transcribe_full_pass_with_timeout(
-            tm,
+        let transcription = transcribe(
             chunk.mixed_samples,
             Some("full_system_audio"),
             transcription_timeout_for_samples(sample_count),
@@ -3171,8 +3564,7 @@ async fn transcribe_full_system_live_chunk_sources(
             source_label,
             sample_count
         );
-        let text = transcribe_full_pass_with_timeout(
-            tm,
+        let text = transcribe(
             source_samples.samples,
             Some(source_id),
             transcription_timeout_for_samples(sample_count),
@@ -3197,7 +3589,78 @@ async fn transcribe_full_system_live_chunk_sources(
     Ok(segments)
 }
 
-fn start_full_system_live_session(app: &AppHandle, binding_id: &str) {
+fn full_system_live_session_status(binding_id: &str) -> FullSystemLiveSessionStatus {
+    let guard = FULL_SYSTEM_LIVE_SESSION.lock().unwrap();
+    let Some(session) = guard
+        .as_ref()
+        .filter(|session| session.binding_id == binding_id)
+    else {
+        return if FULL_SYSTEM_FINALIZATION_BARRIERS
+            .lock()
+            .unwrap()
+            .keys()
+            .any(|(finalizing_binding, _)| finalizing_binding == binding_id)
+        {
+            FullSystemLiveSessionStatus::Finalizing
+        } else {
+            FullSystemLiveSessionStatus::Missing
+        };
+    };
+
+    if session.runtime.stop_requested.load(Ordering::Relaxed)
+        || session.worker_handle.inner().is_finished()
+    {
+        FullSystemLiveSessionStatus::Finalizing
+    } else {
+        FullSystemLiveSessionStatus::Running
+    }
+}
+
+fn full_system_live_start_decision(
+    binding_id: &str,
+    start_result: &FullSystemSessionStartResult,
+) -> FullSystemLiveStartDecision {
+    let recording_started = start_result.started
+        && start_result
+            .session
+            .as_ref()
+            .is_some_and(|session| session.binding_id == binding_id);
+
+    FullSystemLiveStartDecision {
+        recording_started,
+        initialize_live_runtime: recording_started,
+        perform_start_side_effects: recording_started && start_result.new_session_started,
+    }
+}
+
+fn existing_full_system_live_start_decision(
+    binding_id: &str,
+    active_session: Option<&FullSystemSessionSnapshot>,
+    live_session_status: FullSystemLiveSessionStatus,
+) -> Option<FullSystemLiveStartDecision> {
+    (live_session_status != FullSystemLiveSessionStatus::Missing).then(|| {
+        FullSystemLiveStartDecision {
+            recording_started: active_session
+                .is_some_and(|session| session.binding_id == binding_id),
+            initialize_live_runtime: false,
+            perform_start_side_effects: false,
+        }
+    })
+}
+
+fn start_full_system_live_session(app: &AppHandle, binding_id: &str) -> bool {
+    let mut guard = FULL_SYSTEM_LIVE_SESSION.lock().unwrap();
+    if guard
+        .as_ref()
+        .is_some_and(|session| session.binding_id == binding_id)
+    {
+        debug!(
+            "Preserving existing full-system live runtime for repeated start '{}'",
+            binding_id
+        );
+        return false;
+    }
+
     let runtime = Arc::new(FullSystemLiveRuntime::new());
     let worker_runtime = Arc::clone(&runtime);
     let worker_app = app.clone();
@@ -3206,83 +3669,41 @@ fn start_full_system_live_session(app: &AppHandle, binding_id: &str) {
     let full_system_audio = Arc::clone(&app.state::<Arc<FullSystemAudioSessionManager>>());
 
     let worker_handle = tauri::async_runtime::spawn(async move {
-        let mut buffered = Vec::<f32>::new();
-        let mut buffered_microphone = Vec::<f32>::new();
-        let mut buffered_system_audio = Vec::<f32>::new();
-
         while !worker_runtime.stop_requested.load(Ordering::Relaxed) {
             if let Some(delta) = full_system_audio.drain_session_delta_sources(&worker_binding) {
-                if let Some(mixed) = delta.mixed {
-                    if !mixed.is_empty() {
-                        buffered.extend_from_slice(&mixed);
-                    }
-                }
-                for source_samples in delta.sources {
-                    match source_samples.source {
-                        FullSystemTranscriptionSource::Microphone => {
-                            buffered_microphone.extend_from_slice(&source_samples.samples);
-                        }
-                        FullSystemTranscriptionSource::SystemAudio => {
-                            buffered_system_audio.extend_from_slice(&source_samples.samples);
-                        }
-                    }
-                }
+                append_full_system_live_audio_delta(
+                    &mut worker_runtime.audio_state.lock().unwrap(),
+                    delta,
+                );
             }
 
-            while buffered.len() >= FULL_SYSTEM_LIVE_CHUNK_SAMPLES
-                && !worker_runtime.stop_requested.load(Ordering::Relaxed)
-            {
-                let mixed_samples: Vec<f32> =
-                    buffered.drain(..FULL_SYSTEM_LIVE_CHUNK_SAMPLES).collect();
-                let microphone_samples =
-                    drain_front_up_to(&mut buffered_microphone, FULL_SYSTEM_LIVE_CHUNK_SAMPLES);
-                let system_audio_samples =
-                    drain_front_up_to(&mut buffered_system_audio, FULL_SYSTEM_LIVE_CHUNK_SAMPLES);
-                let chunk = FullSystemLiveChunk {
-                    mixed_samples,
-                    source_samples: source_samples_from_buffers(
-                        microphone_samples,
-                        system_audio_samples,
-                    ),
+            while !worker_runtime.stop_requested.load(Ordering::Relaxed) {
+                let tm_for_chunk = Arc::clone(&tm);
+                let Some(in_flight) =
+                    take_next_full_system_live_chunk(&worker_runtime, move |chunk, chunk_index| {
+                        spawn_full_system_live_transcription_task(tm_for_chunk, chunk, chunk_index)
+                    })
+                else {
+                    break;
                 };
                 transcribe_and_summarize_live_chunk(
                     &worker_app,
                     &worker_runtime,
                     &tm,
-                    chunk,
+                    in_flight.chunk,
                     false,
                     true,
+                    true,
+                    Some(in_flight.transcription_task),
+                    None,
                 )
                 .await;
             }
 
             sleep(FULL_SYSTEM_LIVE_CHUNK_POLL_INTERVAL).await;
         }
-
-        if !buffered.is_empty() {
-            worker_runtime
-                .pending_samples
-                .lock()
-                .unwrap()
-                .extend_from_slice(&buffered);
-        }
-        if !buffered_microphone.is_empty() {
-            worker_runtime
-                .pending_microphone_samples
-                .lock()
-                .unwrap()
-                .extend_from_slice(&buffered_microphone);
-        }
-        if !buffered_system_audio.is_empty() {
-            worker_runtime
-                .pending_system_audio_samples
-                .lock()
-                .unwrap()
-                .extend_from_slice(&buffered_system_audio);
-        }
     });
 
-    let mut guard = FULL_SYSTEM_LIVE_SESSION.lock().unwrap();
     if let Some(previous) = guard.take() {
         previous
             .runtime
@@ -3295,6 +3716,7 @@ fn start_full_system_live_session(app: &AppHandle, binding_id: &str) {
         runtime,
         worker_handle,
     });
+    true
 }
 
 fn signal_full_system_live_session_stop(binding_id: &str) {
@@ -3321,32 +3743,25 @@ fn append_full_system_live_session_delta(
         return;
     }
 
-    if let Some(mixed) = delta.mixed.filter(|samples| !samples.is_empty()) {
-        session
-            .runtime
-            .pending_samples
-            .lock()
-            .unwrap()
-            .extend_from_slice(&mixed);
-    }
-    for source_samples in delta.sources {
-        match source_samples.source {
-            FullSystemTranscriptionSource::Microphone => {
-                session
-                    .runtime
-                    .pending_microphone_samples
-                    .lock()
-                    .unwrap()
-                    .extend_from_slice(&source_samples.samples);
-            }
-            FullSystemTranscriptionSource::SystemAudio => {
-                session
-                    .runtime
-                    .pending_system_audio_samples
-                    .lock()
-                    .unwrap()
-                    .extend_from_slice(&source_samples.samples);
-            }
+    append_full_system_live_audio_delta(&mut session.runtime.audio_state.lock().unwrap(), delta);
+}
+
+async fn await_full_system_live_worker_stop(
+    mut worker_handle: JoinHandle<()>,
+    timeout_duration: Duration,
+) {
+    match timeout(timeout_duration, &mut worker_handle).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => {
+            warn!("Live full-system worker join error: {}", error);
+        }
+        Err(_) => {
+            warn!(
+                "Live full-system worker did not stop within {:?}; aborting outer worker",
+                timeout_duration
+            );
+            worker_handle.abort();
+            let _ = worker_handle.await;
         }
     }
 }
@@ -3373,71 +3788,30 @@ async fn finish_full_system_live_session(
         .runtime
         .stop_requested
         .store(true, Ordering::Relaxed);
-    let mut worker_handle = session.worker_handle;
-    match timeout(FULL_SYSTEM_LIVE_WORKER_STOP_TIMEOUT, &mut worker_handle).await {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => {
-            warn!("Live full-system worker join error: {}", error);
-        }
-        Err(_) => {
-            warn!(
-                "Live full-system worker did not stop within {:?}; aborting worker",
-                FULL_SYSTEM_LIVE_WORKER_STOP_TIMEOUT
-            );
-            worker_handle.abort();
-        }
-    }
+    await_full_system_live_worker_stop(session.worker_handle, FULL_SYSTEM_LIVE_WORKER_STOP_TIMEOUT)
+        .await;
 
-    let mut final_samples = {
-        let mut pending = session.runtime.pending_samples.lock().unwrap();
-        std::mem::take(&mut *pending)
-    };
-    let mut final_microphone_samples = {
-        let mut pending = session.runtime.pending_microphone_samples.lock().unwrap();
-        std::mem::take(&mut *pending)
-    };
-    let mut final_system_audio_samples = {
-        let mut pending = session.runtime.pending_system_audio_samples.lock().unwrap();
-        std::mem::take(&mut *pending)
-    };
-    if let Some(tail_samples) = tail_samples {
-        append_full_system_stop_tail_samples(
-            &mut final_samples,
-            &mut final_microphone_samples,
-            &mut final_system_audio_samples,
-            tail_samples,
-        );
-    }
-    let final_source_samples =
-        source_samples_from_buffers(final_microphone_samples, final_system_audio_samples);
-    if !final_source_samples.is_empty() {
-        final_samples = mixed_samples_from_source_samples(&final_source_samples);
-    }
-    if !final_samples.is_empty() || !final_source_samples.is_empty() {
-        let final_chunk = FullSystemLiveChunk {
-            mixed_samples: final_samples,
-            source_samples: final_source_samples,
-        };
-        let final_chunk_timeout =
-            full_system_live_final_chunk_timeout(final_chunk.mixed_samples.len());
-        if timeout(
-            final_chunk_timeout,
-            transcribe_and_summarize_live_chunk(
-                app,
-                &session.runtime,
-                &tm,
-                final_chunk,
-                true,
-                true,
-            ),
+    let finalization_chunks =
+        take_full_system_live_finalization_chunks(&session.runtime, tail_samples);
+    record_full_system_live_finalization_audio(&session.runtime, &finalization_chunks);
+    let finalization_chunk_count = finalization_chunks.len();
+    for (index, finalization) in finalization_chunks.into_iter().enumerate() {
+        let is_final_chunk = index + 1 == finalization_chunk_count;
+        let final_chunk_timeout = full_system_live_final_chunk_timeout(&finalization.chunk);
+        let completed = transcribe_and_summarize_live_chunk(
+            app,
+            &session.runtime,
+            &tm,
+            finalization.chunk,
+            is_final_chunk,
+            false,
+            false,
+            finalization.transcription_task,
+            Some(final_chunk_timeout),
         )
-        .await
-        .is_err()
-        {
-            warn!(
-                "Live full-system final chunk timed out after {:?}; completing stop with collected transcript",
-                final_chunk_timeout
-            );
+        .await;
+        if !completed {
+            break;
         }
     }
 
@@ -4660,104 +5034,121 @@ impl ShortcutAction for FullSystemTranscribeAction {
         }
 
         let start_time = Instant::now();
+        let binding_id = binding_id.to_string();
+        let full_system_audio = app.state::<Arc<FullSystemAudioSessionManager>>();
+        let live_session_status = full_system_live_session_status(&binding_id);
+        let active_session = full_system_audio.active_snapshot();
+        if let Some(existing_decision) = existing_full_system_live_start_decision(
+            &binding_id,
+            active_session.as_ref(),
+            live_session_status,
+        ) {
+            if existing_decision.recording_started {
+                if live_session_status == FullSystemLiveSessionStatus::Finalizing {
+                    // A coordinator panic can leave capture active after Stop has
+                    // signaled the worker. Re-expose the active session so the
+                    // recovered coordinator can dispatch Stop again; the next
+                    // drain still feeds the retained runtime during finalization.
+                    change_tray_icon(app, TrayIconState::Recording);
+                    emit_active_session_window_state(app);
+                }
+                debug!(
+                    "Full-system recording already active for '{}' with {:?} live runtime; reusing capture without duplicate start side effects",
+                    binding_id, live_session_status
+                );
+            } else {
+                debug!(
+                    "Ignoring full-system start for '{}' while its {:?} live runtime is awaiting finalization",
+                    binding_id, live_session_status
+                );
+            }
+            log::info!(
+                "[latency] full-system action repeated start end binding={} recording_started={} live_runtime={:?} elapsed_ms={}",
+                binding_id,
+                existing_decision.recording_started,
+                live_session_status,
+                start_time.elapsed().as_millis()
+            );
+            return;
+        }
 
         let tm = app.state::<Arc<TranscriptionManager>>();
         tm.clear_cancel_request();
         let settings = get_settings(app);
         tm.cancel_incremental_session();
-        let binding_id = binding_id.to_string();
-        let full_system_audio = app.state::<Arc<FullSystemAudioSessionManager>>();
         let rm = app.state::<Arc<AudioRecordingManager>>();
 
         let is_always_on = settings.always_on_microphone;
         debug!("Full-system mode - always_on: {}", is_always_on);
 
-        change_tray_icon(app, TrayIconState::Recording);
-
-        let mut recording_started = false;
         let start_config = crate::full_system_audio_bridge::FullSystemAudioCaptureConfig::default();
-        if is_always_on {
-            let rm_clone = Arc::clone(&rm);
+        let recording_start_time = Instant::now();
+        let start_result = full_system_audio.start_session(&binding_id, start_config);
+        let start_decision = full_system_live_start_decision(&binding_id, &start_result);
+        let recording_started = start_decision.recording_started;
+
+        if start_decision.initialize_live_runtime {
+            start_full_system_live_session(app, &binding_id);
+        }
+
+        if start_decision.perform_start_side_effects {
+            change_tray_icon(app, TrayIconState::Recording);
+            focus_workspace_window(app);
+            emit_active_session_window_state(app);
+            start_transcription_session(app, binding_id.as_str(), true);
+
             let app_clone = app.clone();
+            let rm_clone = Arc::clone(&rm);
             std::thread::spawn(move || {
+                if !is_always_on {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                    debug!("Handling delayed full-system audio feedback/mute sequence");
+                }
                 play_feedback_sound_blocking(&app_clone, SoundType::Start);
                 rm_clone.apply_mute();
             });
 
-            recording_started = full_system_audio
-                .start_session(&binding_id, start_config)
-                .started;
-            debug!("Full-system recording started: {}", recording_started);
+            let preload_model_id = if settings.selected_model.is_empty() {
+                tm.get_current_model().unwrap_or_default()
+            } else {
+                settings.selected_model.clone()
+            };
+            if preload_model_id.is_empty() || !is_cloud_model_id(&preload_model_id) {
+                tm.initiate_model_load();
+            } else {
+                debug!(
+                    "Skipping preload for cloud model '{}' in hot path",
+                    preload_model_id
+                );
+            }
+
             log::info!(
-                "[latency] full-system recording active binding={} recording_started={} elapsed_ms={}",
+                "[latency] full-system session UI active binding={} elapsed_ms={}",
                 binding_id,
-                recording_started,
                 start_time.elapsed().as_millis()
             );
-            if recording_started {
-                focus_workspace_window(app);
-                emit_active_session_window_state(app);
-                start_full_system_live_session(app, &binding_id);
-                log::info!(
-                    "[latency] full-system session UI active binding={} elapsed_ms={}",
-                    binding_id,
-                    start_time.elapsed().as_millis()
-                );
-            }
+        } else if recording_started {
+            debug!(
+                "Recovered missing full-system live runtime for active recording '{}' without duplicate start side effects",
+                binding_id
+            );
         } else {
-            let recording_start_time = Instant::now();
-            if full_system_audio
-                .start_session(&binding_id, start_config)
-                .started
-            {
-                recording_started = true;
-                focus_workspace_window(app);
-                emit_active_session_window_state(app);
-                start_full_system_live_session(app, &binding_id);
-                log::info!(
-                    "[latency] full-system session UI active binding={} elapsed_ms={}",
-                    binding_id,
-                    start_time.elapsed().as_millis()
-                );
-                log::info!(
-                    "[latency] full-system recording active binding={} elapsed_ms={}",
-                    binding_id,
-                    start_time.elapsed().as_millis()
-                );
-                debug!(
-                    "Full-system recording started in {:?}",
-                    recording_start_time.elapsed()
-                );
-                let app_clone = app.clone();
-                let rm_clone = Arc::clone(&rm);
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_millis(100));
-                    debug!("Handling delayed full-system audio feedback/mute sequence");
-                    play_feedback_sound_blocking(&app_clone, SoundType::Start);
-                    rm_clone.apply_mute();
-                });
-            } else {
-                debug!("Failed to start full-system recording");
-            }
-        }
-
-        start_transcription_session(app, binding_id.as_str(), recording_started);
-        if !recording_started {
+            debug!("Failed to start full-system recording");
+            start_transcription_session(app, binding_id.as_str(), false);
             emit_idle_session_window_state(app);
         }
-        let preload_model_id = if settings.selected_model.is_empty() {
-            tm.get_current_model().unwrap_or_default()
-        } else {
-            settings.selected_model.clone()
-        };
-        if preload_model_id.is_empty() || !is_cloud_model_id(&preload_model_id) {
-            tm.initiate_model_load();
-        } else {
-            debug!(
-                "Skipping preload for cloud model '{}' in hot path",
-                preload_model_id
-            );
-        }
+
+        log::info!(
+            "[latency] full-system recording active binding={} recording_started={} new_session_started={} elapsed_ms={}",
+            binding_id,
+            recording_started,
+            start_result.new_session_started,
+            start_time.elapsed().as_millis()
+        );
+        debug!(
+            "Full-system recording start decision completed in {:?}",
+            recording_start_time.elapsed()
+        );
 
         debug!(
             "FullSystemTranscribeAction::start completed in {:?}",
@@ -4793,6 +5184,8 @@ impl ShortcutAction for FullSystemTranscribeAction {
         let hm = Arc::clone(&app.state::<Arc<HistoryManager>>());
         let full_system_audio = app.state::<Arc<FullSystemAudioSessionManager>>();
         let post_process = self.post_process || get_settings(app).post_process_enabled;
+        let finish_guard =
+            FinishGuard::new_full_system(app.clone(), binding_id.to_string(), operation_id);
 
         change_tray_icon(app, TrayIconState::Transcribing);
         utils::hide_recording_overlay(app);
@@ -4834,11 +5227,7 @@ impl ShortcutAction for FullSystemTranscribeAction {
         let live_tm = Arc::clone(&tm);
         let live_hm = Arc::clone(&hm);
         tauri::async_runtime::spawn(async move {
-            let mut completion_owner = CompletionOwner::new(FinishGuard::new(
-                live_app.clone(),
-                live_binding_id.clone(),
-                operation_id,
-            ));
+            let mut completion_owner = CompletionOwner::new(finish_guard);
             let mut ui_guard =
                 UiResetGuard::new(live_app.clone(), TranscriptionCompletionContext::Standalone);
             if let Some(live_final) = finish_full_system_live_session(
@@ -4849,7 +5238,7 @@ impl ShortcutAction for FullSystemTranscribeAction {
             )
             .await
             {
-                if live_final.transcript_text.trim().is_empty() {
+                if !should_persist_full_system_live_final(&live_final) {
                     debug!("Live full-system session stopped without transcript text");
                     emit_session_window_state(
                         &live_app,
@@ -4863,6 +5252,12 @@ impl ShortcutAction for FullSystemTranscribeAction {
                     change_tray_icon(&live_app, TrayIconState::Idle);
                     ui_guard.suppress();
                     return;
+                }
+
+                if live_final.transcript_text.trim().is_empty() {
+                    warn!(
+                        "Saving full-system session audio without transcript after final transcription timeout"
+                    );
                 }
 
                 match persist_full_system_live_final(&live_hm, &live_final).await {
@@ -5066,39 +5461,51 @@ pub static ACTION_MAP: Lazy<HashMap<String, Arc<dyn ShortcutAction>>> = Lazy::ne
 #[cfg(test)]
 mod tests {
     use super::{
-        append_full_system_stop_tail_samples, append_live_transcription_segments,
-        ask_selection_message, ask_selection_payload, ask_selection_session_is_current,
-        await_dictation_post_processing_if_active, build_ask_selection_follow_up_prompt,
-        build_ask_selection_prompt, build_live_summary_prompt,
-        cancel_ask_selection_session_if_owned, cancel_dictation_operation,
-        clean_ask_selection_response, clean_post_process_response, clear_ask_selection_session,
+        append_full_system_live_audio_delta, append_full_system_stop_tail_samples,
+        append_live_transcription_segments, ask_selection_message, ask_selection_payload,
+        ask_selection_session_is_current, await_dictation_post_processing_if_active,
+        await_full_system_live_transcription_task, await_full_system_live_worker_stop,
+        build_ask_selection_follow_up_prompt, build_ask_selection_prompt,
+        build_live_summary_prompt, cancel_ask_selection_session_if_owned,
+        cancel_dictation_operation, clean_ask_selection_response, clean_post_process_response,
+        clear_ask_selection_session, commit_full_system_live_transcription_segments,
         complete_ask_selection_session_with_rollback, complete_dictation_operation_if_active,
         complete_persisted_dictation_if_active, complete_transcription_ui_if_active,
         completion_context_for_active_meeting, current_ask_selection_messages,
         current_ask_selection_session_id, custom_vocabulary_prompt_block,
-        format_labeled_transcript_segments, friendly_live_summary_error,
-        full_system_live_final_chunk_timeout, is_effectively_silent_audio,
+        existing_full_system_live_start_decision, format_labeled_transcript_segments,
+        friendly_live_summary_error, full_system_live_chunk_transcription_timeout,
+        full_system_live_final_chunk_timeout, full_system_live_session_status,
+        full_system_live_start_decision, is_effectively_silent_audio,
         is_effectively_silent_full_system_source_audio, is_supported_post_process_model,
         normalize_live_summary_output, parse_meeting_summary_state, persist_full_system_live_final,
         persist_with_cancellation_rollback, publish_new_ask_selection_session_if_active,
         publish_transcription_error_if_operation_active, quick_dictation_ui_restore_is_current,
-        release_dictation_operation, render_meeting_summary_markdown,
-        resolved_post_process_system_prompt, select_preferred_groq_model,
-        should_pause_live_summaries, should_refresh_microphone_stream_after_suspected_no_input,
-        should_register_cancel_shortcut, should_restore_meeting_ui,
-        should_suppress_quick_dictation_output, should_update_live_summary,
-        snapshot_full_system_live_runtime, toggle_post_process_enabled,
+        reap_full_system_live_transcription_task, record_full_system_live_chunk_samples,
+        record_full_system_live_finalization_audio, release_dictation_operation,
+        render_meeting_summary_markdown, resolved_post_process_system_prompt,
+        select_preferred_groq_model, should_pause_live_summaries,
+        should_persist_full_system_live_final,
+        should_refresh_microphone_stream_after_suspected_no_input, should_register_cancel_shortcut,
+        should_restore_meeting_ui, should_suppress_quick_dictation_output,
+        should_update_live_summary, snapshot_full_system_live_runtime,
+        take_full_system_live_finalization_chunks, take_next_full_system_live_chunk,
+        toggle_post_process_enabled, transcribe_full_system_live_chunk_sources_with,
         transcription_timeout_for_samples, transcription_watchdog_delay,
         update_ask_selection_session, usable_post_processed_text, CompletionOwner,
-        FullSystemLiveRuntime, LabeledTranscriptSegment, MeetingSummaryState, SummaryPoint,
+        FullSystemFinalizationBarrier, FullSystemLiveChunk, FullSystemLiveInFlightChunk,
+        FullSystemLiveRuntime, FullSystemLiveSessionStatus, FullSystemLiveTranscriptionTask,
+        LabeledTranscriptSegment, MeetingSummaryState, SummaryPoint,
         TranscriptionCompletionContext, TranscriptionCompletionMode, ACTION_MAP,
         ACTIVE_QUICK_DICTATION_UI_OPERATION, FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT,
+        FULL_SYSTEM_LIVE_CHUNK_SAMPLES, FULL_SYSTEM_LIVE_CHUNK_SECONDS,
         FULL_SYSTEM_LIVE_FINAL_CHUNK_EXTRA_TIMEOUT, FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL,
     };
     use crate::app_context::AppContextSnapshot;
     use crate::managers::full_system_audio::{
-        FullSystemSessionTranscriptionSamples, FullSystemTranscriptionSource,
-        FullSystemTranscriptionSourceSamples,
+        FullSystemSessionSnapshot, FullSystemSessionStartResult,
+        FullSystemSessionTranscriptionSamples, FullSystemSourceOutcome,
+        FullSystemTranscriptionSource, FullSystemTranscriptionSourceSamples,
     };
     use crate::managers::history::HistoryManager;
     use crate::settings::get_default_settings;
@@ -5111,9 +5518,119 @@ mod tests {
 
     static ASK_SELECTION_TEST_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 
+    fn completed_live_transcription_task(
+        segments: Vec<LabeledTranscriptSegment>,
+    ) -> FullSystemLiveTranscriptionTask {
+        Arc::new(tokio::sync::Mutex::new(tauri::async_runtime::spawn(
+            async move { Ok(segments) },
+        )))
+    }
+
     #[test]
     fn full_system_binding_is_registered_in_action_map() {
         assert!(ACTION_MAP.contains_key("transcribe_full_system_audio"));
+    }
+
+    fn active_full_system_start_result(new_session_started: bool) -> FullSystemSessionStartResult {
+        FullSystemSessionStartResult {
+            session: Some(FullSystemSessionSnapshot {
+                session_id: 1,
+                binding_id: "transcribe_full_system_audio".to_string(),
+                system_audio: FullSystemSourceOutcome::default(),
+                microphone: FullSystemSourceOutcome::default(),
+                degraded: false,
+            }),
+            started: true,
+            new_session_started,
+            bridge_result: None,
+            system_audio_error: None,
+            microphone_error: None,
+        }
+    }
+
+    #[test]
+    fn repeated_full_system_start_preserves_running_or_finalizing_live_runtime() {
+        let repeated = active_full_system_start_result(false);
+        let active_session = repeated.session.as_ref();
+        let decision = existing_full_system_live_start_decision(
+            "transcribe_full_system_audio",
+            active_session,
+            FullSystemLiveSessionStatus::Running,
+        )
+        .expect("existing running runtime decision");
+
+        assert!(decision.recording_started);
+        assert!(!decision.initialize_live_runtime);
+        assert!(!decision.perform_start_side_effects);
+
+        let finalizing_active = existing_full_system_live_start_decision(
+            "transcribe_full_system_audio",
+            active_session,
+            FullSystemLiveSessionStatus::Finalizing,
+        )
+        .expect("existing finalizing runtime decision");
+        assert!(finalizing_active.recording_started);
+        assert!(!finalizing_active.initialize_live_runtime);
+        assert!(!finalizing_active.perform_start_side_effects);
+
+        let finalizing_idle = existing_full_system_live_start_decision(
+            "transcribe_full_system_audio",
+            None,
+            FullSystemLiveSessionStatus::Finalizing,
+        )
+        .expect("finalization barrier decision");
+        assert!(!finalizing_idle.recording_started);
+        assert!(!finalizing_idle.initialize_live_runtime);
+        assert!(!finalizing_idle.perform_start_side_effects);
+
+        assert!(existing_full_system_live_start_decision(
+            "transcribe_full_system_audio",
+            active_session,
+            FullSystemLiveSessionStatus::Missing,
+        )
+        .is_none());
+
+        let missing_runtime =
+            full_system_live_start_decision("transcribe_full_system_audio", &repeated);
+        assert!(missing_runtime.recording_started);
+        assert!(missing_runtime.initialize_live_runtime);
+        assert!(!missing_runtime.perform_start_side_effects);
+
+        let first_start = full_system_live_start_decision(
+            "transcribe_full_system_audio",
+            &active_full_system_start_result(true),
+        );
+        assert!(first_start.recording_started);
+        assert!(first_start.initialize_live_runtime);
+        assert!(first_start.perform_start_side_effects);
+    }
+
+    #[test]
+    fn full_system_finalization_barrier_remains_visible_after_runtime_is_taken() {
+        let binding_id = "test-full-system-finalization-barrier";
+        assert_eq!(
+            full_system_live_session_status(binding_id),
+            FullSystemLiveSessionStatus::Missing
+        );
+
+        let barrier = FullSystemFinalizationBarrier::new(binding_id.to_string(), u64::MAX - 9);
+        let duplicate_barrier =
+            FullSystemFinalizationBarrier::new(binding_id.to_string(), u64::MAX - 9);
+        assert_eq!(
+            full_system_live_session_status(binding_id),
+            FullSystemLiveSessionStatus::Finalizing
+        );
+
+        drop(barrier);
+        assert_eq!(
+            full_system_live_session_status(binding_id),
+            FullSystemLiveSessionStatus::Finalizing
+        );
+        drop(duplicate_barrier);
+        assert_eq!(
+            full_system_live_session_status(binding_id),
+            FullSystemLiveSessionStatus::Missing
+        );
     }
 
     #[test]
@@ -6063,10 +6580,434 @@ mod tests {
     #[test]
     fn live_final_chunk_timeout_includes_extra_shutdown_budget() {
         let sample_count = 16_000 * 60;
+        let chunk = FullSystemLiveChunk {
+            mixed_samples: vec![0.1; sample_count],
+            source_samples: Vec::new(),
+        };
         assert_eq!(
-            full_system_live_final_chunk_timeout(sample_count),
-            transcription_watchdog_delay(sample_count) + FULL_SYSTEM_LIVE_FINAL_CHUNK_EXTRA_TIMEOUT
+            full_system_live_final_chunk_timeout(&chunk),
+            full_system_live_chunk_transcription_timeout(&chunk)
+                + FULL_SYSTEM_LIVE_FINAL_CHUNK_EXTRA_TIMEOUT
         );
+    }
+
+    #[test]
+    fn live_final_chunk_timeout_covers_both_source_transcriptions() {
+        let sample_count = 16_000 * FULL_SYSTEM_LIVE_CHUNK_SECONDS;
+        let chunk = FullSystemLiveChunk {
+            mixed_samples: vec![0.1; sample_count],
+            source_samples: vec![
+                FullSystemTranscriptionSourceSamples {
+                    source: FullSystemTranscriptionSource::Microphone,
+                    samples: vec![0.1; sample_count],
+                },
+                FullSystemTranscriptionSourceSamples {
+                    source: FullSystemTranscriptionSource::SystemAudio,
+                    samples: vec![0.1; sample_count],
+                },
+            ],
+        };
+        let two_source_transcription_budget =
+            transcription_timeout_for_samples(sample_count).saturating_mul(2);
+
+        assert!(
+            full_system_live_final_chunk_timeout(&chunk) > two_source_transcription_budget,
+            "the aggregate final-chunk timeout must not cancel the second source transcription"
+        );
+    }
+
+    #[tokio::test]
+    async fn live_two_source_transcription_commits_both_labeled_segments() {
+        let sample_count = 16_000;
+        let chunk = FullSystemLiveChunk {
+            mixed_samples: vec![0.1; sample_count],
+            source_samples: vec![
+                FullSystemTranscriptionSourceSamples {
+                    source: FullSystemTranscriptionSource::Microphone,
+                    samples: vec![0.1; sample_count],
+                },
+                FullSystemTranscriptionSourceSamples {
+                    source: FullSystemTranscriptionSource::SystemAudio,
+                    samples: vec![0.1; sample_count],
+                },
+            ],
+        };
+
+        let segments =
+            transcribe_full_system_live_chunk_sources_with(chunk, 1, |_, source, _| async move {
+                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                let text = match source {
+                    Some("full_system_audio_microphone") => "local speaker",
+                    Some("full_system_audio_system") => "remote speaker",
+                    unexpected => panic!("unexpected transcription source: {unexpected:?}"),
+                };
+                Ok::<String, anyhow::Error>(text.to_string())
+            })
+            .await
+            .expect("both source transcriptions");
+
+        let runtime = FullSystemLiveRuntime::new();
+        commit_full_system_live_transcription_segments(&runtime, &segments, false)
+            .expect("two-source transcript commit");
+
+        assert_eq!(
+            runtime.transcript_text.lock().unwrap().as_str(),
+            "Me: local speaker\n\nThem: remote speaker"
+        );
+        assert_eq!(runtime.chunk_count.load(Ordering::Relaxed), 1);
+    }
+
+    #[tokio::test]
+    async fn live_stop_recovery_orders_in_flight_before_pending_without_rerecording() {
+        let runtime = FullSystemLiveRuntime::new();
+        runtime
+            .recorded_samples
+            .lock()
+            .unwrap()
+            .extend_from_slice(&[0.1, 0.2]);
+        {
+            let mut audio = runtime.audio_state.lock().unwrap();
+            audio.in_flight_chunk = Some(FullSystemLiveInFlightChunk {
+                chunk: FullSystemLiveChunk {
+                    mixed_samples: vec![0.1, 0.2],
+                    source_samples: vec![FullSystemTranscriptionSourceSamples {
+                        source: FullSystemTranscriptionSource::Microphone,
+                        samples: vec![0.1, 0.2],
+                    }],
+                },
+                transcription_task: completed_live_transcription_task(Vec::new()),
+            });
+            audio.pending_samples.push(0.3);
+            audio.pending_system_audio_samples.push(0.3);
+        }
+
+        let chunks = take_full_system_live_finalization_chunks(
+            &runtime,
+            Some(FullSystemSessionTranscriptionSamples {
+                mixed: Some(vec![9.0]),
+                sources: vec![FullSystemTranscriptionSourceSamples {
+                    source: FullSystemTranscriptionSource::SystemAudio,
+                    samples: vec![0.4],
+                }],
+            }),
+        );
+
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].chunk.mixed_samples, vec![0.1, 0.2]);
+        assert!(!chunks[0].record_samples);
+        assert!(chunks[0].transcription_task.is_some());
+        assert_eq!(chunks[1].chunk.mixed_samples, vec![0.3, 0.4]);
+        assert!(chunks[1].record_samples);
+        assert!(chunks[1].transcription_task.is_none());
+        assert_eq!(
+            runtime.recorded_samples.lock().unwrap().as_slice(),
+            &[0.1, 0.2]
+        );
+        let audio = runtime.audio_state.lock().unwrap();
+        assert!(audio.in_flight_chunk.is_none());
+        assert!(audio.pending_samples.is_empty());
+        assert!(audio.pending_system_audio_samples.is_empty());
+    }
+
+    #[tokio::test]
+    async fn live_chunk_drain_keeps_older_in_flight_and_newer_remainder_recoverable() {
+        let runtime = FullSystemLiveRuntime::new();
+        let mut mixed = vec![0.1; FULL_SYSTEM_LIVE_CHUNK_SAMPLES];
+        mixed.extend(vec![0.2; FULL_SYSTEM_LIVE_CHUNK_SAMPLES]);
+        let mut microphone = vec![0.1; FULL_SYSTEM_LIVE_CHUNK_SAMPLES];
+        microphone.extend(vec![0.2; FULL_SYSTEM_LIVE_CHUNK_SAMPLES]);
+        append_full_system_live_audio_delta(
+            &mut runtime.audio_state.lock().unwrap(),
+            FullSystemSessionTranscriptionSamples {
+                mixed: Some(mixed),
+                sources: vec![FullSystemTranscriptionSourceSamples {
+                    source: FullSystemTranscriptionSource::Microphone,
+                    samples: microphone,
+                }],
+            },
+        );
+
+        let drained = take_next_full_system_live_chunk(&runtime, |_, _| {
+            completed_live_transcription_task(Vec::new())
+        })
+        .expect("first live chunk");
+        assert_eq!(
+            drained.chunk.mixed_samples.len(),
+            FULL_SYSTEM_LIVE_CHUNK_SAMPLES
+        );
+        assert_eq!(drained.chunk.mixed_samples[0], 0.1);
+
+        let chunks = take_full_system_live_finalization_chunks(&runtime, None);
+
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].chunk.mixed_samples[0], 0.1);
+        assert!(!chunks[0].record_samples);
+        assert_eq!(chunks[1].chunk.mixed_samples[0], 0.2);
+        assert_eq!(
+            chunks[1].chunk.mixed_samples.len(),
+            FULL_SYSTEM_LIVE_CHUNK_SAMPLES
+        );
+        assert!(chunks[1].record_samples);
+    }
+
+    #[tokio::test]
+    async fn live_stop_waits_for_blocked_in_flight_commit_without_replay_or_wav_duplication() {
+        let runtime = Arc::new(FullSystemLiveRuntime::new());
+        let samples = vec![0.1; FULL_SYSTEM_LIVE_CHUNK_SAMPLES];
+        append_full_system_live_audio_delta(
+            &mut runtime.audio_state.lock().unwrap(),
+            FullSystemSessionTranscriptionSamples {
+                mixed: Some(samples.clone()),
+                sources: vec![
+                    FullSystemTranscriptionSourceSamples {
+                        source: FullSystemTranscriptionSource::Microphone,
+                        samples: samples.clone(),
+                    },
+                    FullSystemTranscriptionSourceSamples {
+                        source: FullSystemTranscriptionSource::SystemAudio,
+                        samples,
+                    },
+                ],
+            },
+        );
+
+        let started = Arc::new(tokio::sync::Notify::new());
+        let release = Arc::new(tokio::sync::Notify::new());
+        let provider_calls = Arc::new(Mutex::new(Vec::new()));
+        let task_started = Arc::clone(&started);
+        let task_release = Arc::clone(&release);
+        let task_calls = Arc::clone(&provider_calls);
+        let in_flight = take_next_full_system_live_chunk(&runtime, move |chunk, chunk_index| {
+            Arc::new(tokio::sync::Mutex::new(tauri::async_runtime::spawn(
+                async move {
+                    transcribe_full_system_live_chunk_sources_with(
+                        chunk,
+                        chunk_index,
+                        move |_, source, _| {
+                            let started = Arc::clone(&task_started);
+                            let release = Arc::clone(&task_release);
+                            let calls = Arc::clone(&task_calls);
+                            async move {
+                                let source = source.expect("labeled source id");
+                                calls.lock().unwrap().push(source);
+                                let text = match source {
+                                    "full_system_audio_microphone" => {
+                                        started.notify_one();
+                                        release.notified().await;
+                                        "local speaker"
+                                    }
+                                    "full_system_audio_system" => "remote speaker",
+                                    unexpected => {
+                                        panic!("unexpected transcription source: {unexpected}")
+                                    }
+                                };
+                                Ok::<String, anyhow::Error>(text.to_string())
+                            }
+                        },
+                    )
+                    .await
+                },
+            )))
+        })
+        .expect("blocked in-flight live chunk");
+        record_full_system_live_chunk_samples(&runtime, &in_flight.chunk);
+
+        let worker_runtime = Arc::clone(&runtime);
+        let worker_task = Arc::clone(&in_flight.transcription_task);
+        let worker = tauri::async_runtime::spawn(async move {
+            let segments = await_full_system_live_transcription_task(&worker_task)
+                .await
+                .expect("worker transcription result");
+            commit_full_system_live_transcription_segments(&worker_runtime, &segments, true)
+                .expect("blocked chunk transcript commit");
+        });
+
+        started.notified().await;
+        runtime.stop_requested.store(true, Ordering::Relaxed);
+        await_full_system_live_worker_stop(worker, std::time::Duration::from_millis(1)).await;
+
+        release.notify_one();
+        let finalization_chunks = take_full_system_live_finalization_chunks(&runtime, None);
+        assert_eq!(finalization_chunks.len(), 1);
+        let recovered = &finalization_chunks[0];
+        let segments = await_full_system_live_transcription_task(
+            recovered
+                .transcription_task
+                .as_ref()
+                .expect("retained in-flight transcription task"),
+        )
+        .await
+        .expect("stop resumes original transcription task");
+        commit_full_system_live_transcription_segments(&runtime, &segments, false)
+            .expect("stop-side transcript commit");
+
+        assert_eq!(
+            runtime.transcript_text.lock().unwrap().as_str(),
+            "Me: local speaker\n\nThem: remote speaker"
+        );
+        assert_eq!(
+            runtime.recorded_samples.lock().unwrap().len(),
+            FULL_SYSTEM_LIVE_CHUNK_SAMPLES
+        );
+        assert_eq!(runtime.chunk_count.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            provider_calls.lock().unwrap().as_slice(),
+            &["full_system_audio_microphone", "full_system_audio_system"]
+        );
+    }
+
+    #[tokio::test]
+    async fn live_hard_timeout_saves_complete_wav_and_reaps_without_tail_replay() {
+        let runtime = FullSystemLiveRuntime::new();
+        runtime
+            .recorded_samples
+            .lock()
+            .unwrap()
+            .extend_from_slice(&[0.1, 0.2]);
+
+        let release = Arc::new(tokio::sync::Notify::new());
+        let late_task_completed = Arc::new(AtomicBool::new(false));
+        let task_release = Arc::clone(&release);
+        let task_completed = Arc::clone(&late_task_completed);
+        let transcription_task = Arc::new(tokio::sync::Mutex::new(tauri::async_runtime::spawn(
+            async move {
+                task_release.notified().await;
+                task_completed.store(true, Ordering::Release);
+                Ok(vec![LabeledTranscriptSegment {
+                    source: FullSystemTranscriptionSource::Microphone,
+                    text: "late transcript".to_string(),
+                }])
+            },
+        )));
+        {
+            let mut audio = runtime.audio_state.lock().unwrap();
+            audio.in_flight_chunk = Some(FullSystemLiveInFlightChunk {
+                chunk: FullSystemLiveChunk {
+                    mixed_samples: vec![0.1, 0.2],
+                    source_samples: vec![FullSystemTranscriptionSourceSamples {
+                        source: FullSystemTranscriptionSource::Microphone,
+                        samples: vec![0.1, 0.2],
+                    }],
+                },
+                transcription_task: Arc::clone(&transcription_task),
+            });
+            audio.pending_samples.push(0.3);
+            audio.pending_system_audio_samples.push(0.3);
+        }
+
+        let finalization_chunks = take_full_system_live_finalization_chunks(
+            &runtime,
+            Some(FullSystemSessionTranscriptionSamples {
+                mixed: None,
+                sources: vec![FullSystemTranscriptionSourceSamples {
+                    source: FullSystemTranscriptionSource::SystemAudio,
+                    samples: vec![0.4],
+                }],
+            }),
+        );
+        record_full_system_live_finalization_audio(&runtime, &finalization_chunks);
+
+        assert_eq!(finalization_chunks.len(), 2);
+        assert_eq!(
+            runtime.recorded_samples.lock().unwrap().as_slice(),
+            &[0.1, 0.2, 0.3, 0.4]
+        );
+        assert!(finalization_chunks[1].transcription_task.is_none());
+        assert!(tokio::time::timeout(
+            std::time::Duration::from_millis(1),
+            await_full_system_live_transcription_task(&transcription_task),
+        )
+        .await
+        .is_err());
+
+        reap_full_system_live_transcription_task(Arc::clone(&transcription_task));
+        release.notify_one();
+        tokio::time::timeout(std::time::Duration::from_secs(1), async {
+            while !late_task_completed.load(Ordering::Acquire) {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("late transcription reaper completed");
+
+        assert!(runtime.transcript_text.lock().unwrap().is_empty());
+        assert_eq!(runtime.chunk_count.load(Ordering::Relaxed), 0);
+    }
+
+    #[tokio::test]
+    async fn live_first_chunk_timeout_persists_audio_without_a_transcript() {
+        let root = tempfile::tempdir().expect("create history root");
+        let history_manager =
+            HistoryManager::new_for_test(root.path()).expect("create test history manager");
+        let runtime = FullSystemLiveRuntime::new();
+        runtime
+            .recorded_samples
+            .lock()
+            .unwrap()
+            .extend_from_slice(&[0.1, 0.2, 0.3]);
+        runtime
+            .final_transcription_timed_out
+            .store(true, Ordering::Relaxed);
+        *runtime.summary_text.lock().unwrap() = Some(
+            "Audio was saved, but final transcription timed out. The transcript may be incomplete."
+                .to_string(),
+        );
+
+        let live_final = snapshot_full_system_live_runtime(&runtime).expect("audio-only snapshot");
+        assert!(live_final.transcript_text.is_empty());
+        assert!(should_persist_full_system_live_final(&live_final));
+
+        let history_entry_id = persist_full_system_live_final(&history_manager, &live_final)
+            .await
+            .expect("persist audio-only timed-out meeting");
+        let entries = history_manager
+            .get_history_entries()
+            .await
+            .expect("query audio-only timed-out meeting");
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].id, history_entry_id);
+        assert!(entries[0].transcription_text.is_empty());
+        assert!(entries[0]
+            .post_processed_text
+            .as_deref()
+            .is_some_and(|notice| notice.contains("final transcription timed out")));
+        let audio_path = history_manager.get_audio_file_path(&entries[0].file_name);
+        assert!(audio_path.exists());
+        let audio_reader = hound::WavReader::open(audio_path).expect("open persisted timeout WAV");
+        assert_eq!(audio_reader.duration(), 3);
+
+        let ordinary_audio_only_runtime = FullSystemLiveRuntime::new();
+        ordinary_audio_only_runtime
+            .recorded_samples
+            .lock()
+            .unwrap()
+            .push(0.1);
+        let ordinary_audio_only = snapshot_full_system_live_runtime(&ordinary_audio_only_runtime)
+            .expect("ordinary audio-only snapshot");
+        assert!(!should_persist_full_system_live_final(&ordinary_audio_only));
+    }
+
+    #[tokio::test]
+    async fn live_worker_stop_awaits_cancellation_before_recovery() {
+        struct DropProbe(Arc<AtomicBool>);
+
+        impl Drop for DropProbe {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+
+        let dropped = Arc::new(AtomicBool::new(false));
+        let worker_dropped = Arc::clone(&dropped);
+        let worker = tauri::async_runtime::spawn(async move {
+            let _probe = DropProbe(worker_dropped);
+            std::future::pending::<()>().await;
+        });
+        tokio::task::yield_now().await;
+
+        await_full_system_live_worker_stop(worker, std::time::Duration::from_millis(1)).await;
+
+        assert!(dropped.load(Ordering::Acquire));
     }
 
     #[test]
