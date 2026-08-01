@@ -64,6 +64,13 @@ const FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL: u64 =
 const FULL_SYSTEM_SUMMARY_MODEL_FALLBACK: &str = "gpt-4o-mini";
 const FULL_SYSTEM_SUMMARY_SYSTEM_PROMPT: &str = "You are the live meeting summarizer inside Uttr, a macOS transcription app. Update meeting notes from transcript text only. Return valid JSON only with current_gist and expanded key_points.";
 
+fn format_transcription_completion_log(elapsed: Duration, character_count: usize) -> String {
+    format!(
+        "Transcription completed in {:?} (chars={})",
+        elapsed, character_count
+    )
+}
+
 #[derive(Debug, Clone, Default)]
 struct FullSystemLiveChunk {
     mixed_samples: Vec<f32>,
@@ -4176,9 +4183,11 @@ fn handle_transcription_stop(
                     return;
                 }
                 debug!(
-                    "Transcription completed in {:?}: '{}'",
-                    transcription_time.elapsed(),
-                    transcription
+                    "{}",
+                    format_transcription_completion_log(
+                        transcription_time.elapsed(),
+                        transcription.chars().count()
+                    )
                 );
                 if !transcription.is_empty() {
                     let settings = get_settings(&ah);
@@ -5499,11 +5508,12 @@ mod tests {
         completion_context_for_active_meeting, current_ask_selection_messages,
         current_ask_selection_session_id, custom_vocabulary_prompt_block,
         existing_full_system_live_start_decision, format_labeled_transcript_segments,
-        friendly_live_summary_error, full_system_live_chunk_transcription_timeout,
-        full_system_live_final_chunk_timeout, full_system_live_session_status,
-        full_system_live_start_decision, is_effectively_silent_audio,
-        is_effectively_silent_full_system_source_audio, is_supported_post_process_model,
-        normalize_live_summary_output, parse_meeting_summary_state, persist_full_system_live_final,
+        format_transcription_completion_log, friendly_live_summary_error,
+        full_system_live_chunk_transcription_timeout, full_system_live_final_chunk_timeout,
+        full_system_live_session_status, full_system_live_start_decision,
+        is_effectively_silent_audio, is_effectively_silent_full_system_source_audio,
+        is_supported_post_process_model, normalize_live_summary_output,
+        parse_meeting_summary_state, persist_full_system_live_final,
         persist_with_cancellation_rollback, publish_new_ask_selection_session_if_active,
         publish_transcription_error_if_operation_active, quick_dictation_ui_restore_is_current,
         reap_full_system_live_transcription_task, record_full_system_live_chunk_samples,
@@ -5571,6 +5581,21 @@ mod tests {
     #[test]
     fn full_system_binding_is_registered_in_action_map() {
         assert!(ACTION_MAP.contains_key("transcribe_full_system_audio"));
+    }
+
+    #[test]
+    fn transcription_completion_log_excludes_spoken_content() {
+        let sentinel = "private spoken instruction sk-test /Users/alice/private.wav";
+        let message = format_transcription_completion_log(
+            std::time::Duration::from_millis(1_250),
+            sentinel.chars().count(),
+        );
+
+        assert!(message.contains("Transcription completed"));
+        assert!(message.contains(&format!("chars={}", sentinel.chars().count())));
+        assert!(!message.contains(sentinel));
+        assert!(!message.contains("sk-test"));
+        assert!(!message.contains("/Users/alice"));
     }
 
     fn active_full_system_start_result(new_session_started: bool) -> FullSystemSessionStartResult {
