@@ -782,8 +782,18 @@ test.describe("full-system audio settings", () => {
     const dialog = page.getByRole("dialog", { name: /Raw transcript/i });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText("every single month.")).toBeVisible();
+    await expect(
+      dialog.getByRole("button", { name: /Close raw transcript/i }),
+    ).toHaveCSS("cursor", "pointer");
 
-    await dialog.getByRole("button", { name: /Copy raw transcript/i }).click();
+    const copyButton = dialog.getByRole("button", {
+      name: /Copy raw transcript/i,
+    });
+    await expect(copyButton).toHaveCSS("cursor", "pointer");
+    await expect(copyButton).toHaveAttribute("data-copy-state", "idle");
+    await copyButton.hover();
+    await copyButton.click();
+    await expect(copyButton).toHaveAttribute("data-copy-state", "copied");
     await expect
       .poll(() =>
         page.evaluate(() => {
@@ -798,6 +808,9 @@ test.describe("full-system audio settings", () => {
         }),
       )
       .toBe(true);
+    await expect(copyButton).toHaveAttribute("data-copy-state", "idle", {
+      timeout: 2_000,
+    });
 
     await page.keyboard.press("Escape");
     await expect(dialog).toBeHidden();

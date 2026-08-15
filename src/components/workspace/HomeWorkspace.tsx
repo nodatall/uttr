@@ -848,6 +848,10 @@ const RawTranscriptDialog: React.FC<RawTranscriptDialogProps> = ({
   onClose,
 }) => {
   const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+  const copiedResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -862,6 +866,15 @@ const RawTranscriptDialog: React.FC<RawTranscriptDialogProps> = ({
     };
   }, [onClose]);
 
+  useEffect(
+    () => () => {
+      if (copiedResetTimerRef.current) {
+        clearTimeout(copiedResetTimerRef.current);
+      }
+    },
+    [],
+  );
+
   const copyRawTranscript = useCallback(async () => {
     if (!rawTranscript) {
       return;
@@ -869,6 +882,14 @@ const RawTranscriptDialog: React.FC<RawTranscriptDialogProps> = ({
 
     try {
       await writeText(rawTranscript);
+      setCopied(true);
+      if (copiedResetTimerRef.current) {
+        clearTimeout(copiedResetTimerRef.current);
+      }
+      copiedResetTimerRef.current = setTimeout(() => {
+        setCopied(false);
+        copiedResetTimerRef.current = null;
+      }, 1000);
     } catch (error) {
       toast.error(String(error));
     }
@@ -907,17 +928,26 @@ const RawTranscriptDialog: React.FC<RawTranscriptDialogProps> = ({
             <button
               type="button"
               onClick={copyRawTranscript}
-              className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-text/70 transition hover:bg-white/[0.08] hover:text-text"
+              data-copy-state={copied ? "copied" : "idle"}
+              className={`group grid h-9 w-9 cursor-pointer place-items-center rounded-full border transition-all duration-150 ${
+                copied
+                  ? "border-logo-primary/35 bg-logo-primary/12 text-logo-primary shadow-[inset_0_0_0_1px_rgba(103,215,163,0.12)]"
+                  : "border-white/10 bg-white/[0.04] text-text/70 hover:border-white/20 hover:bg-white/[0.09] hover:text-text"
+              }`}
               aria-label={t("workspace.home.copyRawTranscript", {
                 defaultValue: "Copy raw transcript",
               })}
             >
-              <Copy className="h-4 w-4" />
+              <Copy
+                className={`h-4 w-4 transition-transform duration-150 ${
+                  copied ? "scale-110" : "group-hover:scale-110"
+                }`}
+              />
             </button>
             <button
               type="button"
               onClick={onClose}
-              className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-text/70 transition hover:bg-white/[0.08] hover:text-text"
+              className="grid h-9 w-9 cursor-pointer place-items-center rounded-full border border-white/10 bg-white/[0.04] text-text/70 transition hover:bg-white/[0.08] hover:text-text"
               aria-label={t("workspace.home.closeRawTranscript", {
                 defaultValue: "Close raw transcript",
               })}
