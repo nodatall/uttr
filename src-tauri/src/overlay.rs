@@ -68,6 +68,7 @@ pub struct AskSelectionMessage {
 pub struct AskSelectionPayload {
     pub state: String,
     pub text: Option<String>,
+    pub selected_text: Option<String>,
     pub error: Option<String>,
     pub session_id: Option<u64>,
     pub messages: Vec<AskSelectionMessage>,

@@ -482,6 +482,20 @@ pub async fn start_full_system_audio_session(app: AppHandle) -> Result<(), Strin
     Ok(())
 }
 
+trait MeetingStopRequest {
+    fn request_meeting_stop(&self);
+}
+
+impl MeetingStopRequest for TranscriptionCoordinator {
+    fn request_meeting_stop(&self) {
+        TranscriptionCoordinator::request_meeting_stop(self);
+    }
+}
+
+fn dispatch_meeting_stop(request: &impl MeetingStopRequest) {
+    request.request_meeting_stop();
+}
+
 #[tauri::command]
 #[specta::specta]
 pub fn stop_full_system_audio_session(app: AppHandle) -> Result<(), String> {
@@ -490,7 +504,7 @@ pub fn stop_full_system_audio_session(app: AppHandle) -> Result<(), String> {
     let coordinator = app
         .try_state::<TranscriptionCoordinator>()
         .ok_or_else(|| "Transcription coordinator is not initialized.".to_string())?;
-    coordinator.send_input("transcribe_full_system_audio", "Home Stop", true, false);
+    dispatch_meeting_stop(&*coordinator);
 
     Ok(())
 }
@@ -498,7 +512,29 @@ pub fn stop_full_system_audio_session(app: AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::Cell;
     use tauri_plugin_os::Version;
+
+    struct FakeMeetingStopRequest {
+        calls: Cell<usize>,
+    }
+
+    impl MeetingStopRequest for FakeMeetingStopRequest {
+        fn request_meeting_stop(&self) {
+            self.calls.set(self.calls.get() + 1);
+        }
+    }
+
+    #[test]
+    fn ui_stop_dispatches_explicit_meeting_stop_request_once() {
+        let request = FakeMeetingStopRequest {
+            calls: Cell::new(0),
+        };
+
+        dispatch_meeting_stop(&request);
+
+        assert_eq!(request.calls.get(), 1);
+    }
 
     #[test]
     fn macos_13_or_later_is_reported_as_supported() {

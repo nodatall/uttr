@@ -11,9 +11,10 @@ import {
 } from "@/lib/utils/rtl";
 
 // Auto-discover translation files without loading every locale into startup.
-const localeModules = import.meta.glob<{ default: Record<string, unknown> }>(
-  ["./locales/*/translation.json", "!./locales/en/translation.json"],
-);
+const localeModules = import.meta.glob<{ default: Record<string, unknown> }>([
+  "./locales/*/translation.json",
+  "!./locales/en/translation.json",
+]);
 
 const localeCodes = [
   "en",

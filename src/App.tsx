@@ -40,8 +40,8 @@ import { getLanguageDirection, initializeRTL } from "@/lib/utils/rtl";
 type OnboardingStep = "accessibility" | "done";
 const PERMISSION_CHECK_TIMEOUT_MS = 1500;
 
-const AccessibilityOnboarding = lazy(() =>
-  import("./components/onboarding/AccessibilityOnboarding"),
+const AccessibilityOnboarding = lazy(
+  () => import("./components/onboarding/AccessibilityOnboarding"),
 );
 
 const SectionLoading = () => (
@@ -167,26 +167,14 @@ type AppAction =
   | { type: "section"; section: SidebarSection }
   | { type: "open_session_entry"; entry: HistoryEntry }
   | { type: "clock_tick"; now: number }
-  | { type: "sync_clock_for_stage"; stage: SessionWindowStage; now: number }
   | { type: "show_history_entry"; entryId: number | null; token: number }
   | {
       type: "session_window_state";
       nextState: SessionWindowState;
       previousStage: SessionWindowStage;
       token: number;
+      now: number;
     };
-
-const getInitialAppState = (): AppState => ({
-  onboardingStep: null,
-  currentSection: "home",
-  historyFocusRequest: null,
-  sessionWindowState: getInitialSessionWindowState(),
-  sessionClock: {
-    recordingStartedAt: null,
-    recordingStoppedAt: null,
-    clockNow: Date.now(),
-  },
-});
 
 const getClockForStage = (
   clock: SessionClockState,
@@ -194,10 +182,14 @@ const getClockForStage = (
   now: number,
 ): SessionClockState => {
   if (stage === "active") {
+    const startedAt =
+      clock.recordingStoppedAt === null ? clock.recordingStartedAt : null;
+
     return {
       ...clock,
-      recordingStartedAt: clock.recordingStartedAt ?? now,
+      recordingStartedAt: startedAt ?? now,
       recordingStoppedAt: null,
+      clockNow: now,
     };
   }
 
@@ -217,6 +209,28 @@ const getClockForStage = (
   }
 
   return clock;
+};
+
+const getInitialAppState = (): AppState => {
+  const now = Date.now();
+  const sessionWindowState = getInitialSessionWindowState();
+  const sessionClock = getClockForStage(
+    {
+      recordingStartedAt: null,
+      recordingStoppedAt: null,
+      clockNow: now,
+    },
+    sessionWindowState.stage,
+    now,
+  );
+
+  return {
+    onboardingStep: null,
+    currentSection: "home",
+    historyFocusRequest: null,
+    sessionWindowState,
+    sessionClock,
+  };
 };
 
 const appReducer = (state: AppState, action: AppAction): AppState => {
@@ -250,15 +264,6 @@ const appReducer = (state: AppState, action: AppAction): AppState => {
         ...state,
         sessionClock: { ...state.sessionClock, clockNow: action.now },
       };
-    case "sync_clock_for_stage":
-      return {
-        ...state,
-        sessionClock: getClockForStage(
-          state.sessionClock,
-          action.stage,
-          action.now,
-        ),
-      };
     case "show_history_entry":
       return {
         ...state,
@@ -287,6 +292,11 @@ const appReducer = (state: AppState, action: AppAction): AppState => {
             }
           : state.historyFocusRequest,
         sessionWindowState: action.nextState,
+        sessionClock: getClockForStage(
+          state.sessionClock,
+          action.nextState.stage,
+          action.now,
+        ),
       };
     }
   }
@@ -326,14 +336,6 @@ function useAppController() {
       dispatch({ type: "clock_tick", now: Date.now() });
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [sessionWindowState.stage]);
-
-  useEffect(() => {
-    dispatch({
-      type: "sync_clock_for_stage",
-      stage: sessionWindowState.stage,
-      now: Date.now(),
-    });
   }, [sessionWindowState.stage]);
 
   useEffect(() => {
@@ -445,13 +447,15 @@ function useAppController() {
     listen<SessionWindowState>("session-window-state", (event) => {
       const nextState = event.payload;
       const previousStage = sessionStageRef.current;
+      const now = Date.now();
       sessionStageRef.current = nextState.stage;
 
       dispatch({
         type: "session_window_state",
         nextState,
         previousStage,
-        token: Date.now(),
+        token: now,
+        now,
       });
     }).then((unlisten) => {
       unlistenFn = unlisten;

@@ -1,15 +1,25 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
+import { listen } from "@tauri-apps/api/event";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
   Activity,
   AudioLines,
   CheckCircle2,
+  Copy,
   FileText,
   History as HistoryIcon,
   Play,
   Square,
   X,
 } from "lucide-react";
+import SiriWave from "siriwave";
 import { toast } from "sonner";
 import { commands } from "@/bindings";
 import { Button } from "@/components/ui/Button";
@@ -54,6 +64,31 @@ const isLiveSession = (stage: SessionWindowStage) =>
 const isSessionProcessing = (stage: SessionWindowStage) =>
   stage === "preparing" || stage === "transcribing" || stage === "processing";
 
+const clamp = (value: number, min: number, max: number) =>
+  Math.min(max, Math.max(min, value));
+
+const MEETING_WAVE_CURVES = [
+  { color: "255,255,255", supportLine: true },
+  { color: "102,217,255" },
+  { color: "170,120,255" },
+  { color: "96,243,191" },
+];
+const MEETING_WAVE_IDLE_AMPLITUDE = 0.08;
+const MEETING_WAVE_IDLE_SPEED = 0.012;
+const MEETING_WAVE_MIN_AMPLITUDE = 0.55;
+const MEETING_WAVE_MAX_AMPLITUDE = 2.25;
+const MEETING_WAVE_MIN_SPEED = 0.055;
+const MEETING_WAVE_MAX_SPEED = 0.155;
+const MEETING_WAVE_ENERGY_POWER = 0.56;
+const MEETING_WAVE_QUIET_GAIN = 2.2;
+const MEETING_WAVE_QUIET_FLOOR = 0.08;
+const MEETING_WAVE_ATTACK_KEEP = 0.18;
+const MEETING_WAVE_ATTACK_NEW = 0.82;
+const MEETING_WAVE_RELEASE_KEEP = 0.46;
+const MEETING_WAVE_RELEASE_NEW = 0.54;
+const MEETING_WAVE_SILENCE_GATE = 0.0025;
+const MEETING_WAVE_BASELINE_OFFSET_PX = 5;
+
 type SummarySectionKey = "current_gist" | "key_points";
 type MeetingView = "record" | "history";
 type PendingSessionAction = "start" | "stop" | null;
@@ -69,6 +104,11 @@ interface SummarySection {
   lines: string[];
 }
 
+interface ParsedSummary {
+  preamble: string;
+  sections: SummarySection[];
+}
+
 const SUMMARY_SECTION_TITLES: Record<string, SummarySection> = {
   "current gist": {
     key: "current_gist",
@@ -82,13 +122,16 @@ const SUMMARY_SECTION_TITLES: Record<string, SummarySection> = {
   },
 };
 
-const parseSummarySections = (summary: string): SummarySection[] => {
+const parseSummarySections = (summary: string): ParsedSummary => {
   const sections: SummarySection[] = [];
+  const preambleLines: string[] = [];
   let current: SummarySection | null = null;
+  let sawHeading = false;
 
   for (const rawLine of summary.split(/\r?\n/)) {
     const heading = rawLine.match(/^#{1,3}\s+(.+?)\s*$/);
     if (heading) {
+      sawHeading = true;
       const template = SUMMARY_SECTION_TITLES[heading[1].trim().toLowerCase()];
       if (template) {
         current = {
@@ -105,6 +148,8 @@ const parseSummarySections = (summary: string): SummarySection[] => {
 
     if (current) {
       current.lines.push(rawLine);
+    } else if (!sawHeading) {
+      preambleLines.push(rawLine);
     }
   }
 
@@ -122,7 +167,10 @@ const parseSummarySections = (summary: string): SummarySection[] => {
     });
   }
 
-  return uniqueSections;
+  return {
+    preamble: preambleLines.join("\n").trim(),
+    sections: uniqueSections,
+  };
 };
 
 const cleanBulletText = (line: string): string => line.replace(/^\s*-\s*/, "");
@@ -272,6 +320,218 @@ interface HomeHeaderProps {
   onSelectHistory: () => void;
 }
 
+const MeetingAudioWave: React.FC<{
+  active: boolean;
+  statusLabel: string;
+}> = ({ active, statusLabel }) => {
+  const hostRef = useRef<HTMLDivElement | null>(null);
+  const waveRef = useRef<SiriWave | null>(null);
+  const metricsRef = useRef({ width: 0, height: 0, ratio: 1 });
+  const smoothedLevelsRef = useRef<number[]>(Array(16).fill(0));
+
+  const disposeWave = useCallback(() => {
+    waveRef.current?.dispose();
+    waveRef.current = null;
+  }, []);
+
+  const syncWave = useCallback(
+    (levels = smoothedLevelsRef.current) => {
+      if (!active || !waveRef.current) {
+        return;
+      }
+
+      const average =
+        levels.reduce((sum, level) => sum + level, 0) / levels.length;
+      const peak = Math.max(...levels, 0);
+      const energy = clamp(
+        Math.pow(Math.max(average, peak * 0.42), MEETING_WAVE_ENERGY_POWER) *
+          MEETING_WAVE_QUIET_GAIN +
+          MEETING_WAVE_QUIET_FLOOR,
+        0,
+        1,
+      );
+      const amplitude = clamp(
+        MEETING_WAVE_MIN_AMPLITUDE +
+          energy * (MEETING_WAVE_MAX_AMPLITUDE - MEETING_WAVE_MIN_AMPLITUDE),
+        MEETING_WAVE_MIN_AMPLITUDE,
+        MEETING_WAVE_MAX_AMPLITUDE,
+      );
+      const speed = clamp(
+        MEETING_WAVE_MIN_SPEED +
+          energy * (MEETING_WAVE_MAX_SPEED - MEETING_WAVE_MIN_SPEED),
+        MEETING_WAVE_MIN_SPEED,
+        MEETING_WAVE_MAX_SPEED,
+      );
+
+      if (!waveRef.current.run) {
+        waveRef.current.start();
+      }
+      waveRef.current.setAmplitude(amplitude);
+      waveRef.current.setSpeed(speed);
+    },
+    [active],
+  );
+
+  const createWave = useCallback(() => {
+    const host = hostRef.current;
+    const { width, height, ratio } = metricsRef.current;
+    if (!active || !host || width <= 0 || height <= 0) {
+      return;
+    }
+
+    disposeWave();
+    waveRef.current = new SiriWave({
+      container: host,
+      style: "ios9",
+      ratio,
+      width,
+      height,
+      autostart: true,
+      amplitude: MEETING_WAVE_IDLE_AMPLITUDE,
+      speed: MEETING_WAVE_IDLE_SPEED,
+      pixelDepth: 0.02,
+      lerpSpeed: 0.11,
+      globalCompositeOperation: "lighter",
+      curveDefinition: MEETING_WAVE_CURVES,
+      ranges: {
+        noOfCurves: [4, 7],
+        amplitude: [1.7, 3.4],
+        offset: [-2.4, 2.4],
+        width: [0.9, 2.2],
+        speed: [0.55, 1.1],
+        despawnTimeout: [900, 2200],
+      },
+    });
+    syncWave();
+  }, [active, disposeWave, syncWave]);
+
+  useEffect(() => {
+    if (!active) {
+      disposeWave();
+      return;
+    }
+
+    const host = hostRef.current;
+    if (!host) {
+      return;
+    }
+
+    const syncMetrics = () => {
+      const nextWidth = host.clientWidth;
+      const nextHeight = host.clientHeight;
+      const nextRatio = window.devicePixelRatio || 1;
+      const yShift = MEETING_WAVE_BASELINE_OFFSET_PX / nextRatio;
+      host.style.setProperty("--meeting-wave-y-shift", `${yShift}px`);
+
+      const current = metricsRef.current;
+      const changed =
+        current.width !== nextWidth ||
+        current.height !== nextHeight ||
+        Math.abs(current.ratio - nextRatio) > 0.001;
+
+      if (!changed) {
+        return;
+      }
+
+      metricsRef.current = {
+        width: nextWidth,
+        height: nextHeight,
+        ratio: nextRatio,
+      };
+      createWave();
+    };
+
+    syncMetrics();
+
+    const resizeObserver = new ResizeObserver(syncMetrics);
+    resizeObserver.observe(host);
+    window.addEventListener("resize", syncMetrics);
+
+    return () => {
+      resizeObserver.disconnect();
+      window.removeEventListener("resize", syncMetrics);
+      disposeWave();
+    };
+  }, [active, createWave, disposeWave]);
+
+  useEffect(() => {
+    if (!active) {
+      return;
+    }
+
+    let disposed = false;
+    let unlistenFn: (() => void) | undefined;
+
+    listen<number[]>("mic-level", (event) => {
+      if (disposed) {
+        return;
+      }
+
+      const nextLevels = event.payload;
+      smoothedLevelsRef.current = smoothedLevelsRef.current.map(
+        (previous, i) => {
+          const target = nextLevels[i] || 0;
+          if (
+            target < MEETING_WAVE_SILENCE_GATE &&
+            previous < MEETING_WAVE_SILENCE_GATE * 1.5
+          ) {
+            return 0;
+          }
+
+          if (target > previous) {
+            return (
+              previous * MEETING_WAVE_ATTACK_KEEP +
+              target * MEETING_WAVE_ATTACK_NEW
+            );
+          }
+
+          const released =
+            previous * MEETING_WAVE_RELEASE_KEEP +
+            target * MEETING_WAVE_RELEASE_NEW;
+          return released < MEETING_WAVE_SILENCE_GATE * 0.5 ? 0 : released;
+        },
+      );
+      syncWave(smoothedLevelsRef.current);
+    }).then((unlisten) => {
+      if (disposed) {
+        unlisten();
+        return;
+      }
+      unlistenFn = unlisten;
+    });
+
+    return () => {
+      disposed = true;
+      if (unlistenFn) {
+        unlistenFn();
+      }
+    };
+  }, [active, syncWave]);
+
+  useEffect(() => {
+    if (!active || waveRef.current) {
+      return;
+    }
+    createWave();
+  }, [active, createWave]);
+
+  return (
+    <div
+      className="relative h-9 w-[176px] overflow-hidden"
+      role="img"
+      aria-label={statusLabel}
+      data-testid="meeting-audio-wave"
+    >
+      <div
+        ref={hostRef}
+        className="absolute inset-x-0 top-[-30%] h-[160%] [&_canvas]:block [&_canvas]:h-full [&_canvas]:w-full [&_canvas]:translate-y-[var(--meeting-wave-y-shift,0px)] [&_canvas]:overflow-hidden [&_canvas]:opacity-100 [&_canvas]:drop-shadow-[0_0_5px_rgba(86,208,255,0.28)] [&_canvas]:saturate-[1.32]"
+        aria-hidden
+      />
+      <span className="sr-only">{statusLabel}</span>
+    </div>
+  );
+};
+
 const HomeHeader: React.FC<HomeHeaderProps> = ({
   showingHistory,
   live,
@@ -306,21 +566,25 @@ const HomeHeader: React.FC<HomeHeaderProps> = ({
             </p>
           </>
         ) : live || complete ? (
-          <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
             {showElapsed && (
               <span className="font-mono text-2xl font-semibold tabular-nums tracking-tight text-text">
                 {elapsedLabel}
               </span>
             )}
-            <span
-              className={
-                showElapsed
-                  ? "text-sm font-medium text-logo-primary"
-                  : "text-2xl font-semibold tracking-tight text-text"
-              }
-            >
-              {statusLabel}
-            </span>
+            {recording ? (
+              <MeetingAudioWave active={recording} statusLabel={statusLabel} />
+            ) : (
+              <span
+                className={
+                  showElapsed
+                    ? "text-sm font-medium text-logo-primary"
+                    : "text-2xl font-semibold tracking-tight text-text"
+                }
+              >
+                {statusLabel}
+              </span>
+            )}
           </div>
         ) : isStarting ? (
           <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1">
@@ -403,50 +667,49 @@ const HomeHeader: React.FC<HomeHeaderProps> = ({
             </span>
           </Button>
         ) : null}
-        {!live && (
-          <fieldset
-            className="flex rounded-full border border-white/8 bg-white/[0.025] p-1"
-            aria-label={t("workspace.home.viewToggle", {
+        <fieldset
+          className="flex min-w-[204px] rounded-full border border-white/8 bg-white/[0.025] p-1"
+          aria-label={t("workspace.home.viewToggle", {
+            defaultValue: "Meetings view",
+          })}
+          disabled={live}
+        >
+          <legend className="sr-only">
+            {t("workspace.home.viewToggle", {
               defaultValue: "Meetings view",
             })}
+          </legend>
+          <button
+            type="button"
+            onClick={onSelectRecord}
+            className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium transition ${
+              !showingHistory
+                ? "bg-logo-primary/14 text-logo-primary shadow-[inset_0_0_0_1px_rgba(103,215,163,0.18)]"
+                : "text-text/58 hover:bg-white/[0.04] hover:text-text disabled:hover:bg-transparent disabled:hover:text-text/58"
+            }`}
+            aria-pressed={!showingHistory}
           >
-            <legend className="sr-only">
-              {t("workspace.home.viewToggle", {
-                defaultValue: "Meetings view",
-              })}
-            </legend>
-            <button
-              type="button"
-              onClick={onSelectRecord}
-              className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium transition ${
-                !showingHistory
-                  ? "bg-logo-primary/14 text-logo-primary shadow-[inset_0_0_0_1px_rgba(103,215,163,0.18)]"
-                  : "text-text/58 hover:bg-white/[0.04] hover:text-text"
-              }`}
-              aria-pressed={!showingHistory}
-            >
-              <AudioLines className="h-4 w-4" />
-              <span>
-                {t("workspace.home.recordView", { defaultValue: "Record" })}
-              </span>
-            </button>
-            <button
-              type="button"
-              onClick={onSelectHistory}
-              className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium transition ${
-                showingHistory
-                  ? "bg-logo-primary/14 text-logo-primary shadow-[inset_0_0_0_1px_rgba(103,215,163,0.18)]"
-                  : "text-text/58 hover:bg-white/[0.04] hover:text-text"
-              }`}
-              aria-pressed={showingHistory}
-            >
-              <HistoryIcon className="h-4 w-4" />
-              <span>
-                {t("workspace.home.historyView", { defaultValue: "History" })}
-              </span>
-            </button>
-          </fieldset>
-        )}
+            <AudioLines className="h-4 w-4" />
+            <span>
+              {t("workspace.home.recordView", { defaultValue: "Record" })}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={onSelectHistory}
+            className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-sm font-medium transition ${
+              showingHistory
+                ? "bg-logo-primary/14 text-logo-primary shadow-[inset_0_0_0_1px_rgba(103,215,163,0.18)]"
+                : "text-text/58 hover:bg-white/[0.04] hover:text-text disabled:hover:bg-transparent disabled:hover:text-text/58"
+            }`}
+            aria-pressed={showingHistory}
+          >
+            <HistoryIcon className="h-4 w-4" />
+            <span>
+              {t("workspace.home.historyView", { defaultValue: "History" })}
+            </span>
+          </button>
+        </fieldset>
       </div>
     </div>
   );
@@ -458,6 +721,7 @@ interface SessionSummaryPanelProps {
   isStarting: boolean;
   hasRawTranscript: boolean;
   sessionBody: string;
+  summaryPreamble: string;
   summarySections: SummarySection[];
   onOpenRawTranscript: () => void;
 }
@@ -468,6 +732,7 @@ const SessionSummaryPanel: React.FC<SessionSummaryPanelProps> = ({
   isStarting,
   hasRawTranscript,
   sessionBody,
+  summaryPreamble,
   summarySections,
   onOpenRawTranscript,
 }) => {
@@ -512,6 +777,15 @@ const SessionSummaryPanel: React.FC<SessionSummaryPanelProps> = ({
             </div>
             {summarySections.length > 0 ? (
               <div className="space-y-7">
+                {summaryPreamble && (
+                  <p
+                    role="alert"
+                    data-testid="session-summary-preamble"
+                    className="whitespace-pre-wrap rounded-2xl border border-amber-400/20 bg-amber-300/8 px-3.5 py-3 text-sm leading-6 text-amber-100/88"
+                  >
+                    {summaryPreamble}
+                  </p>
+                )}
                 {summarySections.map((section) => (
                   <SummarySectionView key={section.key} section={section} />
                 ))}
@@ -574,15 +848,66 @@ const RawTranscriptDialog: React.FC<RawTranscriptDialogProps> = ({
   onClose,
 }) => {
   const { t } = useTranslation();
+  const [copied, setCopied] = useState(false);
+  const copiedResetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
+
+  useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [onClose]);
+
+  useEffect(
+    () => () => {
+      if (copiedResetTimerRef.current) {
+        clearTimeout(copiedResetTimerRef.current);
+      }
+    },
+    [],
+  );
+
+  const copyRawTranscript = useCallback(async () => {
+    if (!rawTranscript) {
+      return;
+    }
+
+    try {
+      await writeText(rawTranscript);
+      setCopied(true);
+      if (copiedResetTimerRef.current) {
+        clearTimeout(copiedResetTimerRef.current);
+      }
+      copiedResetTimerRef.current = setTimeout(() => {
+        setCopied(false);
+        copiedResetTimerRef.current = null;
+      }, 1000);
+    } catch (error) {
+      toast.error(String(error));
+    }
+  }, [rawTranscript]);
 
   return (
-    <dialog
-      open
-      className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-6 backdrop-blur-sm"
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/42 p-6 backdrop-blur-sm"
       aria-modal="true"
       aria-labelledby="raw-transcript-title"
+      role="dialog"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
     >
-      <div className="flex max-h-[78vh] w-full max-w-3xl flex-col overflow-hidden rounded-[18px] border border-white/10 bg-[#070d16] shadow-2xl">
+      <div className="flex max-h-[78vh] w-[min(880px,calc(100vw-3rem))] flex-col overflow-hidden rounded-[18px] border border-white/10 bg-[#070d16] shadow-2xl">
         <div className="flex items-center justify-between gap-4 border-b border-white/8 px-5 py-4">
           <div className="space-y-1">
             <h2
@@ -599,16 +924,37 @@ const RawTranscriptDialog: React.FC<RawTranscriptDialogProps> = ({
               })}
             </p>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            className="grid h-9 w-9 place-items-center rounded-full border border-white/10 bg-white/[0.04] text-text/70 transition hover:bg-white/[0.08] hover:text-text"
-            aria-label={t("workspace.home.closeRawTranscript", {
-              defaultValue: "Close raw transcript",
-            })}
-          >
-            <X className="h-4 w-4" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={copyRawTranscript}
+              data-copy-state={copied ? "copied" : "idle"}
+              className={`group grid h-9 w-9 cursor-pointer place-items-center rounded-full border transition-all duration-150 ${
+                copied
+                  ? "border-logo-primary/35 bg-logo-primary/12 text-logo-primary shadow-[inset_0_0_0_1px_rgba(103,215,163,0.12)]"
+                  : "border-white/10 bg-white/[0.04] text-text/70 hover:border-white/20 hover:bg-white/[0.09] hover:text-text"
+              }`}
+              aria-label={t("workspace.home.copyRawTranscript", {
+                defaultValue: "Copy raw transcript",
+              })}
+            >
+              <Copy
+                className={`h-4 w-4 transition-transform duration-150 ${
+                  copied ? "scale-110" : "group-hover:scale-110"
+                }`}
+              />
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="grid h-9 w-9 cursor-pointer place-items-center rounded-full border border-white/10 bg-white/[0.04] text-text/70 transition hover:bg-white/[0.08] hover:text-text"
+              aria-label={t("workspace.home.closeRawTranscript", {
+                defaultValue: "Close raw transcript",
+              })}
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
         <div className="overflow-auto p-5">
           {labeledTranscriptTurns.length > 0 ? (
@@ -640,7 +986,7 @@ const RawTranscriptDialog: React.FC<RawTranscriptDialogProps> = ({
           )}
         </div>
       </div>
-    </dialog>
+    </div>
   );
 };
 
@@ -689,7 +1035,7 @@ export const HomeWorkspace: React.FC<HomeWorkspaceProps> = ({
           defaultValue:
             "Uttr is recording system audio and microphone audio. The summary appears here as the session is processed.",
         }));
-  const summarySections = useMemo(
+  const parsedSummary = useMemo(
     () => parseSummarySections(sessionBody),
     [sessionBody],
   );
@@ -817,7 +1163,8 @@ export const HomeWorkspace: React.FC<HomeWorkspaceProps> = ({
           isStarting={isStarting}
           hasRawTranscript={hasRawTranscript}
           sessionBody={sessionBody}
-          summarySections={summarySections}
+          summaryPreamble={parsedSummary.preamble}
+          summarySections={parsedSummary.sections}
           onOpenRawTranscript={() => setIsTranscriptModalOpen(true)}
         />
       )}

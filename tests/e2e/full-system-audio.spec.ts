@@ -1,5 +1,16 @@
 import { expect, test, type Page } from "@playwright/test";
 
+type SessionWindowState = {
+  stage: string;
+  title: string;
+  subtitle: string;
+  progressLabel: string;
+  progressValue: number;
+  summaryText: string | null;
+  rawTranscriptText: string | null;
+  historyEntryId: number | null;
+};
+
 type FullSystemAudioTestState = {
   settings: {
     record_full_system_audio: boolean;
@@ -77,26 +88,9 @@ type FullSystemAudioTestState = {
     post_process_prompt: string | null;
     recording_source: string;
   }>;
-  startFullSystemAudioSessionEvent?: {
-    stage: string;
-    title: string;
-    subtitle: string;
-    progressLabel: string;
-    progressValue: number;
-    summaryText: string | null;
-    rawTranscriptText: string | null;
-    historyEntryId: number | null;
-  };
-  sessionWindowState?: {
-    stage: string;
-    title: string;
-    subtitle: string;
-    progressLabel: string;
-    progressValue: number;
-    summaryText: string | null;
-    rawTranscriptText: string | null;
-    historyEntryId: number | null;
-  };
+  startFullSystemAudioSessionEvent?: SessionWindowState;
+  stopFullSystemAudioSessionEvent?: SessionWindowState;
+  sessionWindowState?: SessionWindowState;
   fullSystemAudio: {
     supportStatus: {
       supported: boolean;
@@ -339,6 +333,8 @@ async function installBrowserMocks(
           case "plugin:event|unlisten":
             eventListeners.delete(Number(args.eventId));
             return null;
+          case "plugin:clipboard-manager|write_text":
+            return null;
           case "get_current_model":
             return "parakeet-tdt-0.6b-v3";
           case "has_any_models_available":
@@ -410,6 +406,14 @@ async function installBrowserMocks(
             return null;
           case "stop_full_system_audio_session":
             e2eState.stoppedFullSystemAudioSessions += 1;
+            if (e2eState.stopFullSystemAudioSessionEvent) {
+              e2eState.sessionWindowState =
+                e2eState.stopFullSystemAudioSessionEvent;
+              dispatchTauriEvent(
+                "session-window-state",
+                e2eState.stopFullSystemAudioSessionEvent,
+              );
+            }
             return null;
           case "change_binding":
             return { success: true, error: null };
@@ -600,7 +604,7 @@ test.describe("full-system audio settings", () => {
     ).toHaveCount(0);
     await expect(
       workspace.getByRole("button", { name: /^History$/i }),
-    ).toHaveCount(0);
+    ).toBeDisabled();
 
     await workspace.getByRole("button", { name: /^Stop$/i }).click();
 
@@ -649,6 +653,103 @@ test.describe("full-system audio settings", () => {
     ).toBeVisible();
   });
 
+  test("starts each new meeting timer at zero", async ({ page }) => {
+    const state = createTestState(false, true);
+    state.sessionWindowState = {
+      stage: "active",
+      title: "Live session",
+      subtitle: "Capturing system audio and microphone audio.",
+      progressLabel: "Recording",
+      progressValue: 0,
+      summaryText: null,
+      rawTranscriptText: null,
+      historyEntryId: null,
+    };
+    state.stopFullSystemAudioSessionEvent = {
+      stage: "complete",
+      title: "Session saved",
+      subtitle: "The transcript is ready under Meetings.",
+      progressLabel: "Complete",
+      progressValue: 1,
+      summaryText: "First session summary.",
+      rawTranscriptText: "First session transcript.",
+      historyEntryId: 42,
+    };
+    state.startFullSystemAudioSessionEvent = {
+      stage: "active",
+      title: "Live session",
+      subtitle: "Capturing system audio and microphone audio.",
+      progressLabel: "Recording",
+      progressValue: 0,
+      summaryText: null,
+      rawTranscriptText: null,
+      historyEntryId: null,
+    };
+    await installBrowserMocks(page, state);
+
+    await page.goto("/");
+
+    const workspace = page.getByTestId("home-workspace");
+    await expect(workspace.getByText(/^0:0[1-9]$/).first()).toBeVisible({
+      timeout: 10000,
+    });
+    await workspace.getByRole("button", { name: /^Stop$/i }).click();
+    await expect(
+      workspace.getByRole("button", { name: /^Start$/i }),
+    ).toBeVisible();
+
+    await page.evaluate(() => {
+      const root = document.querySelector('[data-testid="home-workspace"]');
+      const startButton = Array.from(
+        root?.querySelectorAll("button") ?? [],
+      ).find((button) => button.textContent?.trim() === "Start");
+      const observedLabels: string[] = [];
+      const recordTimer = () => {
+        const label = Array.from(root?.querySelectorAll("span") ?? [])
+          .map((element) => element.textContent?.trim() ?? "")
+          .find((text) => /^\d+:\d{2}$/.test(text));
+        if (label && observedLabels.at(-1) !== label) {
+          observedLabels.push(label);
+        }
+      };
+      const observer = new MutationObserver(recordTimer);
+      if (root) {
+        observer.observe(root, {
+          childList: true,
+          characterData: true,
+          subtree: true,
+        });
+      }
+      startButton?.addEventListener(
+        "click",
+        () => {
+          observedLabels.length = 0;
+        },
+        { capture: true, once: true },
+      );
+      (
+        window as unknown as {
+          __UTTR_TIMER_LABELS__: string[];
+        }
+      ).__UTTR_TIMER_LABELS__ = observedLabels;
+    });
+
+    await workspace.getByRole("button", { name: /^Start$/i }).click();
+    await expect(workspace.getByText(/^0:00$/).first()).toBeVisible();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __UTTR_TIMER_LABELS__: string[];
+              }
+            ).__UTTR_TIMER_LABELS__[0],
+        ),
+      )
+      .toBe("0:00");
+  });
+
   test("shows saved session summary separately from the raw transcript", async ({
     page,
   }) => {
@@ -681,6 +782,38 @@ test.describe("full-system audio settings", () => {
     const dialog = page.getByRole("dialog", { name: /Raw transcript/i });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByText("every single month.")).toBeVisible();
+    await expect(
+      dialog.getByRole("button", { name: /Close raw transcript/i }),
+    ).toHaveCSS("cursor", "pointer");
+
+    const copyButton = dialog.getByRole("button", {
+      name: /Copy raw transcript/i,
+    });
+    await expect(copyButton).toHaveCSS("cursor", "pointer");
+    await expect(copyButton).toHaveAttribute("data-copy-state", "idle");
+    await copyButton.hover();
+    await copyButton.click();
+    await expect(copyButton).toHaveAttribute("data-copy-state", "copied");
+    await expect
+      .poll(() =>
+        page.evaluate(() => {
+          const e2eState = (
+            window as unknown as { __UTTR_E2E__: FullSystemAudioTestState }
+          ).__UTTR_E2E__;
+          return e2eState.invokedCommands.some(
+            ({ cmd, args }) =>
+              cmd === "plugin:clipboard-manager|write_text" &&
+              args.text === e2eState.sessionWindowState?.rawTranscriptText,
+          );
+        }),
+      )
+      .toBe(true);
+    await expect(copyButton).toHaveAttribute("data-copy-state", "idle", {
+      timeout: 2_000,
+    });
+
+    await page.keyboard.press("Escape");
+    await expect(dialog).toBeHidden();
   });
 
   test("hides legacy action and timeline sections in saved meetings", async ({
@@ -711,6 +844,33 @@ test.describe("full-system audio settings", () => {
     await expect(
       workspace.getByText(/Old timeline item that should not show/),
     ).toHaveCount(0);
+  });
+
+  test("shows a final transcription timeout before a structured saved summary", async ({
+    page,
+  }) => {
+    const state = createTestState(false, true);
+    state.sessionWindowState = {
+      stage: "complete",
+      title: "Session saved",
+      subtitle: "The transcript is ready under Meetings.",
+      progressLabel: "Complete",
+      progressValue: 1,
+      summaryText:
+        "Audio was saved, but final transcription timed out. The transcript may be incomplete.\n\n## Current gist\nEarlier meeting gist.\n\n## Key points\n- Earlier captured point.",
+      rawTranscriptText: "Me: earlier captured transcript",
+      historyEntryId: 44,
+    };
+    await installBrowserMocks(page, state);
+
+    await page.goto("/");
+
+    const workspace = page.getByTestId("home-workspace");
+    await expect(
+      workspace.getByTestId("session-summary-preamble"),
+    ).toContainText("final transcription timed out");
+    await expect(workspace.getByText("Earlier meeting gist.")).toBeVisible();
+    await expect(workspace.getByText("Earlier captured point.")).toBeVisible();
   });
 
   test("opens a saved meeting from Meetings history with its summary", async ({

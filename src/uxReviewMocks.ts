@@ -307,6 +307,9 @@ const installInitialNavigation = () => {
       case "plugin:event|emit":
         dispatchTauriEvent(args.event, args.payload);
         return null;
+      case "plugin:clipboard-manager|write_text":
+        review.clipboardText = args.text;
+        return null;
       case "get_current_model":
       case "get_transcription_model_status":
         return "parakeet-tdt-0.6b-v3";

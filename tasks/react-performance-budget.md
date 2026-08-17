@@ -19,14 +19,14 @@ Vite server after clearing older aborted dev-server processes.
 
 ## Final Budget
 
-| Flow | Ready signal | Median | Mean | Max | Budget |
-| --- | --- | ---: | ---: | ---: | --- |
-| `startup-home-ready` | `Ready to start` | 72 ms | 109 ms | 262 ms | median <= 80 ms, mean <= 130 ms |
-| `open-settings` | `Application Language` | 40 ms | 60 ms | 148 ms | median <= 60 ms, mean <= 80 ms |
-| `open-files` | `Choose Audio File` | 49 ms | 51 ms | 99 ms | median <= 60 ms, mean <= 80 ms |
-| `open-transcriptions` | `Showing latest 20 entries` | 53 ms | 53 ms | 71 ms | median <= 60 ms, mean <= 80 ms |
-| `open-models` | `Parakeet` | 33 ms | 40 ms | 73 ms | median <= 60 ms, mean <= 80 ms |
-| `open-api-keys` | `OpenAI` | 34 ms | 39 ms | 65 ms | median <= 60 ms, mean <= 80 ms |
+| Flow                  | Ready signal                | Median |   Mean |    Max | Budget                          |
+| --------------------- | --------------------------- | -----: | -----: | -----: | ------------------------------- |
+| `startup-home-ready`  | `Ready to start`            |  72 ms | 109 ms | 262 ms | median <= 80 ms, mean <= 130 ms |
+| `open-settings`       | `Application Language`      |  40 ms |  60 ms | 148 ms | median <= 60 ms, mean <= 80 ms  |
+| `open-files`          | `Choose Audio File`         |  49 ms |  51 ms |  99 ms | median <= 60 ms, mean <= 80 ms  |
+| `open-transcriptions` | `Showing latest 20 entries` |  53 ms |  53 ms |  71 ms | median <= 60 ms, mean <= 80 ms  |
+| `open-models`         | `Parakeet`                  |  33 ms |  40 ms |  73 ms | median <= 60 ms, mean <= 80 ms  |
+| `open-api-keys`       | `OpenAI`                    |  34 ms |  39 ms |  65 ms | median <= 60 ms, mean <= 80 ms  |
 
 Console health budget: no repeated startup or flow-specific warnings/errors.
 The final benchmark run recorded zero warnings/errors.
@@ -43,14 +43,14 @@ The same pass also removed two initial-path imports from the local
 `components/settings` barrel so the app does not eagerly traverse unrelated
 settings exports from `HomeWorkspace` and `SettingsWorkspace`.
 
-| Flow | Controlled before medians | Controlled after medians | Result |
-| --- | ---: | ---: | --- |
-| `startup-home-ready` | 76-80 ms | 68-75 ms | Improved beyond the observed 4 ms before-run spread. |
-| `open-api-keys` | 49-53 ms | 31-34 ms | Clearest page-flow improvement; no budget regression. |
-| `open-transcriptions` | 49-51 ms | 33-42 ms | Improved in settled after-runs; final run stayed within budget. |
-| `open-settings` | 37-41 ms | 40 ms | Within measurement noise; no regression. |
-| `open-files` | 32-40 ms | 35-49 ms | Within observed local scheduling noise and still under budget. |
-| `open-models` | 33-35 ms | 33-34 ms | No meaningful change. |
+| Flow                  | Controlled before medians | Controlled after medians | Result                                                          |
+| --------------------- | ------------------------: | -----------------------: | --------------------------------------------------------------- |
+| `startup-home-ready`  |                  76-80 ms |                 68-75 ms | Improved beyond the observed 4 ms before-run spread.            |
+| `open-api-keys`       |                  49-53 ms |                 31-34 ms | Clearest page-flow improvement; no budget regression.           |
+| `open-transcriptions` |                  49-51 ms |                 33-42 ms | Improved in settled after-runs; final run stayed within budget. |
+| `open-settings`       |                  37-41 ms |                    40 ms | Within measurement noise; no regression.                        |
+| `open-files`          |                  32-40 ms |                 35-49 ms | Within observed local scheduling noise and still under budget.  |
+| `open-models`         |                  33-35 ms |                 33-34 ms | No meaningful change.                                           |
 
 ## Peer-Outlier Rule
 

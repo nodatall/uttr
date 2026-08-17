@@ -63,6 +63,8 @@ The site expects these runtime variables:
 - `UTTR_INSTALL_TOKEN_SECRET` - signing secret for install tokens.
 - `UTTR_CLAIM_TOKEN_SECRET` - signing secret for claim tokens.
 - `UTTR_SESSION_SECRET` - signing secret for account sessions.
+- `UTTR_DIAGNOSTICS_IDENTITY_SECRET` - server-held HMAC secret used to hash desktop diagnostic install and user identities before storage.
+- `UTTR_DIAGNOSTICS_DISABLED` - optional kill switch for diagnostic intake; set to `true` to accept and drop diagnostic events without writing them.
 - `RESEND_API_KEY` - optional email provider secret for transactional mail.
 - `EMAIL_FROM` - optional sender identity for transactional mail.
 - `EMAIL_SUPPORT` - optional support mailbox override for transactional mail.
@@ -74,6 +76,14 @@ Apply database migrations before running the purchase/account routes:
 ```bash
 npm run db:migrate
 ```
+
+Prune short-lived diagnostic events daily from Railway with:
+
+```bash
+npm run diagnostics:prune
+```
+
+From a local checkout, run `railway link` before configuring the Railway daily scheduled job because this repo is not currently linked to a Railway project here. Use `npm run diagnostics:prune -- --dry-run` to count rows older than seven days without deleting them.
 
 ## Stripe Setup
 
@@ -118,6 +128,7 @@ Copy the emitted signing secret to `STRIPE_WEBHOOK_SECRET`.
 - `POST /api/billing/portal` create a Stripe billing portal session
 - `POST /api/checkout` create Stripe checkout session
 - `GET /api/entitlement` resolve install entitlement and trial state
+- `POST /api/diagnostics/event` accept short-lived BYOK failure diagnostic metadata
 - `POST /api/session/summary` summarize a live session transcript chunk set
 - `POST /api/stripe/webhook` process Stripe webhooks
 - `POST /api/transcribe/cloud` proxy default cloud transcription

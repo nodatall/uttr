@@ -2,7 +2,8 @@ use crate::access::{bootstrap_install_state, refresh_entitlement_state, request_
 use crate::audio_toolkit::{
     apply_custom_words, filter_transcription_output, trim_proxy_upload_audio,
 };
-use crate::groq_client;
+use crate::diagnostics::{report_byok_transcription_failure, report_missing_byok_api_key};
+use crate::groq_client::{self, DirectTranscriptionProvider};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::model::{
     groq_api_model_name, is_cloud_model_id, openai_api_model_name, EngineType, ModelInfo,
@@ -242,6 +243,15 @@ fn is_punctuation_only_transcription(text: &str) -> bool {
 fn should_suppress_silence_hallucination(levels: Option<(f32, f32)>, transcription: &str) -> bool {
     const SILENCE_HALLUCINATIONS: &[&str] =
         &["thank you", "thanks for watching", "thank you for watching"];
+    const ALWAYS_SUPPRESS_HALLUCINATIONS: &[&str] = &[
+        "subtitles by the amara org community",
+        "subtitles by amara org community",
+    ];
+
+    let normalized = normalized_silence_hallucination_text(transcription);
+    if ALWAYS_SUPPRESS_HALLUCINATIONS.contains(&normalized.as_str()) {
+        return true;
+    }
 
     let Some(levels) = levels else {
         return false;
@@ -251,7 +261,6 @@ fn should_suppress_silence_hallucination(levels: Option<(f32, f32)>, transcripti
         return is_near_silent_punctuation_candidate(levels);
     }
 
-    let normalized = normalized_silence_hallucination_text(transcription);
     if !SILENCE_HALLUCINATIONS.contains(&normalized.as_str()) {
         return false;
     }
@@ -1032,10 +1041,21 @@ impl TranscriptionManager {
     ) -> Result<String> {
         let groq_model = groq_api_model_name(model_id)
             .ok_or_else(|| anyhow::anyhow!("Unknown Groq model id: {}", model_id))?;
-        let api_key = self
-            .resolve_byok_groq_api_key()
-            .ok_or_else(|| anyhow::anyhow!("Groq API key is required for hidden BYOK mode."))?;
+        let api_key = match self.resolve_byok_groq_api_key() {
+            Some(api_key) => api_key,
+            None => {
+                let error = report_missing_byok_api_key(
+                    settings,
+                    DirectTranscriptionProvider::Groq,
+                    model_id,
+                    audio.len(),
+                    "Groq API key is required for hidden BYOK mode.",
+                );
+                return Err(anyhow::anyhow!(error.to_string()));
+            }
+        };
 
+        let request_started = Instant::now();
         match groq_client::transcribe_samples_direct(
             &api_key,
             groq_model,
@@ -1047,6 +1067,14 @@ impl TranscriptionManager {
         {
             Ok(text) => Ok(text),
             Err(groq_error) => {
+                report_byok_transcription_failure(
+                    settings,
+                    model_id,
+                    audio.len(),
+                    request_started.elapsed(),
+                    &groq_error,
+                );
+
                 if !allow_local_fallback_on_cloud_error {
                     return Err(anyhow::anyhow!(
                         "Groq transcription failed during incremental chunking: {}",
@@ -1111,10 +1139,21 @@ impl TranscriptionManager {
     ) -> Result<String> {
         let openai_model = openai_api_model_name(model_id)
             .ok_or_else(|| anyhow::anyhow!("Unknown OpenAI model id: {}", model_id))?;
-        let api_key = self
-            .resolve_byok_openai_api_key()
-            .ok_or_else(|| anyhow::anyhow!("OpenAI API key is required for this model."))?;
+        let api_key = match self.resolve_byok_openai_api_key() {
+            Some(api_key) => api_key,
+            None => {
+                let error = report_missing_byok_api_key(
+                    settings,
+                    DirectTranscriptionProvider::OpenAi,
+                    model_id,
+                    audio.len(),
+                    "OpenAI API key is required for this model.",
+                );
+                return Err(anyhow::anyhow!(error.to_string()));
+            }
+        };
 
+        let request_started = Instant::now();
         match groq_client::transcribe_samples_direct_openai(
             &api_key,
             openai_model,
@@ -1165,6 +1204,13 @@ impl TranscriptionManager {
                             );
                         }
                         Err(retry_error) => {
+                            report_byok_transcription_failure(
+                                settings,
+                                model_id,
+                                boosted_audio.len(),
+                                request_started.elapsed(),
+                                &retry_error,
+                            );
                             warn!("OpenAI quiet audio rescue failed: {}", retry_error);
                         }
                     }
@@ -1200,6 +1246,14 @@ impl TranscriptionManager {
                 .await
             }
             Err(openai_error) => {
+                report_byok_transcription_failure(
+                    settings,
+                    model_id,
+                    audio.len(),
+                    request_started.elapsed(),
+                    &openai_error,
+                );
+
                 if !allow_local_fallback_on_cloud_error {
                     return Err(anyhow::anyhow!(
                         "OpenAI transcription failed during incremental chunking: {}",
@@ -2731,6 +2785,26 @@ mod tests {
         assert!(should_suppress_silence_hallucination(
             quiet_levels,
             "Thank you!"
+        ));
+    }
+
+    #[test]
+    fn silence_hallucination_detection_suppresses_amara_subtitle_boilerplate() {
+        let quiet_levels = audio_levels(&[0.0, 0.0005, -0.0004, 0.0003, 0.0]);
+
+        assert!(should_suppress_silence_hallucination(
+            quiet_levels,
+            "Subtitles by the Amara.org community"
+        ));
+    }
+
+    #[test]
+    fn silence_hallucination_detection_suppresses_amara_boilerplate_over_music_levels() {
+        let music_like_levels = audio_levels(&[0.0, 0.08, -0.07, 0.06, -0.05, 0.04]);
+
+        assert!(should_suppress_silence_hallucination(
+            music_like_levels,
+            "Subtitles by the Amara.org community"
         ));
     }
 

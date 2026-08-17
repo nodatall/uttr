@@ -3,6 +3,13 @@ use once_cell::sync::Lazy;
 use regex::Regex;
 use strsim::levenshtein;
 
+const ASR_PROMPT_LEAK_FRAGMENTS: &[&str] = &[
+    "Transcribe short desktop dictation accurately.",
+    "The speaker may be quiet, fast, or mumbled.",
+    "If speech is present, transcribe the spoken words verbatim with normal punctuation.",
+    "Preserve spoken filler words and hesitation sounds such as um, uh, uhm, and uhh.",
+];
+
 /// Builds an n-gram string by cleaning and concatenating words
 ///
 /// Strips punctuation from each word, lowercases, and joins without spaces.
@@ -253,12 +260,28 @@ static FILLER_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
         .collect()
 });
 
+static ASR_PROMPT_LEAK_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
+    ASR_PROMPT_LEAK_FRAGMENTS
+        .iter()
+        .map(|fragment| Regex::new(&format!(r"(?i){}", regex::escape(fragment))).unwrap())
+        .collect()
+});
+
+fn strip_asr_prompt_leaks(text: &str) -> String {
+    let mut filtered = text.to_string();
+    for pattern in ASR_PROMPT_LEAK_PATTERNS.iter() {
+        filtered = pattern.replace_all(&filtered, " ").to_string();
+    }
+    filtered
+}
+
 /// Filters transcription output by removing filler words and stutter artifacts.
 ///
 /// This function cleans up raw transcription text by:
-/// 1. Removing filler words (uh, um, hmm, etc.)
-/// 2. Collapsing repeated 1-2 letter stutters (e.g., "wh wh wh" -> "wh")
-/// 3. Cleaning up excess whitespace
+/// 1. Removing known ASR prompt leakage
+/// 2. Removing filler words (uh, um, hmm, etc.)
+/// 3. Collapsing repeated 1-2 letter stutters (e.g., "wh wh wh" -> "wh")
+/// 4. Cleaning up excess whitespace
 ///
 /// # Arguments
 /// * `text` - The raw transcription text to filter
@@ -266,7 +289,7 @@ static FILLER_PATTERNS: Lazy<Vec<Regex>> = Lazy::new(|| {
 /// # Returns
 /// The filtered text with filler words and stutters removed
 pub fn filter_transcription_output(text: &str) -> String {
-    let mut filtered = text.to_string();
+    let mut filtered = strip_asr_prompt_leaks(text);
 
     // Remove filler words
     for pattern in FILLER_PATTERNS.iter() {
@@ -372,6 +395,23 @@ mod tests {
         let text = "This is a completely normal sentence.";
         let result = filter_transcription_output(text);
         assert_eq!(result, "This is a completely normal sentence.");
+    }
+
+    #[test]
+    fn test_filter_removes_asr_prompt_leak() {
+        let text = "And right now my mortgage is like $1.3 million, $7. The speaker may be quiet, fast, or mumbled. If speech is present, transcribe the spoken words verbatim with normal punctuation. I've been working on this for a while now.";
+        let result = filter_transcription_output(text);
+        assert_eq!(
+            result,
+            "And right now my mortgage is like $1.3 million, $7. I've been working on this for a while now."
+        );
+    }
+
+    #[test]
+    fn test_filter_removes_full_asr_prompt_leak() {
+        let text = "Before. Transcribe short desktop dictation accurately. The speaker may be quiet, fast, or mumbled. If speech is present, transcribe the spoken words verbatim with normal punctuation. Preserve spoken filler words and hesitation sounds such as um, uh, uhm, and uhh. After.";
+        let result = filter_transcription_output(text);
+        assert_eq!(result, "Before. After.");
     }
 
     #[test]

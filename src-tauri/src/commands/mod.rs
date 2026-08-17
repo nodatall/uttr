@@ -5,15 +5,14 @@ pub mod models;
 pub mod transcription;
 
 use crate::settings::{get_settings, write_settings, AppSettings, ByokValidationState, LogLevel};
-use crate::utils::cancel_current_operation;
 use std::collections::HashMap;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_opener::OpenerExt;
 
 #[tauri::command]
 #[specta::specta]
-pub fn cancel_operation(app: AppHandle) {
-    cancel_current_operation(&app);
+pub fn cancel_operation(_app: AppHandle) {
+    transcription::request_file_transcription_cancel();
 }
 
 #[tauri::command]
