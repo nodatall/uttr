@@ -7,7 +7,7 @@
     "build": "NODE_ENV=production next build",
     "start": "NODE_ENV=production next start",
     "lint": "eslint",
-    "test": "bun test",
+    "test": "bun scripts/run-tests.mjs",
     "db:migrate": "node scripts/run-migrations.mjs",
     "diagnostics:prune": "node scripts/prune-diagnostics.mjs"
   },
