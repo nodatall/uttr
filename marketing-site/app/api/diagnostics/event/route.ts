@@ -1,10 +1,8 @@
 import { NextResponse } from "next/server";
-import {
-  fetchAnonymousTrialById,
-  readInstallTokenFromRequest,
-  verifyInstallToken,
-  type InstallTokenPayload,
-} from "@/lib/access";
+import { fetchAnonymousTrialById } from "@/lib/access/postgres";
+import { readInstallTokenFromRequest } from "@/lib/access/request";
+import { verifyInstallToken } from "@/lib/access/tokens";
+import type { InstallTokenPayload } from "@/lib/access/types";
 import {
   DIAGNOSTIC_BODY_LIMIT_BYTES,
   hashDiagnosticIdentity,

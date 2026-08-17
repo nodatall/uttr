@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { POST } from "./route";
 import { setDbExecutorForTests } from "@/lib/db";
 import { resetRateLimitForTests } from "@/lib/rate-limit";
@@ -97,6 +98,19 @@ afterEach(() => {
 });
 
 describe("diagnostics event route", () => {
+  test("isolates access imports from unrelated route module mocks", () => {
+    const routeSource = readFileSync(
+      new URL("./route.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(routeSource).not.toContain('from "@/lib/access"');
+    expect(routeSource).toContain('from "@/lib/access/postgres"');
+    expect(routeSource).toContain('from "@/lib/access/request"');
+    expect(routeSource).toContain('from "@/lib/access/tokens"');
+    expect(routeSource).toContain('from "@/lib/access/types"');
+  });
+
   test("accepts valid anonymous events and does not store raw install id", async () => {
     const calls: { sql: string; values: readonly unknown[] }[] = [];
     process.env.UTTR_FORCE_DURABLE_RATE_LIMITS = "true";
