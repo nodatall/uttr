@@ -537,172 +537,149 @@ mod tests {
     }
 
     #[test]
-    fn macos_13_or_later_is_reported_as_supported() {
-        let support = support_status_from_environment(&Version::Semantic(13, 0, 0), true, true);
+    fn support_status_covers_supported_platform_combinations() {
+        let cases = [
+            (
+                "supported",
+                Version::Semantic(13, 0, 0),
+                true,
+                true,
+                true,
+                None,
+            ),
+            (
+                "old macOS",
+                Version::Semantic(12, 6, 1),
+                true,
+                true,
+                false,
+                Some("macOS 13 or later"),
+            ),
+            (
+                "non-macOS",
+                Version::Semantic(14, 0, 0),
+                false,
+                false,
+                false,
+                Some("macOS 13 or later"),
+            ),
+            (
+                "bridge unavailable",
+                Version::Semantic(13, 0, 0),
+                true,
+                false,
+                false,
+                Some("unavailable in this build"),
+            ),
+        ];
 
-        assert!(support.supported);
-        assert!(support.reason.is_none());
+        for (name, version, is_macos, bridge_supported, expected_supported, reason) in cases {
+            let support = support_status_from_environment(&version, is_macos, bridge_supported);
+            assert_eq!(support.supported, expected_supported, "case: {name}");
+            match reason {
+                Some(fragment) => assert!(
+                    support
+                        .reason
+                        .as_deref()
+                        .unwrap_or_default()
+                        .contains(fragment),
+                    "case: {name}"
+                ),
+                None => assert!(support.reason.is_none(), "case: {name}"),
+            }
+        }
     }
 
     #[test]
-    fn macos_12_is_reported_as_unsupported() {
-        let support = support_status_from_environment(&Version::Semantic(12, 6, 1), true, true);
+    fn readiness_status_covers_support_and_permission_states() {
+        let cases = [
+            (
+                "unsupported",
+                false,
+                None,
+                false,
+                None,
+                Some("macOS 13 or later"),
+            ),
+            (
+                "permission not determined",
+                true,
+                Some(FullSystemAudioPermissionState::NotDetermined),
+                false,
+                Some(false),
+                Some("Screen Recording access"),
+            ),
+            (
+                "permission denied",
+                true,
+                Some(FullSystemAudioPermissionState::Denied),
+                false,
+                Some(false),
+                Some("Grant Screen Recording access"),
+            ),
+            (
+                "permission granted",
+                true,
+                Some(FullSystemAudioPermissionState::Granted),
+                true,
+                Some(true),
+                None,
+            ),
+        ];
 
-        assert!(!support.supported);
-        assert!(support
-            .reason
-            .expect("missing support reason")
-            .contains("macOS 13 or later"));
+        for (name, supported, permission, ready, granted, reason) in cases {
+            let support = FullSystemAudioSupportStatus {
+                supported,
+                reason: (!supported).then(|| {
+                    "Full-system audio recording is available on macOS 13 or later.".to_string()
+                }),
+            };
+            let readiness = readiness_status_from_permission(support, permission);
+
+            assert_eq!(readiness.supported, supported, "case: {name}");
+            assert_eq!(readiness.ready, ready, "case: {name}");
+            assert_eq!(
+                readiness.screen_recording_permission_granted, granted,
+                "case: {name}"
+            );
+            match reason {
+                Some(fragment) => assert!(
+                    readiness
+                        .reason
+                        .as_deref()
+                        .unwrap_or_default()
+                        .contains(fragment),
+                    "case: {name}"
+                ),
+                None => assert!(readiness.reason.is_none(), "case: {name}"),
+            }
+        }
     }
 
     #[test]
-    fn non_macos_platform_is_reported_as_unsupported() {
-        let support = support_status_from_environment(&Version::Semantic(14, 0, 0), false, false);
+    fn toggle_result_covers_enable_and_disable_outcomes() {
+        let cases = [
+            ("failed enable", true, false, false, true),
+            ("successful enable", true, true, true, false),
+            ("explicit disable", false, false, false, false),
+        ];
 
-        assert!(!support.supported);
-        assert!(support
-            .reason
-            .expect("missing support reason")
-            .contains("macOS 13 or later"));
-    }
+        for (name, requested, ready, stored, has_error) in cases {
+            let support = FullSystemAudioSupportStatus {
+                supported: true,
+                reason: None,
+            };
+            let readiness = FullSystemAudioReadinessStatus {
+                supported: true,
+                ready,
+                screen_recording_permission_granted: Some(ready),
+                reason: (!ready).then(|| "Grant Screen Recording access.".to_string()),
+            };
+            let toggle = toggle_result_from_readiness(requested, support, readiness);
 
-    #[test]
-    fn macos_13_without_bridge_support_is_reported_as_unsupported() {
-        let support = support_status_from_environment(&Version::Semantic(13, 0, 0), true, false);
-
-        assert!(!support.supported);
-        assert!(support
-            .reason
-            .expect("missing support reason")
-            .contains("unavailable in this build"));
-    }
-
-    #[test]
-    fn readiness_requires_screen_recording_permission_when_supported() {
-        let support = FullSystemAudioSupportStatus {
-            supported: true,
-            reason: None,
-        };
-
-        let readiness = readiness_status_from_permission(
-            support,
-            Some(FullSystemAudioPermissionState::NotDetermined),
-        );
-
-        assert!(!readiness.ready);
-        assert_eq!(readiness.screen_recording_permission_granted, Some(false));
-        assert!(readiness
-            .reason
-            .expect("missing readiness reason")
-            .contains("Screen Recording access"));
-    }
-
-    #[test]
-    fn readiness_is_not_ready_when_support_is_missing() {
-        let support = FullSystemAudioSupportStatus {
-            supported: false,
-            reason: Some("Full-system audio recording is available on macOS 13 or later.".into()),
-        };
-
-        let readiness = readiness_status_from_permission(support, None);
-
-        assert!(!readiness.supported);
-        assert!(!readiness.ready);
-        assert!(readiness.reason.is_some());
-    }
-
-    #[test]
-    fn toggle_result_refuses_to_store_enabled_when_readiness_fails() {
-        let support = FullSystemAudioSupportStatus {
-            supported: true,
-            reason: None,
-        };
-        let readiness = FullSystemAudioReadinessStatus {
-            supported: true,
-            ready: false,
-            screen_recording_permission_granted: Some(false),
-            reason: Some("Grant Screen Recording access.".into()),
-        };
-
-        let toggle = toggle_result_from_readiness(true, support, readiness);
-
-        assert!(toggle.requested_enabled);
-        assert!(!toggle.stored_enabled);
-        assert!(toggle.error.is_some());
-    }
-
-    #[test]
-    fn toggle_result_stores_enabled_when_readiness_succeeds() {
-        let support = FullSystemAudioSupportStatus {
-            supported: true,
-            reason: None,
-        };
-        let readiness = FullSystemAudioReadinessStatus {
-            supported: true,
-            ready: true,
-            screen_recording_permission_granted: Some(true),
-            reason: None,
-        };
-
-        let toggle = toggle_result_from_readiness(true, support, readiness);
-
-        assert!(toggle.requested_enabled);
-        assert!(toggle.stored_enabled);
-        assert!(toggle.error.is_none());
-    }
-
-    #[test]
-    fn toggle_result_always_keeps_disabled_state_when_requested() {
-        let support = FullSystemAudioSupportStatus {
-            supported: true,
-            reason: None,
-        };
-        let readiness = FullSystemAudioReadinessStatus {
-            supported: true,
-            ready: false,
-            screen_recording_permission_granted: Some(false),
-            reason: Some("Screen Recording access is required.".into()),
-        };
-
-        let toggle = toggle_result_from_readiness(false, support, readiness);
-
-        assert!(!toggle.requested_enabled);
-        assert!(!toggle.stored_enabled);
-        assert!(toggle.error.is_none());
-    }
-
-    #[test]
-    fn readiness_marks_screen_recording_as_granted_only_when_permission_is_granted() {
-        let support = FullSystemAudioSupportStatus {
-            supported: true,
-            reason: None,
-        };
-
-        let readiness = readiness_status_from_permission(
-            support,
-            Some(FullSystemAudioPermissionState::Granted),
-        );
-
-        assert!(readiness.ready);
-        assert_eq!(readiness.screen_recording_permission_granted, Some(true));
-        assert!(readiness.reason.is_none());
-    }
-
-    #[test]
-    fn readiness_reports_permission_needed_for_denied_state() {
-        let support = FullSystemAudioSupportStatus {
-            supported: true,
-            reason: None,
-        };
-
-        let readiness =
-            readiness_status_from_permission(support, Some(FullSystemAudioPermissionState::Denied));
-
-        assert!(!readiness.ready);
-        assert_eq!(readiness.screen_recording_permission_granted, Some(false));
-        assert!(readiness
-            .reason
-            .expect("missing readiness reason")
-            .contains("Grant Screen Recording access"));
+            assert_eq!(toggle.requested_enabled, requested, "case: {name}");
+            assert_eq!(toggle.stored_enabled, stored, "case: {name}");
+            assert_eq!(toggle.error.is_some(), has_error, "case: {name}");
+        }
     }
 }

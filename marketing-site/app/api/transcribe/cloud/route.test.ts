@@ -286,29 +286,6 @@ describe("/api/transcribe/cloud usage accounting", () => {
     ]);
   });
 
-  test("rejects clearly oversized request bodies before parsing multipart data", async () => {
-    const request = new Request("https://uttr.test/api/transcribe/cloud", {
-      method: "POST",
-      headers: {
-        "content-length": String(111 * 1024 * 1024),
-      },
-    });
-    Object.defineProperty(request, "formData", {
-      configurable: true,
-      value: async () => {
-        throw new Error("multipart body should not be parsed when too large");
-      },
-    });
-
-    const response = await POST(request);
-
-    expect(response.status).toBe(413);
-    await expect(response.json()).resolves.toEqual({
-      error: "Audio upload exceeds the 100 MB limit.",
-    });
-    expect(callOrder).toEqual([]);
-  });
-
   test("rejects non-WAV uploads before calling the provider", async () => {
     const response = await POST(
       buildRequest(
@@ -328,47 +305,46 @@ describe("/api/transcribe/cloud usage accounting", () => {
     expect(usageEventCalls).toHaveLength(0);
   });
 
-  test("rejects uploads without a known content length before parsing multipart data", async () => {
-    const request = new Request("https://uttr.test/api/transcribe/cloud", {
-      method: "POST",
-    });
-    Object.defineProperty(request, "formData", {
-      configurable: true,
-      value: async () => {
-        throw new Error("multipart body should not be parsed without length");
+  test("rejects unsupported content lengths before parsing multipart data", async () => {
+    const cases = [
+      {
+        name: "oversized",
+        headers: { "content-length": String(111 * 1024 * 1024) },
+        status: 413,
+        error: "Audio upload exceeds the 100 MB limit.",
       },
-    });
-
-    const response = await POST(request);
-
-    expect(response.status).toBe(411);
-    await expect(response.json()).resolves.toEqual({
-      error: "Audio upload requires a Content-Length header.",
-    });
-    expect(callOrder).toEqual([]);
-  });
-
-  test("rejects malformed content length values before parsing multipart data", async () => {
-    const request = new Request("https://uttr.test/api/transcribe/cloud", {
-      method: "POST",
-      headers: {
-        "content-length": "10x",
+      {
+        name: "missing",
+        headers: undefined,
+        status: 411,
+        error: "Audio upload requires a Content-Length header.",
       },
-    });
-    Object.defineProperty(request, "formData", {
-      configurable: true,
-      value: async () => {
-        throw new Error("multipart body should not be parsed with bad length");
+      {
+        name: "malformed",
+        headers: { "content-length": "10x" },
+        status: 411,
+        error: "Audio upload requires a Content-Length header.",
       },
-    });
+    ];
 
-    const response = await POST(request);
+    for (const { name, headers, status, error } of cases) {
+      const request = new Request("https://uttr.test/api/transcribe/cloud", {
+        method: "POST",
+        headers,
+      });
+      Object.defineProperty(request, "formData", {
+        configurable: true,
+        value: async () => {
+          throw new Error(`multipart body should not be parsed: ${name}`);
+        },
+      });
 
-    expect(response.status).toBe(411);
-    await expect(response.json()).resolves.toEqual({
-      error: "Audio upload requires a Content-Length header.",
-    });
-    expect(callOrder).toEqual([]);
+      const response = await POST(request);
+
+      expect(response.status).toBe(status);
+      await expect(response.json()).resolves.toEqual({ error });
+      expect(callOrder).toEqual([]);
+    }
   });
 
   test("returns a client error for malformed multipart uploads", async () => {

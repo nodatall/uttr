@@ -265,70 +265,49 @@ describe("/api/session/summary", () => {
     ]);
   });
 
-  test("rejects clearly oversized request bodies before parsing JSON", async () => {
-    const request = new Request("https://uttr.test/api/session/summary", {
-      method: "POST",
-      headers: {
-        "content-length": String(513 * 1024),
+  test("rejects unsupported content lengths before parsing JSON", async () => {
+    const cases = [
+      {
+        name: "oversized",
+        headers: { "content-length": String(513 * 1024) },
+        body: undefined,
+        status: 413,
+        error: "Summary request exceeds the 512 KB limit.",
       },
-    });
-    Object.defineProperty(request, "json", {
-      configurable: true,
-      value: async () => {
-        throw new Error("JSON body should not be parsed when too large");
+      {
+        name: "missing",
+        headers: undefined,
+        body: undefined,
+        status: 411,
+        error: "Summary request requires a Content-Length header.",
       },
-    });
-
-    const response = await POST(request);
-
-    expect(response.status).toBe(413);
-    await expect(response.json()).resolves.toEqual({
-      error: "Summary request exceeds the 512 KB limit.",
-    });
-    expect(callOrder).toEqual([]);
-  });
-
-  test("rejects missing request body length before parsing JSON", async () => {
-    const request = new Request("https://uttr.test/api/session/summary", {
-      method: "POST",
-    });
-    Object.defineProperty(request, "json", {
-      configurable: true,
-      value: async () => {
-        throw new Error("JSON body should not be parsed without length");
+      {
+        name: "malformed",
+        headers: { "content-length": "10x" },
+        body: "{}",
+        status: 411,
+        error: "Summary request requires a Content-Length header.",
       },
-    });
+    ];
 
-    const response = await POST(request);
+    for (const { name, headers, body, status, error } of cases) {
+      const request = new Request("https://uttr.test/api/session/summary", {
+        method: "POST",
+        headers,
+        body,
+      });
+      Object.defineProperty(request, "json", {
+        configurable: true,
+        value: async () => {
+          throw new Error(`JSON body should not be parsed: ${name}`);
+        },
+      });
 
-    expect(response.status).toBe(411);
-    await expect(response.json()).resolves.toEqual({
-      error: "Summary request requires a Content-Length header.",
-    });
-    expect(callOrder).toEqual([]);
-  });
+      const response = await POST(request);
 
-  test("rejects malformed request body length before parsing JSON", async () => {
-    const request = new Request("https://uttr.test/api/session/summary", {
-      method: "POST",
-      headers: {
-        "content-length": "10x",
-      },
-      body: "{}",
-    });
-    Object.defineProperty(request, "json", {
-      configurable: true,
-      value: async () => {
-        throw new Error("JSON body should not be parsed with malformed length");
-      },
-    });
-
-    const response = await POST(request);
-
-    expect(response.status).toBe(411);
-    await expect(response.json()).resolves.toEqual({
-      error: "Summary request requires a Content-Length header.",
-    });
-    expect(callOrder).toEqual([]);
+      expect(response.status).toBe(status);
+      await expect(response.json()).resolves.toEqual({ error });
+      expect(callOrder).toEqual([]);
+    }
   });
 });

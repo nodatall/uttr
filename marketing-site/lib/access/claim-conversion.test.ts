@@ -66,101 +66,100 @@ function payload(
 }
 
 describe("claim conversion outcome", () => {
-  test("returns linked for a fresh unlinked conversion", () => {
-    expect(
-      resolveClaimConversionOutcome({
-        currentUserId: "user_123",
-        tokenPayload: payload(),
-        claim: claim(),
-        trial: trial(),
-        entitlement: entitlement(),
-      }),
-    ).toEqual({
-      status: "linked",
-      checkout_safe: true,
-      user_id: "user_123",
-      has_active_entitlement: false,
-    });
-  });
-
-  test("returns already_linked_same_user for same-user retry", () => {
-    expect(
-      resolveClaimConversionOutcome({
-        currentUserId: "user_123",
-        tokenPayload: payload(),
-        claim: claim({ redeemed_at: new Date().toISOString() }),
-        trial: trial({ user_id: "user_123" }),
-        entitlement: entitlement({ subscription_status: "active" }),
-      }),
-    ).toEqual({
-      status: "already_linked_same_user",
-      checkout_safe: true,
-      user_id: "user_123",
-      has_active_entitlement: true,
-    });
-  });
-
-  test("returns linked for a fresh token on an already-linked same-user install", () => {
-    expect(
-      resolveClaimConversionOutcome({
-        currentUserId: "user_123",
-        tokenPayload: payload(),
-        claim: claim(),
-        trial: trial({ user_id: "user_123", status: "linked" }),
-        entitlement: entitlement(),
-      }),
-    ).toEqual({
-      status: "linked",
-      checkout_safe: true,
-      user_id: "user_123",
-      has_active_entitlement: false,
-    });
-  });
-
-  test("returns already_linked_different_user for a wrong-user retry", () => {
-    expect(
-      resolveClaimConversionOutcome({
-        currentUserId: "user_123",
-        tokenPayload: payload(),
-        claim: claim(),
-        trial: trial({ user_id: "user_456" }),
-        entitlement: entitlement(),
-      }),
-    ).toEqual({
-      status: "already_linked_different_user",
-      checkout_safe: false,
-    });
-  });
-
-  test("returns expired_claim for expired tokens", () => {
+  test("resolves supported fresh, retry, conflict, expiry, and invalid states", () => {
     const expired = new Date(Date.now() - 60_000).toISOString();
+    const cases = [
+      {
+        name: "fresh unlinked conversion",
+        input: {
+          currentUserId: "user_123",
+          tokenPayload: payload(),
+          claim: claim(),
+          trial: trial(),
+          entitlement: entitlement(),
+        },
+        expected: {
+          status: "linked",
+          checkout_safe: true,
+          user_id: "user_123",
+          has_active_entitlement: false,
+        },
+      },
+      {
+        name: "same-user retry",
+        input: {
+          currentUserId: "user_123",
+          tokenPayload: payload(),
+          claim: claim({ redeemed_at: new Date().toISOString() }),
+          trial: trial({ user_id: "user_123" }),
+          entitlement: entitlement({ subscription_status: "active" }),
+        },
+        expected: {
+          status: "already_linked_same_user",
+          checkout_safe: true,
+          user_id: "user_123",
+          has_active_entitlement: true,
+        },
+      },
+      {
+        name: "fresh token for same-user install",
+        input: {
+          currentUserId: "user_123",
+          tokenPayload: payload(),
+          claim: claim(),
+          trial: trial({ user_id: "user_123", status: "linked" }),
+          entitlement: entitlement(),
+        },
+        expected: {
+          status: "linked",
+          checkout_safe: true,
+          user_id: "user_123",
+          has_active_entitlement: false,
+        },
+      },
+      {
+        name: "different-user retry",
+        input: {
+          currentUserId: "user_123",
+          tokenPayload: payload(),
+          claim: claim(),
+          trial: trial({ user_id: "user_456" }),
+          entitlement: entitlement(),
+        },
+        expected: {
+          status: "already_linked_different_user",
+          checkout_safe: false,
+        },
+      },
+      {
+        name: "expired token",
+        input: {
+          currentUserId: "user_123",
+          tokenPayload: payload({ expires_at: expired }),
+          claim: claim({ expires_at: expired }),
+          trial: trial(),
+          entitlement: entitlement(),
+        },
+        expected: { status: "expired_claim", checkout_safe: false },
+      },
+      {
+        name: "claim mismatch",
+        input: {
+          currentUserId: "user_123",
+          tokenPayload: payload({ claim_id: "claim_other" }),
+          claim: claim(),
+          trial: trial(),
+          entitlement: entitlement(),
+        },
+        expected: { status: "invalid_claim", checkout_safe: false },
+      },
+    ];
 
-    expect(
-      resolveClaimConversionOutcome({
-        currentUserId: "user_123",
-        tokenPayload: payload({ expires_at: expired }),
-        claim: claim({ expires_at: expired }),
-        trial: trial(),
-        entitlement: entitlement(),
-      }),
-    ).toEqual({
-      status: "expired_claim",
-      checkout_safe: false,
-    });
-  });
-
-  test("returns invalid_claim when the stored claim does not match the token", () => {
-    expect(
-      resolveClaimConversionOutcome({
-        currentUserId: "user_123",
-        tokenPayload: payload({ claim_id: "claim_other" }),
-        claim: claim(),
-        trial: trial(),
-        entitlement: entitlement(),
-      }),
-    ).toEqual({
-      status: "invalid_claim",
-      checkout_safe: false,
-    });
+    for (const { name, input, expected } of cases) {
+      expect({ name, outcome: resolveClaimConversionOutcome(input) }).toEqual({
+        name,
+        outcome: expected,
+      });
+    }
   });
 });

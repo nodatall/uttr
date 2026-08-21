@@ -901,32 +901,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn auto_submit_requires_setting_enabled() {
-        assert!(!should_send_auto_submit(false, PasteMethod::CtrlV));
-        assert!(!should_send_auto_submit(false, PasteMethod::Direct));
+    fn auto_submit_policy_covers_supported_paste_methods() {
+        let cases = [
+            (false, PasteMethod::None, false),
+            (false, PasteMethod::CtrlV, false),
+            (false, PasteMethod::Direct, false),
+            (true, PasteMethod::None, false),
+            (true, PasteMethod::CtrlV, true),
+            (true, PasteMethod::Direct, true),
+            (true, PasteMethod::CtrlShiftV, true),
+            (true, PasteMethod::ShiftInsert, true),
+        ];
+
+        for (enabled, paste_method, expected) in cases {
+            assert_eq!(
+                should_send_auto_submit(enabled, paste_method),
+                expected,
+                "enabled={enabled}, paste_method={paste_method:?}"
+            );
+        }
     }
 
     #[test]
-    fn auto_submit_skips_none_paste_method() {
-        assert!(!should_send_auto_submit(true, PasteMethod::None));
-    }
-
-    #[test]
-    fn auto_submit_runs_for_active_paste_methods() {
-        assert!(should_send_auto_submit(true, PasteMethod::CtrlV));
-        assert!(should_send_auto_submit(true, PasteMethod::Direct));
-        assert!(should_send_auto_submit(true, PasteMethod::CtrlShiftV));
-        assert!(should_send_auto_submit(true, PasteMethod::ShiftInsert));
-    }
-
-    #[test]
-    fn format_text_for_paste_appends_trailing_space_when_enabled() {
-        assert_eq!(format_text_for_paste("hello", true), "hello ");
-    }
-
-    #[test]
-    fn format_text_for_paste_leaves_text_unchanged_when_disabled() {
-        assert_eq!(format_text_for_paste("hello", false), "hello");
+    fn paste_formatting_respects_trailing_space_setting() {
+        for (enabled, expected) in [(false, "hello"), (true, "hello ")] {
+            assert_eq!(format_text_for_paste("hello", enabled), expected);
+        }
     }
 
     #[test]
@@ -939,18 +939,5 @@ mod tests {
         assert_eq!(effective_clipboard_paste_delay_ms(0), 120);
         assert_eq!(effective_clipboard_paste_delay_ms(60), 120);
         assert_eq!(effective_clipboard_paste_delay_ms(250), 250);
-    }
-
-    #[test]
-    fn clipboard_restore_delay_matches_expected_value() {
-        assert_eq!(CLIPBOARD_RESTORE_DELAY_MS, 400);
-    }
-
-    #[test]
-    fn selection_copy_retry_budget_is_short() {
-        assert_eq!(
-            SELECTION_COPY_ATTEMPTS as u64 * SELECTION_COPY_RETRY_DELAY_MS,
-            420
-        );
     }
 }

@@ -71,28 +71,25 @@ mod tests {
     use super::parse_signal_toggle_env;
 
     #[test]
-    fn parse_signal_toggle_env_defaults_to_disabled() {
-        assert_eq!(parse_signal_toggle_env(None), Ok(false));
-        assert_eq!(parse_signal_toggle_env(Some("")), Ok(false));
-        assert_eq!(parse_signal_toggle_env(Some("   ")), Ok(false));
-    }
-
-    #[test]
-    fn parse_signal_toggle_env_accepts_truthy_values() {
-        for value in ["1", "true", "TRUE", "yes", "on"] {
-            assert_eq!(parse_signal_toggle_env(Some(value)), Ok(true));
+    fn parses_supported_signal_toggle_values() {
+        for (value, expected) in [
+            (None, Ok(false)),
+            (Some(""), Ok(false)),
+            (Some("   "), Ok(false)),
+            (Some("1"), Ok(true)),
+            (Some("true"), Ok(true)),
+            (Some("TRUE"), Ok(true)),
+            (Some("yes"), Ok(true)),
+            (Some("on"), Ok(true)),
+            (Some("0"), Ok(false)),
+            (Some("false"), Ok(false)),
+            (Some("FALSE"), Ok(false)),
+            (Some("no"), Ok(false)),
+            (Some("off"), Ok(false)),
+        ] {
+            assert_eq!(parse_signal_toggle_env(value), expected, "value: {value:?}");
         }
-    }
 
-    #[test]
-    fn parse_signal_toggle_env_accepts_falsey_values() {
-        for value in ["0", "false", "FALSE", "no", "off"] {
-            assert_eq!(parse_signal_toggle_env(Some(value)), Ok(false));
-        }
-    }
-
-    #[test]
-    fn parse_signal_toggle_env_rejects_invalid_values() {
         assert!(parse_signal_toggle_env(Some("maybe")).is_err());
     }
 }

@@ -5609,8 +5609,15 @@ mod tests {
     }
 
     #[test]
-    fn full_system_binding_is_registered_in_action_map() {
-        assert!(ACTION_MAP.contains_key("transcribe_full_system_audio"));
+    fn supported_shortcut_bindings_are_registered_in_action_map() {
+        for binding_id in [
+            "transcribe_full_system_audio",
+            "copy_last_transcript",
+            "transcribe_with_post_process",
+            "edit_mode",
+        ] {
+            assert!(ACTION_MAP.contains_key(binding_id), "binding: {binding_id}");
+        }
     }
 
     #[test]
@@ -6035,11 +6042,6 @@ mod tests {
     }
 
     #[test]
-    fn copy_last_transcript_binding_is_registered_in_action_map() {
-        assert!(ACTION_MAP.contains_key("copy_last_transcript"));
-    }
-
-    #[test]
     fn full_system_stop_payload_keeps_missing_microphone_tail() {
         let mut mixed = vec![0.25];
         let mut microphone = Vec::new();
@@ -6097,16 +6099,6 @@ mod tests {
         assert_eq!(mixed, vec![0.25]);
         assert_eq!(microphone, vec![0.01, 0.02, 0.1, 0.2]);
         assert_eq!(system_audio, vec![0.5, 0.9, 0.8]);
-    }
-
-    #[test]
-    fn post_process_shortcut_binding_is_registered_in_action_map() {
-        assert!(ACTION_MAP.contains_key("transcribe_with_post_process"));
-    }
-
-    #[test]
-    fn edit_mode_binding_is_registered_in_action_map() {
-        assert!(ACTION_MAP.contains_key("edit_mode"));
     }
 
     #[test]

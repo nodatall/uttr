@@ -1452,148 +1452,138 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_settings_disable_auto_submit() {
+    fn default_settings_expose_supported_product_contracts() {
         let settings = get_default_settings();
+
         assert!(!settings.auto_submit);
         assert_eq!(settings.auto_submit_key, AutoSubmitKey::Enter);
-    }
-
-    #[test]
-    fn default_settings_use_strict_preset() {
-        let settings = get_default_settings();
         assert_eq!(
             settings.post_process_cleaning_prompt_preset,
             CleaningPromptPreset::Strict
         );
-    }
-
-    #[test]
-    fn default_post_process_uses_fast_groq_model_and_timeout() {
-        let settings = get_default_settings();
         assert_eq!(
             settings.post_process_models.get("groq").map(String::as_str),
             Some("openai/gpt-oss-20b")
         );
         assert_eq!(settings.post_process_timeout_secs, 20);
-    }
-
-    #[test]
-    fn migrates_retired_groq_post_process_model() {
-        let mut settings = get_default_settings();
-        settings
-            .post_process_models
-            .insert("groq".to_string(), "qwen/qwen3-32b".to_string());
-
-        assert!(ensure_post_process_defaults(&mut settings));
-        assert_eq!(
-            settings.post_process_models.get("groq").map(String::as_str),
-            Some("openai/gpt-oss-20b")
-        );
-    }
-
-    #[test]
-    fn preserves_custom_groq_post_process_model() {
-        let mut settings = get_default_settings();
-        settings
-            .post_process_models
-            .insert("groq".to_string(), "custom/model".to_string());
-
-        assert!(!ensure_post_process_defaults(&mut settings));
-        assert_eq!(
-            settings.post_process_models.get("groq").map(String::as_str),
-            Some("custom/model")
-        );
-    }
-
-    #[test]
-    fn migrates_existing_system_prompt_to_custom_preset() {
-        let mut settings = get_default_settings();
-        // Simulate old install: migration has not run yet
-        settings.post_process_preset_migrated = false;
-        settings.post_process_system_prompt = "My custom prompt".to_string();
-
-        let changed = ensure_post_process_defaults(&mut settings);
-        assert!(changed);
-        assert_eq!(
-            settings.post_process_cleaning_prompt_preset,
-            CleaningPromptPreset::Custom
-        );
-        assert!(settings.post_process_preset_migrated);
-    }
-
-    #[test]
-    fn does_not_migrate_when_system_prompt_is_empty() {
-        let mut settings = get_default_settings();
-        // Simulate old install: migration has not run yet, but no system prompt
-        settings.post_process_preset_migrated = false;
-
-        let changed = ensure_post_process_defaults(&mut settings);
-        assert!(changed); // changed because we set the migrated flag
-        assert_eq!(
-            settings.post_process_cleaning_prompt_preset,
-            CleaningPromptPreset::Strict
-        );
-        assert!(settings.post_process_preset_migrated);
-    }
-
-    #[test]
-    fn does_not_override_explicit_preset_selection_after_migration() {
-        let mut settings = get_default_settings();
-        // User has a system prompt but explicitly chose Strict after migration
-        settings.post_process_preset_migrated = true;
-        settings.post_process_system_prompt = "My custom prompt".to_string();
-        settings.post_process_cleaning_prompt_preset = CleaningPromptPreset::Strict;
-
-        let changed = ensure_post_process_defaults(&mut settings);
-        // Migration block skipped — preset must remain Strict
-        assert_eq!(
-            settings.post_process_cleaning_prompt_preset,
-            CleaningPromptPreset::Strict
-        );
-        let _ = changed; // other defaults may or may not fire
-    }
-
-    #[test]
-    fn default_access_state_is_blocked() {
-        let settings = get_default_settings();
         assert_eq!(settings.anonymous_trial_state, TrialState::New);
         assert_eq!(settings.access_state, AccessState::Blocked);
         assert_eq!(settings.entitlement_state, EntitlementState::Inactive);
         assert!(!settings.byok_enabled);
         assert_eq!(settings.byok_validation_state, ByokValidationState::Unknown);
-    }
-
-    #[test]
-    fn default_full_system_audio_setting_is_disabled() {
-        let settings = get_default_settings();
         assert!(!settings.record_full_system_audio);
-    }
-
-    #[test]
-    fn default_full_system_audio_binding_is_registered() {
-        let settings = get_default_settings();
-        let binding = settings
-            .bindings
-            .get("transcribe_full_system_audio")
-            .expect("missing full-system audio binding");
-
-        assert_eq!(binding.id, "transcribe_full_system_audio");
-
-        #[cfg(target_os = "macos")]
-        assert_eq!(binding.default_binding, "ctrl+fn");
-
-        #[cfg(not(target_os = "macos"))]
-        assert_eq!(binding.default_binding, "ctrl+alt+space");
-
-        assert_eq!(binding.current_binding, binding.default_binding);
-    }
-
-    #[test]
-    fn default_custom_vocabulary_is_empty_and_edit_mode_disabled() {
-        let settings = get_default_settings();
-
         assert!(settings.custom_vocabulary_terms.is_empty());
         assert!(!settings.edit_mode_enabled);
+
+        #[cfg(target_os = "macos")]
+        let expected_bindings = [
+            ("transcribe_full_system_audio", "ctrl+fn"),
+            ("transcribe_with_post_process", "shift+fn"),
+            ("copy_last_transcript", "command+fn"),
+        ];
+        #[cfg(not(target_os = "macos"))]
+        let expected_bindings = [
+            ("transcribe_full_system_audio", "ctrl+alt+space"),
+            ("transcribe_with_post_process", "ctrl+shift+space"),
+            ("copy_last_transcript", "ctrl+alt+c"),
+        ];
+
+        for (id, expected_default) in expected_bindings {
+            let binding = settings
+                .bindings
+                .get(id)
+                .unwrap_or_else(|| panic!("missing {id}"));
+            assert_eq!(binding.id, id);
+            assert_eq!(binding.default_binding, expected_default, "binding: {id}");
+            assert_eq!(
+                binding.current_binding, binding.default_binding,
+                "binding: {id}"
+            );
+        }
+
+        let ask_selection = settings
+            .bindings
+            .get("edit_mode")
+            .expect("missing ask-selection binding");
+        assert_eq!(ask_selection.id, "edit_mode");
+        assert_eq!(ask_selection.name, "Ask Selection");
+        assert_eq!(ask_selection.current_binding, ask_selection.default_binding);
+    }
+
+    #[test]
+    fn post_process_defaults_migrate_legacy_values_without_overwriting_choices() {
+        let model_cases = [
+            ("qwen/qwen3-32b", "openai/gpt-oss-20b", true),
+            (
+                "meta-llama/llama-4-scout-17b-16e-instruct",
+                "openai/gpt-oss-20b",
+                true,
+            ),
+            ("custom/model", "custom/model", false),
+        ];
+        for (initial, expected, expected_changed) in model_cases {
+            let mut settings = get_default_settings();
+            settings
+                .post_process_models
+                .insert("groq".to_string(), initial.to_string());
+
+            assert_eq!(
+                ensure_post_process_defaults(&mut settings),
+                expected_changed,
+                "model: {initial}"
+            );
+            assert_eq!(
+                settings.post_process_models.get("groq").map(String::as_str),
+                Some(expected),
+                "model: {initial}"
+            );
+        }
+
+        let prompt_cases = [
+            (
+                "legacy custom prompt",
+                "My custom prompt",
+                false,
+                CleaningPromptPreset::Strict,
+                CleaningPromptPreset::Custom,
+                true,
+            ),
+            (
+                "legacy empty prompt",
+                "",
+                false,
+                CleaningPromptPreset::Strict,
+                CleaningPromptPreset::Strict,
+                true,
+            ),
+            (
+                "explicit migrated preset",
+                "My custom prompt",
+                true,
+                CleaningPromptPreset::Strict,
+                CleaningPromptPreset::Strict,
+                false,
+            ),
+        ];
+        for (name, prompt, migrated, initial_preset, expected_preset, expected_changed) in
+            prompt_cases
+        {
+            let mut settings = get_default_settings();
+            settings.post_process_preset_migrated = migrated;
+            settings.post_process_system_prompt = prompt.to_string();
+            settings.post_process_cleaning_prompt_preset = initial_preset;
+
+            assert_eq!(
+                ensure_post_process_defaults(&mut settings),
+                expected_changed,
+                "case: {name}"
+            );
+            assert_eq!(
+                settings.post_process_cleaning_prompt_preset, expected_preset,
+                "case: {name}"
+            );
+            assert!(settings.post_process_preset_migrated, "case: {name}");
+        }
     }
 
     #[test]
@@ -1634,103 +1624,65 @@ mod tests {
     }
 
     #[test]
-    fn default_ask_selection_binding_is_registered() {
-        let settings = get_default_settings();
-        let binding = settings
-            .bindings
-            .get("edit_mode")
-            .expect("missing ask-selection binding");
+    fn onboarding_migration_selects_models_only_for_supported_install_states() {
+        let cases = [
+            (
+                "completed install without a model",
+                true,
+                "",
+                true,
+                true,
+                crate::managers::model::GROQ_MODEL_WHISPER_LARGE_V3,
+            ),
+            (
+                "completed install on retired turbo default",
+                true,
+                crate::managers::model::GROQ_MODEL_WHISPER_LARGE_V3_TURBO,
+                true,
+                true,
+                crate::managers::model::GROQ_MODEL_WHISPER_LARGE_V3,
+            ),
+            (
+                "completed install with explicit local model",
+                true,
+                crate::managers::model::DEFAULT_LOCAL_MODEL_ID,
+                false,
+                true,
+                crate::managers::model::DEFAULT_LOCAL_MODEL_ID,
+            ),
+            ("fresh install", false, "", false, false, ""),
+            (
+                "pre-onboarding install with an existing selection",
+                false,
+                crate::managers::model::DEFAULT_LOCAL_MODEL_ID,
+                true,
+                true,
+                crate::managers::model::DEFAULT_LOCAL_MODEL_ID,
+            ),
+        ];
 
-        assert_eq!(binding.id, "edit_mode");
-        assert_eq!(binding.name, "Ask Selection");
-        assert_eq!(binding.current_binding, binding.default_binding);
-    }
+        for (name, completed, model, expected_changed, expected_completed, expected_model) in cases
+        {
+            let mut settings = get_default_settings();
+            settings.onboarding_completed = completed;
+            settings.selected_model = model.to_string();
 
-    #[test]
-    fn default_post_process_binding_is_registered() {
-        let settings = get_default_settings();
-        let binding = settings
-            .bindings
-            .get("transcribe_with_post_process")
-            .expect("missing post-processing binding");
-
-        assert_eq!(binding.id, "transcribe_with_post_process");
-
-        #[cfg(target_os = "macos")]
-        assert_eq!(binding.default_binding, "shift+fn");
-
-        #[cfg(not(target_os = "macos"))]
-        assert_eq!(binding.default_binding, "ctrl+shift+space");
-
-        assert_eq!(binding.current_binding, binding.default_binding);
-    }
-
-    #[test]
-    fn default_transcription_model_is_selected_when_onboarding_is_completed() {
-        let mut settings = get_default_settings();
-        settings.onboarding_completed = true;
-        settings.selected_model = String::new();
-
-        assert!(ensure_default_selected_transcription_model(&mut settings));
-        assert_eq!(
-            settings.selected_model,
-            crate::managers::model::GROQ_MODEL_WHISPER_LARGE_V3
-        );
-    }
-
-    #[test]
-    fn default_transcription_model_preserves_existing_selection() {
-        let mut settings = get_default_settings();
-        settings.onboarding_completed = true;
-        settings.selected_model = crate::managers::model::DEFAULT_LOCAL_MODEL_ID.to_string();
-
-        assert!(!ensure_default_selected_transcription_model(&mut settings));
-        assert_eq!(
-            settings.selected_model,
-            crate::managers::model::DEFAULT_LOCAL_MODEL_ID
-        );
-    }
-
-    #[test]
-    fn default_transcription_model_migrates_old_turbo_default_to_full_groq() {
-        let mut settings = get_default_settings();
-        settings.onboarding_completed = true;
-        settings.selected_model =
-            crate::managers::model::GROQ_MODEL_WHISPER_LARGE_V3_TURBO.to_string();
-
-        assert!(ensure_default_selected_transcription_model(&mut settings));
-        assert_eq!(
-            settings.selected_model,
-            crate::managers::model::GROQ_MODEL_WHISPER_LARGE_V3
-        );
-    }
-
-    #[test]
-    fn onboarding_defaults_repair_completed_install_without_model() {
-        let mut settings = get_default_settings();
-        settings.onboarding_completed = true;
-        settings.selected_model = String::new();
-
-        assert!(ensure_onboarding_defaults(&mut settings));
-        assert!(settings.onboarding_completed);
-        assert_eq!(
-            settings.selected_model,
-            crate::managers::model::GROQ_MODEL_WHISPER_LARGE_V3
-        );
-    }
-
-    #[test]
-    fn onboarding_defaults_keep_fresh_install_uncompleted_until_onboarding_finishes() {
-        let mut settings = get_default_settings();
-
-        assert!(!ensure_onboarding_defaults(&mut settings));
-        assert!(!settings.onboarding_completed);
-        assert!(settings.selected_model.is_empty());
+            assert_eq!(
+                ensure_onboarding_defaults(&mut settings),
+                expected_changed,
+                "case: {name}"
+            );
+            assert_eq!(
+                settings.onboarding_completed, expected_completed,
+                "case: {name}"
+            );
+            assert_eq!(settings.selected_model, expected_model, "case: {name}");
+        }
     }
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn migrates_old_macos_post_process_shortcut_default() {
+    fn shortcut_migrations_update_legacy_defaults_without_overwriting_custom_bindings() {
         let mut settings = get_default_settings();
         let binding = settings
             .bindings
@@ -1746,11 +1698,7 @@ mod tests {
             .unwrap();
         assert_eq!(binding.default_binding, "shift+fn");
         assert_eq!(binding.current_binding, "shift+fn");
-    }
 
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn migrates_old_macos_full_system_shortcut_default() {
         let mut settings = get_default_settings();
         let binding = settings
             .bindings
@@ -1766,11 +1714,7 @@ mod tests {
             .unwrap();
         assert_eq!(binding.default_binding, "ctrl+fn");
         assert_eq!(binding.current_binding, "ctrl+fn");
-    }
 
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn full_system_shortcut_migration_preserves_unrelated_custom_binding() {
         let mut settings = get_default_settings();
         let binding = settings
             .bindings
@@ -1786,11 +1730,7 @@ mod tests {
             .unwrap();
         assert_eq!(binding.default_binding, "ctrl+fn");
         assert_eq!(binding.current_binding, "command+shift+2");
-    }
 
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn shortcut_migration_preserves_custom_post_process_binding() {
         let mut settings = get_default_settings();
         let binding = settings
             .bindings
@@ -1809,26 +1749,7 @@ mod tests {
     }
 
     #[test]
-    fn default_copy_last_transcript_binding_is_registered() {
-        let settings = get_default_settings();
-        let binding = settings
-            .bindings
-            .get("copy_last_transcript")
-            .expect("missing copy-last-transcript binding");
-
-        assert_eq!(binding.id, "copy_last_transcript");
-
-        #[cfg(target_os = "macos")]
-        assert_eq!(binding.default_binding, "command+fn");
-
-        #[cfg(not(target_os = "macos"))]
-        assert_eq!(binding.default_binding, "ctrl+alt+c");
-
-        assert_eq!(binding.current_binding, binding.default_binding);
-    }
-
-    #[test]
-    fn migrates_legacy_latest_file_transcription_into_history() {
+    fn file_transcription_history_migrates_legacy_entry_and_enforces_cap() {
         let mut settings = get_default_settings();
         settings.legacy_latest_file_transcription = Some(SavedFileTranscription {
             file_name: "sample.wav".to_string(),
@@ -1846,10 +1767,7 @@ mod tests {
             "sample.wav"
         );
         assert!(settings.legacy_latest_file_transcription.is_none());
-    }
 
-    #[test]
-    fn truncates_file_transcription_history_to_five_items() {
         let mut settings = get_default_settings();
         settings.file_transcription_history = (0..7)
             .map(|index| SavedFileTranscription {

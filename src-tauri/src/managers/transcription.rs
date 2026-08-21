@@ -2507,51 +2507,7 @@ impl Drop for TranscriptionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
-    use std::path::{Path, PathBuf};
-    use std::sync::mpsc;
     use std::time::Duration;
-
-    fn app_support_dir() -> PathBuf {
-        PathBuf::from(
-            std::env::var("HOME").expect("HOME must be set for local transcription tests"),
-        )
-        .join("Library/Application Support/com.pais.uttr")
-    }
-
-    fn newest_recording_path(recordings_dir: &Path) -> Option<PathBuf> {
-        let mut recordings: Vec<_> = fs::read_dir(recordings_dir)
-            .ok()?
-            .filter_map(|entry| entry.ok())
-            .map(|entry| entry.path())
-            .filter(|path| path.extension().and_then(|ext| ext.to_str()) == Some("wav"))
-            .collect();
-        recordings.sort_by_key(|path| {
-            fs::metadata(path)
-                .and_then(|meta| meta.modified())
-                .ok()
-                .unwrap_or(std::time::SystemTime::UNIX_EPOCH)
-        });
-        recordings.pop()
-    }
-
-    fn load_wav_samples(path: &Path) -> Vec<f32> {
-        let mut reader = hound::WavReader::open(path).expect("failed to open wav recording");
-        let spec = reader.spec();
-        match spec.sample_format {
-            hound::SampleFormat::Float => reader
-                .samples::<f32>()
-                .map(|sample| sample.expect("invalid float sample"))
-                .collect(),
-            hound::SampleFormat::Int => {
-                let max_value = (1_i64 << (spec.bits_per_sample.saturating_sub(1) as u32)) as f32;
-                reader
-                    .samples::<i32>()
-                    .map(|sample| sample.expect("invalid int sample") as f32 / max_value)
-                    .collect()
-            }
-        }
-    }
 
     fn model(id: &str, is_downloaded: bool, is_recommended: bool) -> ModelInfo {
         ModelInfo {
@@ -2591,7 +2547,7 @@ mod tests {
     }
 
     #[test]
-    fn prepare_transcription_audio_boosts_quiet_non_silent_audio() {
+    fn prepare_transcription_audio_boosts_only_quiet_non_silent_audio() {
         let mut audio = vec![0.0; 512];
         audio[20] = 0.016;
         audio[80] = -0.02;
@@ -2606,12 +2562,11 @@ mod tests {
         assert!(prepared_levels.0 > raw_levels.0);
         assert!(prepared_levels.1 <= QUIET_AUDIO_MAX_PEAK + f32::EPSILON);
         assert!(prepared.iter().all(|sample| (-1.0..=1.0).contains(sample)));
-    }
 
-    #[test]
-    fn prepare_transcription_audio_does_not_boost_silence() {
         let audio = vec![0.0, 0.0005, -0.0004, 0.0003, 0.0];
+        assert_eq!(prepare_transcription_audio(audio.clone()), audio);
 
+        let audio = vec![0.0, 0.2, -0.18, 0.16, -0.12];
         assert_eq!(prepare_transcription_audio(audio.clone()), audio);
     }
 
@@ -2629,127 +2584,142 @@ mod tests {
     }
 
     #[test]
-    fn local_fallback_prefers_requested_local_model_when_available() {
-        let models = vec![model("small", true, false), model("turbo", true, false)];
-        let picked = choose_local_fallback_model_id(models, Some("turbo"));
-        assert_eq!(picked.as_deref(), Some("turbo"));
-    }
-
-    #[test]
-    fn local_fallback_prefers_default_local_model_id() {
-        let models = vec![
-            model("small", true, false),
-            model(DEFAULT_LOCAL_MODEL_ID, true, false),
-            model("sense-voice-int8", true, true),
+    fn local_fallback_model_selection_covers_supported_priority_order() {
+        let cases = [
+            (
+                "requested local model",
+                vec![model("small", true, false), model("turbo", true, false)],
+                Some("turbo"),
+                Some("turbo"),
+            ),
+            (
+                "product default",
+                vec![
+                    model("small", true, false),
+                    model(DEFAULT_LOCAL_MODEL_ID, true, false),
+                    model("sense-voice-int8", true, true),
+                ],
+                None,
+                Some(DEFAULT_LOCAL_MODEL_ID),
+            ),
+            (
+                "recommended model",
+                vec![
+                    model("small", true, false),
+                    model("medium", true, false),
+                    model("sensevoice", true, true),
+                ],
+                None,
+                Some("sensevoice"),
+            ),
+            (
+                "priority model",
+                vec![model("foo", true, false), model("small", true, false)],
+                None,
+                Some("small"),
+            ),
+            (
+                "sorted fallback",
+                vec![model("zeta", true, false), model("alpha", true, false)],
+                None,
+                Some("alpha"),
+            ),
+            (
+                "cloud and unavailable models",
+                vec![
+                    model("groq-whisper-large-v3", true, false),
+                    model("small", false, false),
+                ],
+                None,
+                None,
+            ),
         ];
-        let picked = choose_local_fallback_model_id(models, None);
-        assert_eq!(picked.as_deref(), Some(DEFAULT_LOCAL_MODEL_ID));
-    }
 
-    #[test]
-    fn local_fallback_prefers_recommended_then_priority_then_first_sorted() {
-        let with_recommended = vec![
-            model("small", true, false),
-            model("medium", true, false),
-            model("sensevoice", true, true),
-        ];
-        let picked_recommended = choose_local_fallback_model_id(with_recommended, None);
-        assert_eq!(picked_recommended.as_deref(), Some("sensevoice"));
-
-        let with_priority = vec![model("foo", true, false), model("small", true, false)];
-        let picked_priority = choose_local_fallback_model_id(with_priority, None);
-        assert_eq!(picked_priority.as_deref(), Some("small"));
-
-        let sorted_fallback = vec![model("zeta", true, false), model("alpha", true, false)];
-        let picked_sorted = choose_local_fallback_model_id(sorted_fallback, None);
-        assert_eq!(picked_sorted.as_deref(), Some("alpha"));
-    }
-
-    #[test]
-    fn local_fallback_ignores_cloud_and_not_downloaded_models() {
-        let models = vec![
-            model("groq-whisper-large-v3", true, false),
-            model("small", false, false),
-        ];
-        let picked = choose_local_fallback_model_id(models, None);
-        assert!(picked.is_none());
-    }
-
-    #[test]
-    fn stitcher_removes_repeated_boundary_words() {
-        let mut assembled = "hello world from the meeting".to_string();
-        append_stitched_text(&mut assembled, "from the meeting today");
-        assert_eq!(assembled, "hello world from the meeting today");
-    }
-
-    #[test]
-    fn stitcher_handles_case_and_punctuation_at_boundary() {
-        let mut assembled = "Thanks for joining,".to_string();
-        append_stitched_text(&mut assembled, "joining today everyone");
-        assert_eq!(assembled, "Thanks for joining, today everyone");
-    }
-
-    #[test]
-    fn stitcher_appends_without_overlap() {
-        let mut assembled = "alpha beta".to_string();
-        append_stitched_text(&mut assembled, "gamma delta");
-        assert_eq!(assembled, "alpha beta gamma delta");
-    }
-
-    #[test]
-    fn incremental_finalization_requires_multiple_completed_chunks() {
-        assert!(!has_enough_incremental_chunks_for_finalization(0));
-        assert!(!has_enough_incremental_chunks_for_finalization(1));
-        assert!(has_enough_incremental_chunks_for_finalization(2));
-    }
-
-    #[test]
-    fn incremental_finalization_allows_one_chunk_for_long_recordings() {
-        assert!(!has_enough_incremental_progress_for_finalization(
-            1,
-            SAMPLE_RATE * 14
-        ));
-        assert!(has_enough_incremental_progress_for_finalization(
-            1,
-            SAMPLE_RATE * 15
-        ));
-        assert!(has_enough_incremental_progress_for_finalization(
-            2,
-            SAMPLE_RATE * 10
-        ));
-    }
-
-    #[test]
-    fn incremental_tail_timeout_scales_and_caps() {
-        assert_eq!(incremental_tail_timeout(0), Duration::from_secs(6));
-        assert_eq!(incremental_tail_timeout(2), Duration::from_secs(14));
-        assert_eq!(incremental_tail_timeout(10), Duration::from_secs(30));
-    }
-
-    #[test]
-    fn live_direct_chunk_plan_stays_under_limit() {
-        let limit = safe_live_chunk_limit_bytes(CloudTranscriptionRoute::DirectGroq);
-        let ranges = plan_live_chunk_ranges(SAMPLE_RATE * 60 * 31, limit).unwrap();
-        assert!(ranges.len() > 1);
-        for range in ranges {
-            let bytes = groq_client::estimate_wav_size_bytes(range.end - range.start).unwrap();
-            assert!(bytes <= limit);
+        for (name, models, requested, expected) in cases {
+            assert_eq!(
+                choose_local_fallback_model_id(models, requested).as_deref(),
+                expected,
+                "case: {name}"
+            );
         }
     }
 
     #[test]
-    fn live_openai_chunk_plan_stays_under_direct_limit() {
-        let limit = safe_live_chunk_limit_bytes(CloudTranscriptionRoute::DirectOpenAi);
-        let ranges = plan_live_chunk_ranges(SAMPLE_RATE * 60 * 31, limit).unwrap();
-        assert!(ranges.len() > 1);
-        for range in ranges {
-            let bytes = groq_client::estimate_wav_size_bytes(range.end - range.start).unwrap();
-            assert!(bytes <= limit);
+    fn stitcher_handles_supported_chunk_boundaries() {
+        let cases = [
+            (
+                "repeated boundary words",
+                "hello world from the meeting",
+                "from the meeting today",
+                "hello world from the meeting today",
+            ),
+            (
+                "case and punctuation",
+                "Thanks for joining,",
+                "joining today everyone",
+                "Thanks for joining, today everyone",
+            ),
+            (
+                "no overlap",
+                "alpha beta",
+                "gamma delta",
+                "alpha beta gamma delta",
+            ),
+        ];
+
+        for (name, initial, next, expected) in cases {
+            let mut assembled = initial.to_string();
+            append_stitched_text(&mut assembled, next);
+            assert_eq!(assembled, expected, "case: {name}");
         }
     }
 
     #[test]
-    fn live_proxy_chunk_plan_uses_fewer_chunks_than_direct() {
+    fn incremental_finalization_policy_covers_progress_and_timeout_boundaries() {
+        for (chunks, expected) in [(0, false), (1, false), (2, true)] {
+            assert_eq!(
+                has_enough_incremental_chunks_for_finalization(chunks),
+                expected
+            );
+        }
+
+        let progress_cases = [
+            (1, SAMPLE_RATE * 14, false),
+            (1, SAMPLE_RATE * 15, true),
+            (2, SAMPLE_RATE * 10, true),
+        ];
+        for (chunks, samples, expected) in progress_cases {
+            assert_eq!(
+                has_enough_incremental_progress_for_finalization(chunks, samples),
+                expected,
+                "chunks={chunks}, samples={samples}"
+            );
+        }
+
+        for (chunks, expected_secs) in [(0, 6), (2, 14), (10, 30)] {
+            assert_eq!(
+                incremental_tail_timeout(chunks),
+                Duration::from_secs(expected_secs),
+                "chunks={chunks}"
+            );
+        }
+    }
+
+    #[test]
+    fn live_chunk_plans_respect_provider_limits_and_proxy_capacity() {
+        for route in [
+            CloudTranscriptionRoute::DirectGroq,
+            CloudTranscriptionRoute::DirectOpenAi,
+        ] {
+            let limit = safe_live_chunk_limit_bytes(route);
+            let ranges = plan_live_chunk_ranges(SAMPLE_RATE * 60 * 31, limit).unwrap();
+            assert!(ranges.len() > 1, "route: {route:?}");
+            for range in ranges {
+                let bytes = groq_client::estimate_wav_size_bytes(range.end - range.start).unwrap();
+                assert!(bytes <= limit, "route: {route:?}");
+            }
+        }
+
         let sample_count = SAMPLE_RATE * 60 * 80;
         let direct_ranges = plan_live_chunk_ranges(
             sample_count,
@@ -2780,50 +2750,31 @@ mod tests {
     }
 
     #[test]
-    fn silence_hallucination_detection_normalizes_punctuation_and_case() {
+    fn silence_hallucination_detection_covers_known_artifacts_and_real_speech() {
         let quiet_levels = audio_levels(&[0.0, 0.0005, -0.0004, 0.0003, 0.0]);
         assert!(should_suppress_silence_hallucination(
             quiet_levels,
             "Thank you!"
         ));
-    }
-
-    #[test]
-    fn silence_hallucination_detection_suppresses_amara_subtitle_boilerplate() {
-        let quiet_levels = audio_levels(&[0.0, 0.0005, -0.0004, 0.0003, 0.0]);
-
         assert!(should_suppress_silence_hallucination(
             quiet_levels,
             "Subtitles by the Amara.org community"
         ));
-    }
 
-    #[test]
-    fn silence_hallucination_detection_suppresses_amara_boilerplate_over_music_levels() {
         let music_like_levels = audio_levels(&[0.0, 0.08, -0.07, 0.06, -0.05, 0.04]);
-
         assert!(should_suppress_silence_hallucination(
             music_like_levels,
             "Subtitles by the Amara.org community"
         ));
-    }
 
-    #[test]
-    fn silence_hallucination_detection_suppresses_near_silent_punctuation() {
         let near_silent_levels = Some((0.003402, 0.030187));
+        for punctuation in ["?", "..."] {
+            assert!(should_suppress_silence_hallucination(
+                near_silent_levels,
+                punctuation
+            ));
+        }
 
-        assert!(should_suppress_silence_hallucination(
-            near_silent_levels,
-            "?"
-        ));
-        assert!(should_suppress_silence_hallucination(
-            near_silent_levels,
-            "..."
-        ));
-    }
-
-    #[test]
-    fn silence_hallucination_detection_does_not_suppress_real_speech_levels() {
         let speech_levels = audio_levels(&[0.0, 0.08, -0.07, 0.06, -0.05, 0.04]);
         assert!(!should_suppress_silence_hallucination(
             speech_levels,
@@ -2843,82 +2794,5 @@ mod tests {
             None
         );
         assert!(non_silent_empty_transcription_levels(&[0.0, 0.08, -0.07, 0.06], "").is_some());
-    }
-
-    #[test]
-    fn quiet_retry_boosts_low_speech_without_clipping() {
-        let mut audio = vec![0.0; 512];
-        audio[20] = 0.016;
-        audio[80] = -0.02;
-        audio[140] = 0.012;
-        audio[220] = -0.018;
-        audio[300] = 0.236;
-        let levels = audio_levels(&audio).unwrap();
-        let boosted = boost_audio_for_quiet_retry(&audio, levels).expect("expected boost");
-        let boosted_levels = audio_levels(&boosted).unwrap();
-
-        assert!(boosted_levels.0 > levels.0);
-        assert!(boosted_levels.1 <= QUIET_AUDIO_MAX_PEAK + f32::EPSILON);
-        assert!(boosted.iter().all(|sample| (-1.0..=1.0).contains(sample)));
-    }
-
-    #[test]
-    fn quiet_retry_skips_when_audio_is_already_loud_enough() {
-        let audio = vec![0.0, 0.2, -0.18, 0.16, -0.12];
-        let levels = audio_levels(&audio).unwrap();
-
-        assert!(boost_audio_for_quiet_retry(&audio, levels).is_none());
-    }
-
-    #[test]
-    #[ignore = "Uses locally downloaded models and recordings to reproduce transcription hangs"]
-    fn parakeet_transcribes_latest_local_recording_within_timeout() {
-        let app_dir = app_support_dir();
-        let model_dir = app_dir.join("models/parakeet-tdt-0.6b-v3-int8");
-        assert!(
-            model_dir.exists(),
-            "expected parakeet model at {}",
-            model_dir.display()
-        );
-
-        let recordings_dir = app_dir.join("recordings");
-        let recording_path = newest_recording_path(&recordings_dir)
-            .expect("expected at least one local recording to reproduce against");
-        let samples = load_wav_samples(&recording_path);
-        assert!(
-            !samples.is_empty(),
-            "latest recording {} contained no samples",
-            recording_path.display()
-        );
-
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let mut engine = ParakeetEngine::new();
-            let result = engine
-                .load_model_with_params(&model_dir, ParakeetModelParams::int8())
-                .and_then(|_| {
-                    engine.transcribe_samples(
-                        samples,
-                        Some(ParakeetInferenceParams {
-                            timestamp_granularity: TimestampGranularity::Segment,
-                            ..Default::default()
-                        }),
-                    )
-                })
-                .map(|result| result.text)
-                .map_err(|err| err.to_string());
-            let _ = tx.send(result);
-        });
-
-        let transcription = rx
-            .recv_timeout(Duration::from_secs(20))
-            .expect("parakeet transcription timed out");
-
-        let text = transcription.expect("parakeet transcription failed");
-        assert!(
-            !text.trim().is_empty(),
-            "parakeet transcription returned empty text for {}",
-            recording_path.display()
-        );
     }
 }

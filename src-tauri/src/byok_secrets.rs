@@ -65,16 +65,6 @@ fn env_openai_api_key() -> Option<String> {
     None
 }
 
-#[cfg(test)]
-fn settings_groq_api_key(settings: &AppSettings) -> Option<String> {
-    settings_api_key(settings, GROQ_SECRET_KEY)
-}
-
-#[cfg(test)]
-fn settings_openai_api_key(settings: &AppSettings) -> Option<String> {
-    settings_api_key(settings, OPENAI_SECRET_KEY)
-}
-
 fn settings_api_key(settings: &AppSettings, provider_id: &str) -> Option<String> {
     settings
         .post_process_api_keys
@@ -476,38 +466,35 @@ mod tests {
     use tempfile::TempDir;
 
     #[test]
-    fn settings_groq_api_key_uses_non_empty_legacy_plaintext_value() {
-        let mut settings = get_default_settings();
-        settings
-            .post_process_api_keys
-            .insert("groq".to_string(), " gsk_test ".to_string());
+    fn settings_plaintext_fallback_accepts_only_nonempty_nonplaceholder_values() {
+        let cases = [
+            ("groq", None, None),
+            ("groq", Some("   "), None),
+            ("groq", Some(STORED_API_KEY_PLACEHOLDER), None),
+            ("groq", Some(" gsk_test "), Some("gsk_test")),
+            ("openai", Some("   "), None),
+            ("openai", Some(" sk-test "), Some("sk-test")),
+        ];
 
-        assert_eq!(
-            settings_groq_api_key(&settings).as_deref(),
-            Some("gsk_test")
-        );
-    }
+        for (provider_id, configured, expected) in cases {
+            let mut settings = get_default_settings();
+            match configured {
+                Some(value) => {
+                    settings
+                        .post_process_api_keys
+                        .insert(provider_id.to_string(), value.to_string());
+                }
+                None => {
+                    settings.post_process_api_keys.remove(provider_id);
+                }
+            }
 
-    #[test]
-    fn settings_groq_api_key_ignores_missing_or_empty_values() {
-        let mut settings = get_default_settings();
-        assert_eq!(settings_groq_api_key(&settings), None);
-
-        settings
-            .post_process_api_keys
-            .insert("groq".to_string(), "   ".to_string());
-
-        assert_eq!(settings_groq_api_key(&settings), None);
-    }
-
-    #[test]
-    fn settings_api_key_ignores_renderer_placeholder() {
-        let mut settings = get_default_settings();
-        settings
-            .post_process_api_keys
-            .insert("groq".to_string(), STORED_API_KEY_PLACEHOLDER.to_string());
-
-        assert_eq!(settings_groq_api_key(&settings), None);
+            assert_eq!(
+                settings_api_key(&settings, provider_id).as_deref(),
+                expected,
+                "provider={provider_id}, configured={configured:?}"
+            );
+        }
     }
 
     #[test]
@@ -523,33 +510,6 @@ mod tests {
             std::env::remove_var("UTTR_GROQ_API_KEY");
             std::env::remove_var("GROQ_API_KEY");
         }
-    }
-
-    #[test]
-    fn settings_openai_api_key_uses_non_empty_plaintext_value() {
-        let mut settings = get_default_settings();
-        settings
-            .post_process_api_keys
-            .insert("openai".to_string(), " sk-test ".to_string());
-
-        assert_eq!(
-            settings_openai_api_key(&settings).as_deref(),
-            Some("sk-test")
-        );
-    }
-
-    #[test]
-    fn settings_transcription_api_keys_ignore_empty_values() {
-        let mut settings = get_default_settings();
-        settings
-            .post_process_api_keys
-            .insert("openai".to_string(), "   ".to_string());
-        settings
-            .post_process_api_keys
-            .insert("groq".to_string(), "   ".to_string());
-
-        assert_eq!(settings_openai_api_key(&settings), None);
-        assert_eq!(settings_groq_api_key(&settings), None);
     }
 
     #[test]

@@ -521,24 +521,31 @@ mod tests {
     }
 
     #[test]
-    fn backend_transport_hint_detects_dns_failures() {
-        let hint = backend_transport_error_hint(
-            "https://uttr.pro/api/trial/bootstrap",
-            "error sending request for url: dns error: failed to lookup address information",
-        );
+    fn backend_transport_hints_cover_dns_and_connectivity_failures() {
+        let cases = [
+            (
+                "error sending request for url: dns error: failed to lookup address information",
+                [
+                    "Could not resolve the Uttr backend host",
+                    "UTTR_BACKEND_BASE_URL",
+                ]
+                .as_slice(),
+            ),
+            (
+                "error sending request for url: connection refused",
+                ["Could not connect to"].as_slice(),
+            ),
+        ];
 
-        assert!(hint.contains("Could not resolve the Uttr backend host"));
-        assert!(hint.contains("UTTR_BACKEND_BASE_URL"));
-    }
-
-    #[test]
-    fn backend_transport_hint_detects_connectivity_failures() {
-        let hint = backend_transport_error_hint(
-            "https://uttr.pro/api/trial/bootstrap",
-            "error sending request for url: connection refused",
-        );
-
-        assert!(hint.contains("Could not connect to"));
+        for (error, expected_fragments) in cases {
+            let hint = backend_transport_error_hint("https://uttr.pro/api/trial/bootstrap", error);
+            for fragment in expected_fragments {
+                assert!(
+                    hint.contains(fragment),
+                    "error={error}, fragment={fragment}"
+                );
+            }
+        }
     }
 
     #[test]

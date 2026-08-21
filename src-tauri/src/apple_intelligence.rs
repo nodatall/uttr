@@ -58,14 +58,3 @@ pub fn process_text(prompt: &str, max_tokens: i32) -> Result<String, String> {
 
     result
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_availability() {
-        let available = check_apple_intelligence_availability();
-        println!("Apple Intelligence available: {}", available);
-    }
-}

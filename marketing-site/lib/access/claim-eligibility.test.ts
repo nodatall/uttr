@@ -20,35 +20,42 @@ function trial(overrides: Partial<AnonymousTrialRow> = {}): AnonymousTrialRow {
 }
 
 describe("claim eligibility", () => {
-  test("allows unlinked new, trialing, and expired installs", () => {
-    for (const status of ["new", "trialing", "expired"] as const) {
-      expect(
-        trialCanCreateClaim(trial({ status }), { accessState: "blocked" }),
-      ).toBe(true);
+  test("allows claims for unpaid installs and blocks subscribed installs", () => {
+    const cases = [
+      ...(["new", "trialing", "expired"] as const).map((status) => ({
+        name: `unlinked ${status}`,
+        row: trial({ status }),
+        accessState: "blocked" as const,
+        expected: true,
+      })),
+      {
+        name: "linked but unpaid",
+        row: trial({ user_id: "user_123" }),
+        accessState: "blocked" as const,
+        expected: true,
+      },
+      {
+        name: "linked and subscribed",
+        row: trial({ user_id: "user_123" }),
+        accessState: "subscribed" as const,
+        expected: false,
+      },
+      {
+        name: "unlinked and subscribed",
+        row: trial(),
+        accessState: "subscribed" as const,
+        expected: false,
+      },
+    ];
+
+    for (const { name, row, accessState, expected } of cases) {
+      expect({
+        name,
+        allowed: trialCanCreateClaim(row, { accessState }),
+      }).toEqual({
+        name,
+        allowed: expected,
+      });
     }
-  });
-
-  test("allows linked installs that are not subscribed", () => {
-    expect(
-      trialCanCreateClaim(trial({ user_id: "user_123" }), {
-        accessState: "blocked",
-      }),
-    ).toBe(true);
-  });
-
-  test("blocks subscribed installs even when linked", () => {
-    expect(
-      trialCanCreateClaim(trial({ user_id: "user_123" }), {
-        accessState: "subscribed",
-      }),
-    ).toBe(false);
-  });
-
-  test("blocks unlinked subscribed installs", () => {
-    expect(
-      trialCanCreateClaim(trial(), {
-        accessState: "subscribed",
-      }),
-    ).toBe(false);
   });
 });

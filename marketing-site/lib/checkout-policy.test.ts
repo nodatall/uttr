@@ -2,30 +2,23 @@ import { describe, expect, test } from "bun:test";
 import { checkoutRequiresClaimToken } from "./checkout-policy";
 
 describe("checkout claim-token policy", () => {
-  test("requires claim token for first purchase", () => {
-    expect(
-      checkoutRequiresClaimToken({
+  test("requires a claim only for first purchase without a token", () => {
+    const cases = [
+      {
         hasActiveEntitlement: false,
         claimToken: null,
-      }),
-    ).toBe(true);
-  });
-
-  test("allows already-entitled users without a claim token", () => {
-    expect(
-      checkoutRequiresClaimToken({
-        hasActiveEntitlement: true,
-        claimToken: null,
-      }),
-    ).toBe(false);
-  });
-
-  test("allows first purchase when a claim token is present", () => {
-    expect(
-      checkoutRequiresClaimToken({
+        expected: true,
+      },
+      { hasActiveEntitlement: true, claimToken: null, expected: false },
+      {
         hasActiveEntitlement: false,
         claimToken: "claim_123",
-      }),
-    ).toBe(false);
+        expected: false,
+      },
+    ];
+
+    for (const { expected, ...input } of cases) {
+      expect(checkoutRequiresClaimToken(input)).toBe(expected);
+    }
   });
 });

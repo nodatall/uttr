@@ -1,6 +1,16 @@
 #[cfg(target_os = "macos")]
 use std::process::Command;
 
+#[cfg(any(target_os = "macos", test))]
+fn ioreg_reports_closed_clamshell(output: &str) -> bool {
+    output.contains("\"AppleClamshellState\" = Yes")
+}
+
+#[cfg(any(target_os = "macos", test))]
+fn pmset_reports_internal_battery(output: &str) -> bool {
+    output.contains("InternalBattery")
+}
+
 /// Checks if the MacBook is in clamshell mode (lid closed with external display)
 ///
 /// This queries the macOS IORegistry for the AppleClamshellState key.
@@ -21,8 +31,7 @@ pub fn is_clamshell() -> Result<bool, String> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Look for "AppleClamshellState" = Yes in the output
-    Ok(stdout.contains("\"AppleClamshellState\" = Yes"))
+    Ok(ioreg_reports_closed_clamshell(&stdout))
 }
 
 /// Checks if the Mac is a laptop by detecting battery presence
@@ -41,8 +50,7 @@ pub fn is_laptop() -> Result<bool, String> {
 
     let stdout = String::from_utf8_lossy(&output.stdout);
 
-    // Check if InternalBattery is present (laptops have batteries, desktops typically don't)
-    Ok(stdout.contains("InternalBattery"))
+    Ok(pmset_reports_internal_battery(&stdout))
 }
 
 /// Stub implementation for non-macOS platforms
@@ -63,24 +71,30 @@ pub fn is_laptop() -> Result<bool, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::{ioreg_reports_closed_clamshell, pmset_reports_internal_battery};
 
     #[test]
-    #[cfg(target_os = "macos")]
-    fn test_clamshell_check() {
-        // This will run on macOS and should not panic
-        let result = is_clamshell();
-        assert!(result.is_ok());
-        let _ = result.unwrap();
+    fn parses_ioreg_clamshell_state() {
+        for (output, expected) in [
+            ("\"AppleClamshellState\" = Yes", true),
+            ("\"AppleClamshellState\" = No", false),
+            ("unrelated ioreg output", false),
+        ] {
+            assert_eq!(ioreg_reports_closed_clamshell(output), expected);
+        }
     }
 
     #[test]
-    #[cfg(target_os = "macos")]
-    fn test_is_laptop() {
-        let result = is_laptop();
-        assert!(result.is_ok());
-        if let Ok(is_laptop) = result {
-            println!("Is laptop: {}", is_laptop);
+    fn parses_pmset_battery_presence() {
+        for (output, expected) in [
+            (
+                "Now drawing from 'Battery Power'\n -InternalBattery-0",
+                true,
+            ),
+            ("Now drawing from 'AC Power'", false),
+            ("", false),
+        ] {
+            assert_eq!(pmset_reports_internal_battery(output), expected);
         }
     }
 }

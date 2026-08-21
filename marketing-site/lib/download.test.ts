@@ -13,23 +13,26 @@ afterEach(() => {
 });
 
 describe("download URL helper", () => {
-  test("uses the first-party download route by default", () => {
-    delete process.env.NEXT_PUBLIC_DOWNLOAD_URL;
+  test("resolves supported default, legacy, and direct download configuration", () => {
+    const cases = [
+      { configured: undefined, expected: "/download" },
+      {
+        configured: "https://github.com/nodatall/uttr/releases/latest",
+        expected: "/download",
+      },
+      {
+        configured: "https://downloads.uttr.pro/Uttr.dmg",
+        expected: "https://downloads.uttr.pro/Uttr.dmg",
+      },
+    ];
 
-    expect(getDownloadUrl()).toBe("/download");
-  });
-
-  test("maps the old GitHub releases page env value to the download route", () => {
-    process.env.NEXT_PUBLIC_DOWNLOAD_URL =
-      "https://github.com/nodatall/uttr/releases/latest";
-
-    expect(getDownloadUrl()).toBe("/download");
-  });
-
-  test("keeps explicit direct download URLs", () => {
-    process.env.NEXT_PUBLIC_DOWNLOAD_URL =
-      "https://downloads.uttr.pro/Uttr.dmg";
-
-    expect(getDownloadUrl()).toBe("https://downloads.uttr.pro/Uttr.dmg");
+    for (const { configured, expected } of cases) {
+      if (configured) {
+        process.env.NEXT_PUBLIC_DOWNLOAD_URL = configured;
+      } else {
+        delete process.env.NEXT_PUBLIC_DOWNLOAD_URL;
+      }
+      expect(getDownloadUrl()).toBe(expected);
+    }
   });
 });

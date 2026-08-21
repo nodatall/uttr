@@ -9,6 +9,8 @@ const ASR_PROMPT_LEAK_FRAGMENTS: &[&str] = &[
     "If speech is present, transcribe the spoken words verbatim with normal punctuation.",
     "Preserve spoken filler words and hesitation sounds such as um, uh, uhm, and uhh.",
 ];
+const MAX_CUSTOM_WORD_NGRAM: usize = 4;
+const NGRAM_ADDITIONAL_TOKEN_PENALTY: f64 = 0.03;
 
 /// Builds an n-gram string by cleaning and concatenating words
 ///
@@ -125,10 +127,12 @@ pub fn apply_custom_words(text: &str, custom_words: &[String], threshold: f64) -
     let mut i = 0;
 
     while i < words.len() {
-        let mut matched = false;
+        let mut best_match: Option<(usize, &String, f64)> = None;
 
-        // Try n-grams from longest (3) to shortest (1) - greedy matching
-        for n in (1..=3).rev() {
+        // Prefer the closest match, using the longer n-gram only as a tiebreaker.
+        // A longest-first match can consume an unrelated preceding word when a
+        // shorter exact pronunciation is available (for example, "è Charge B").
+        for n in (1..=MAX_CUSTOM_WORD_NGRAM).rev() {
             if i + n > words.len() {
                 continue;
             }
@@ -136,24 +140,57 @@ pub fn apply_custom_words(text: &str, custom_words: &[String], threshold: f64) -
             let ngram_words = &words[i..i + n];
             let ngram = build_ngram(ngram_words);
 
-            if let Some((replacement, _score)) =
+            if let Some((replacement, score)) =
                 find_best_match(&ngram, custom_words, &custom_words_nospace, threshold)
             {
-                // Extract punctuation from first and last words of the n-gram
-                let (prefix, _) = extract_punctuation(ngram_words[0]);
-                let (_, suffix) = extract_punctuation(ngram_words[n - 1]);
+                let adjusted_score =
+                    score + (n.saturating_sub(1) as f64 * NGRAM_ADDITIONAL_TOKEN_PENALTY);
+                let better_match_starts_at_next_word = n > 1
+                    && (1..=MAX_CUSTOM_WORD_NGRAM.min(words.len().saturating_sub(i + 1))).any(
+                        |next_n| {
+                            let next_candidate = build_ngram(&words[i + 1..i + 1 + next_n]);
+                            find_best_match(
+                                &next_candidate,
+                                custom_words,
+                                &custom_words_nospace,
+                                threshold,
+                            )
+                            .map(|(next_replacement, next_score)| {
+                                let next_adjusted_score = next_score
+                                    + (next_n.saturating_sub(1) as f64
+                                        * NGRAM_ADDITIONAL_TOKEN_PENALTY);
+                                next_replacement == replacement
+                                    && next_adjusted_score <= adjusted_score
+                            })
+                            .unwrap_or(false)
+                        },
+                    );
+                if better_match_starts_at_next_word {
+                    continue;
+                }
 
-                // Preserve case from first word
-                let corrected = preserve_case_pattern(ngram_words[0], replacement);
-
-                result.push(format!("{}{}{}", prefix, corrected, suffix));
-                i += n;
-                matched = true;
-                break;
+                let should_replace = best_match
+                    .as_ref()
+                    .map(|(best_n, _, best_score)| {
+                        adjusted_score < *best_score
+                            || (adjusted_score == *best_score && n > *best_n)
+                    })
+                    .unwrap_or(true);
+                if should_replace {
+                    best_match = Some((n, replacement, adjusted_score));
+                }
             }
         }
 
-        if !matched {
+        if let Some((n, replacement, _)) = best_match {
+            let ngram_words = &words[i..i + n];
+            let (prefix, _) = extract_punctuation(ngram_words[0]);
+            let (_, suffix) = extract_punctuation(ngram_words[n - 1]);
+            let corrected = preserve_case_pattern(ngram_words[0], replacement);
+
+            result.push(format!("{}{}{}", prefix, corrected, suffix));
+            i += n;
+        } else {
             result.push(words[i].to_string());
             i += 1;
         }
@@ -311,191 +348,131 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_apply_custom_words_exact_match() {
-        let text = "hello world";
-        let custom_words = vec!["Hello".to_string(), "World".to_string()];
-        let result = apply_custom_words(text, &custom_words, 0.5);
-        assert_eq!(result, "Hello World");
+    fn custom_vocabulary_corrections_cover_supported_matching_behavior() {
+        let cases = [
+            (
+                "exact matches",
+                "hello world",
+                vec!["Hello", "World"],
+                "Hello World",
+            ),
+            (
+                "fuzzy matches",
+                "helo wrold",
+                vec!["hello", "world"],
+                "hello world",
+            ),
+            (
+                "no configured vocabulary",
+                "hello world",
+                vec![],
+                "hello world",
+            ),
+            (
+                "two-word pronunciation",
+                "il cui nome è Charge B, che permette",
+                vec!["ChargeBee"],
+                "il cui nome è ChargeBee, che permette",
+            ),
+            (
+                "three-word pronunciation",
+                "use Chat G P T for this",
+                vec!["ChatGPT"],
+                "use ChatGPT for this",
+            ),
+            (
+                "longest n-gram wins",
+                "Open AI GPT model",
+                vec!["OpenAI", "GPT"],
+                "OpenAI GPT model",
+            ),
+            (
+                "uppercase pronunciation",
+                "CHARGE B is great",
+                vec!["ChargeBee"],
+                "CHARGEBEE is great",
+            ),
+            (
+                "punctuation around a pronunciation",
+                "!charge b?",
+                vec!["ChargeBee"],
+                "!ChargeBee?",
+            ),
+            (
+                "spaces in custom term",
+                "using Mac Book Pro",
+                vec!["MacBook Pro"],
+                "using MacBook Pro",
+            ),
+            (
+                "trailing number is not duplicated",
+                "use GPT4 for this",
+                vec!["GPT-4"],
+                "use GPT-4 for this",
+            ),
+        ];
+
+        for (name, text, custom_words, expected) in cases {
+            let custom_words = custom_words
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>();
+            assert_eq!(
+                apply_custom_words(text, &custom_words, 0.5),
+                expected,
+                "case: {name}"
+            );
+        }
     }
 
     #[test]
-    fn test_apply_custom_words_fuzzy_match() {
-        let text = "helo wrold";
-        let custom_words = vec!["hello".to_string(), "world".to_string()];
-        let result = apply_custom_words(text, &custom_words, 0.5);
-        assert_eq!(result, "hello world");
-    }
+    fn transcription_filter_covers_supported_cleanup_behavior() {
+        let cases = [
+            (
+                "filler words",
+                "So um I was thinking uh about this",
+                "So I was thinking about this",
+            ),
+            ("case-insensitive fillers", "UM this is UH a test", "this is a test"),
+            (
+                "punctuated fillers",
+                "Well, um, I think, uh. that's right",
+                "Well, I think, that's right",
+            ),
+            ("repeated whitespace", "Hello    world   test", "Hello world test"),
+            ("outer whitespace", "  Hello world  ", "Hello world"),
+            (
+                "combined cleanup",
+                "  Um, so I was, uh, thinking about this  ",
+                "so I was, thinking about this",
+            ),
+            (
+                "valid text",
+                "This is a completely normal sentence.",
+                "This is a completely normal sentence.",
+            ),
+            (
+                "partial ASR prompt leak",
+                "And right now my mortgage is like $1.3 million, $7. The speaker may be quiet, fast, or mumbled. If speech is present, transcribe the spoken words verbatim with normal punctuation. I've been working on this for a while now.",
+                "And right now my mortgage is like $1.3 million, $7. I've been working on this for a while now.",
+            ),
+            (
+                "full ASR prompt leak",
+                "Before. Transcribe short desktop dictation accurately. The speaker may be quiet, fast, or mumbled. If speech is present, transcribe the spoken words verbatim with normal punctuation. Preserve spoken filler words and hesitation sounds such as um, uh, uhm, and uhh. After.",
+                "Before. After.",
+            ),
+            (
+                "long stutter",
+                "w wh wh wh wh wh wh wh wh wh why",
+                "w wh why",
+            ),
+            ("short-word stutter", "I I I I think so so so so", "I think so"),
+            ("mixed-case stutter", "No NO no NO no", "No"),
+            ("two repetitions are speech", "no no is fine", "no no is fine"),
+        ];
 
-    #[test]
-    fn test_preserve_case_pattern() {
-        assert_eq!(preserve_case_pattern("HELLO", "world"), "WORLD");
-        assert_eq!(preserve_case_pattern("Hello", "world"), "World");
-        assert_eq!(preserve_case_pattern("hello", "WORLD"), "WORLD");
-    }
-
-    #[test]
-    fn test_extract_punctuation() {
-        assert_eq!(extract_punctuation("hello"), ("", ""));
-        assert_eq!(extract_punctuation("!hello?"), ("!", "?"));
-        assert_eq!(extract_punctuation("...hello..."), ("...", "..."));
-    }
-
-    #[test]
-    fn test_empty_custom_words() {
-        let text = "hello world";
-        let custom_words = vec![];
-        let result = apply_custom_words(text, &custom_words, 0.5);
-        assert_eq!(result, "hello world");
-    }
-
-    #[test]
-    fn test_filter_filler_words() {
-        let text = "So um I was thinking uh about this";
-        let result = filter_transcription_output(text);
-        assert_eq!(result, "So I was thinking about this");
-    }
-
-    #[test]
-    fn test_filter_filler_words_case_insensitive() {
-        let text = "UM this is UH a test";
-        let result = filter_transcription_output(text);
-        assert_eq!(result, "this is a test");
-    }
-
-    #[test]
-    fn test_filter_filler_words_with_punctuation() {
-        let text = "Well, um, I think, uh. that's right";
-        let result = filter_transcription_output(text);
-        assert_eq!(result, "Well, I think, that's right");
-    }
-
-    #[test]
-    fn test_filter_cleans_whitespace() {
-        let text = "Hello    world   test";
-        let result = filter_transcription_output(text);
-        assert_eq!(result, "Hello world test");
-    }
-
-    #[test]
-    fn test_filter_trims() {
-        let text = "  Hello world  ";
-        let result = filter_transcription_output(text);
-        assert_eq!(result, "Hello world");
-    }
-
-    #[test]
-    fn test_filter_combined() {
-        let text = "  Um, so I was, uh, thinking about this  ";
-        let result = filter_transcription_output(text);
-        assert_eq!(result, "so I was, thinking about this");
-    }
-
-    #[test]
-    fn test_filter_preserves_valid_text() {
-        let text = "This is a completely normal sentence.";
-        let result = filter_transcription_output(text);
-        assert_eq!(result, "This is a completely normal sentence.");
-    }
-
-    #[test]
-    fn test_filter_removes_asr_prompt_leak() {
-        let text = "And right now my mortgage is like $1.3 million, $7. The speaker may be quiet, fast, or mumbled. If speech is present, transcribe the spoken words verbatim with normal punctuation. I've been working on this for a while now.";
-        let result = filter_transcription_output(text);
-        assert_eq!(
-            result,
-            "And right now my mortgage is like $1.3 million, $7. I've been working on this for a while now."
-        );
-    }
-
-    #[test]
-    fn test_filter_removes_full_asr_prompt_leak() {
-        let text = "Before. Transcribe short desktop dictation accurately. The speaker may be quiet, fast, or mumbled. If speech is present, transcribe the spoken words verbatim with normal punctuation. Preserve spoken filler words and hesitation sounds such as um, uh, uhm, and uhh. After.";
-        let result = filter_transcription_output(text);
-        assert_eq!(result, "Before. After.");
-    }
-
-    #[test]
-    fn test_filter_stutter_collapse() {
-        let text = "w wh wh wh wh wh wh wh wh wh why";
-        let result = filter_transcription_output(text);
-        assert_eq!(result, "w wh why");
-    }
-
-    #[test]
-    fn test_filter_stutter_short_words() {
-        let text = "I I I I think so so so so";
-        let result = filter_transcription_output(text);
-        assert_eq!(result, "I think so");
-    }
-
-    #[test]
-    fn test_filter_stutter_mixed_case() {
-        let text = "No NO no NO no";
-        let result = filter_transcription_output(text);
-        assert_eq!(result, "No");
-    }
-
-    #[test]
-    fn test_filter_stutter_preserves_two_repetitions() {
-        let text = "no no is fine";
-        let result = filter_transcription_output(text);
-        assert_eq!(result, "no no is fine");
-    }
-
-    #[test]
-    fn test_apply_custom_words_ngram_two_words() {
-        let text = "il cui nome è Charge B, che permette";
-        let custom_words = vec!["ChargeBee".to_string()];
-        let result = apply_custom_words(text, &custom_words, 0.5);
-        assert!(result.contains("ChargeBee,"));
-        assert!(!result.contains("Charge B"));
-    }
-
-    #[test]
-    fn test_apply_custom_words_ngram_three_words() {
-        let text = "use Chat G P T for this";
-        let custom_words = vec!["ChatGPT".to_string()];
-        let result = apply_custom_words(text, &custom_words, 0.5);
-        assert!(result.contains("ChatGPT"));
-    }
-
-    #[test]
-    fn test_apply_custom_words_prefers_longer_ngram() {
-        let text = "Open AI GPT model";
-        let custom_words = vec!["OpenAI".to_string(), "GPT".to_string()];
-        let result = apply_custom_words(text, &custom_words, 0.5);
-        assert_eq!(result, "OpenAI GPT model");
-    }
-
-    #[test]
-    fn test_apply_custom_words_ngram_preserves_case() {
-        let text = "CHARGE B is great";
-        let custom_words = vec!["ChargeBee".to_string()];
-        let result = apply_custom_words(text, &custom_words, 0.5);
-        assert!(result.contains("CHARGEBEE"));
-    }
-
-    #[test]
-    fn test_apply_custom_words_ngram_with_spaces_in_custom() {
-        // Custom word with space should also match against split words
-        let text = "using Mac Book Pro";
-        let custom_words = vec!["MacBook Pro".to_string()];
-        let result = apply_custom_words(text, &custom_words, 0.5);
-        assert!(result.contains("MacBook"));
-    }
-
-    #[test]
-    fn test_apply_custom_words_trailing_number_not_doubled() {
-        // Verify that trailing non-alpha chars (like numbers) aren't double-counted
-        // between build_ngram stripping them and extract_punctuation capturing them
-        let text = "use GPT4 for this";
-        let custom_words = vec!["GPT-4".to_string()];
-        let result = apply_custom_words(text, &custom_words, 0.5);
-        // Should NOT produce "GPT-44" (double-counting the trailing 4)
-        assert!(
-            !result.contains("GPT-44"),
-            "got double-counted result: {}",
-            result
-        );
+        for (name, input, expected) in cases {
+            assert_eq!(filter_transcription_output(input), expected, "case: {name}");
+        }
     }
 }
