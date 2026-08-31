@@ -154,6 +154,7 @@ pub struct AudioRecorder {
     device: Option<Device>,
     cmd_tx: Option<mpsc::Sender<Cmd>>,
     worker_handle: Option<std::thread::JoinHandle<()>>,
+    stream_failed: Arc<AtomicBool>,
     vad: Option<Arc<Mutex<Box<dyn vad::VoiceActivityDetector>>>>,
     level_cb: Option<Arc<dyn Fn(Vec<f32>) + Send + Sync + 'static>>,
 }
@@ -164,6 +165,7 @@ impl AudioRecorder {
             device: None,
             cmd_tx: None,
             worker_handle: None,
+            stream_failed: Arc::new(AtomicBool::new(false)),
             vad: None,
             level_cb: None,
         })
@@ -195,6 +197,7 @@ impl AudioRecorder {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
         let (ready_tx, ready_rx) = mpsc::channel::<WorkerReady>();
         let first_frame_seen = Arc::new(AtomicBool::new(false));
+        self.stream_failed.store(false, Ordering::Release);
 
         let host = crate::audio_toolkit::get_cpal_host();
         let device = match device {
@@ -209,6 +212,7 @@ impl AudioRecorder {
         // Move the optional level callback into the worker thread
         let level_cb = self.level_cb.clone();
         let worker_first_frame_seen = Arc::clone(&first_frame_seen);
+        let worker_stream_failed = Arc::clone(&self.stream_failed);
 
         let worker = std::thread::spawn(move || {
             let mut ready_tx = Some(ready_tx);
@@ -235,6 +239,7 @@ impl AudioRecorder {
                             sample_tx,
                             channels,
                             Arc::clone(&worker_first_frame_seen),
+                            Arc::clone(&worker_stream_failed),
                         ),
                         cpal::SampleFormat::I8 => AudioRecorder::build_stream::<i8>(
                             &thread_device,
@@ -242,6 +247,7 @@ impl AudioRecorder {
                             sample_tx,
                             channels,
                             Arc::clone(&worker_first_frame_seen),
+                            Arc::clone(&worker_stream_failed),
                         ),
                         cpal::SampleFormat::I16 => AudioRecorder::build_stream::<i16>(
                             &thread_device,
@@ -249,6 +255,7 @@ impl AudioRecorder {
                             sample_tx,
                             channels,
                             Arc::clone(&worker_first_frame_seen),
+                            Arc::clone(&worker_stream_failed),
                         ),
                         cpal::SampleFormat::I32 => AudioRecorder::build_stream::<i32>(
                             &thread_device,
@@ -256,6 +263,7 @@ impl AudioRecorder {
                             sample_tx,
                             channels,
                             Arc::clone(&worker_first_frame_seen),
+                            Arc::clone(&worker_stream_failed),
                         ),
                         cpal::SampleFormat::F32 => AudioRecorder::build_stream::<f32>(
                             &thread_device,
@@ -263,6 +271,7 @@ impl AudioRecorder {
                             sample_tx,
                             channels,
                             Arc::clone(&worker_first_frame_seen),
+                            Arc::clone(&worker_stream_failed),
                         ),
                         _ => return Err("unsupported sample format".to_string()),
                     }
@@ -333,6 +342,15 @@ impl AudioRecorder {
 
         let first_frame_deadline = Instant::now() + Duration::from_millis(1500);
         while !first_frame_seen.load(Ordering::Relaxed) {
+            if self.stream_failed.load(Ordering::Acquire) {
+                let _ = cmd_tx.send(Cmd::Shutdown);
+                let _ = worker.join();
+                return Err(Box::new(Error::new(
+                    std::io::ErrorKind::BrokenPipe,
+                    "Microphone input stream reported a device error during startup",
+                )));
+            }
+
             if Instant::now() >= first_frame_deadline {
                 let _ = cmd_tx.send(Cmd::Shutdown);
                 let _ = worker.join();
@@ -353,6 +371,13 @@ impl AudioRecorder {
     }
 
     pub fn start(&self) -> Result<(), Box<dyn std::error::Error>> {
+        if self.stream_failed.load(Ordering::Acquire) {
+            return Err(Box::new(Error::new(
+                std::io::ErrorKind::BrokenPipe,
+                "Microphone input stream reported a device error",
+            )));
+        }
+
         if let Some(tx) = &self.cmd_tx {
             tx.send(Cmd::Start)?;
         }
@@ -426,6 +451,7 @@ impl AudioRecorder {
         sample_tx: mpsc::Sender<Vec<f32>>,
         channels: usize,
         first_frame_seen: Arc<AtomicBool>,
+        stream_failed: Arc<AtomicBool>,
     ) -> Result<cpal::Stream, cpal::BuildStreamError>
     where
         T: Sample + SizedSample + Send + 'static,
@@ -466,7 +492,10 @@ impl AudioRecorder {
         device.build_input_stream(
             &config.clone().into(),
             stream_cb,
-            |err| log::error!("Stream error: {}", err),
+            move |err| {
+                stream_failed.store(true, Ordering::Release);
+                log::error!("Stream error: {}", err);
+            },
             None,
         )
     }
@@ -838,8 +867,20 @@ fn run_consumer(
 mod tests {
     use super::{
         drain_recording, frame_has_quiet_speech_energy, handle_start,
-        mix_transcription_pcm_sources, normalize_transcription_pcm, DrainResult, PreRollBuffer,
+        mix_transcription_pcm_sources, normalize_transcription_pcm, AudioRecorder, DrainResult,
+        PreRollBuffer,
     };
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn recorder_start_rejects_a_stream_after_device_error() {
+        let recorder = AudioRecorder::new().expect("create recorder");
+        recorder.stream_failed.store(true, Ordering::Release);
+
+        let error = recorder.start().expect_err("failed stream must not start");
+
+        assert!(error.to_string().contains("device error"));
+    }
 
     #[test]
     fn recorder_pre_roll_buffer_caps_to_latest_samples() {

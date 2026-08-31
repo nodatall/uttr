@@ -4836,17 +4836,9 @@ impl ShortcutAction for TranscribeAction {
 
         let mut recording_started = false;
         if is_always_on {
-            // Always-on mode: Play audio feedback immediately, then apply mute after sound finishes
-            debug!("Always-on mode: Playing audio feedback immediately");
-            let rm_clone = Arc::clone(&rm);
-            let app_clone = app.clone();
-            // The blocking helper exits immediately if audio feedback is disabled,
-            // so we can always reuse this thread to ensure mute happens right after playback.
-            std::thread::spawn(move || {
-                play_feedback_sound_blocking(&app_clone, SoundType::Start);
-                rm_clone.apply_mute();
-            });
-
+            // Start recording before the feedback cue so a disconnected always-on
+            // stream can be reopened before the user is told capture is active.
+            debug!("Always-on mode: Starting recording before audio feedback");
             recording_started =
                 if let Some(meeting_binding_id) = meeting_microphone_binding.as_deref() {
                     borrow_meeting_microphone_for_quick_dictation(
@@ -4859,6 +4851,16 @@ impl ShortcutAction for TranscribeAction {
                     rm.try_start_recording(&binding_id)
                 };
             debug!("Recording started: {}", recording_started);
+            if recording_started {
+                let rm_clone = Arc::clone(&rm);
+                let app_clone = app.clone();
+                // The blocking helper exits immediately if audio feedback is disabled,
+                // so we can always reuse this thread to ensure mute happens right after playback.
+                std::thread::spawn(move || {
+                    play_feedback_sound_blocking(&app_clone, SoundType::Start);
+                    rm_clone.apply_mute();
+                });
+            }
             log::info!(
                 "[latency] transcribe recording active binding={} recording_started={} elapsed_ms={}",
                 binding_id,
