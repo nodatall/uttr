@@ -14,6 +14,7 @@ When asked to implement this doc, load the `$deliver` skill, use this file as th
 - Keep cancellation, microphone recovery, shortcut ordering, history persistence, provider fallbacks, payment, authorization, privacy, and rate-limit behavior intact.
 - Keep the CI transcription mock, browser mocks, release checks, existing product surfaces, persisted settings, and generated bindings.
 - Runtime boundaries and rendered design stay the same. Remove only unused members inside those boundaries and unreachable files.
+- Verification limit: full native transcription smoke stopped at the existing-development-session guard. Rust tests, native build, and smoke preflight passed.
 
 ## Steps
 
@@ -36,5 +37,5 @@ When asked to implement this doc, load the `$deliver` skill, use this file as th
 
 ### 4. Challenge the result and finish
 
-- [ ] Review the entire diff for changed behavior, unsupported reachability assumptions, unnecessary additions, and lost test coverage. Repair verified in-scope findings and rerun affected checks.
-- [ ] Record the actual line reduction and validation limits, archive this plan, commit the scoped changes, and verify the final working tree.
+- [x] Review the entire diff for changed behavior, unsupported reachability assumptions, unnecessary additions, and lost test coverage. Repair verified in-scope findings and rerun affected checks.
+- [x] Record the actual line reduction and validation limits, archive this plan, commit the scoped changes, and verify the final working tree.
