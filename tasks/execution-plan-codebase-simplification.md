@@ -20,7 +20,7 @@ When asked to implement this doc, load the `$deliver` skill, use this file as th
 ### 1. Delete unreachable native code
 
 - [x] Delete the unregistered recorder CLI, unused cursor helper, unused access-message accessor, obsolete transcription wrappers, and unused mixed-audio delta wrapper. Align the corresponding CI mock methods with the remaining interface.
-- [ ] Verify Rust tests, the native build, and release-transcription preflight. Run the full isolated transcription smoke when local permissions allow it and report any exact blocker. Preserve all native regression tests.
+- [x] Verify Rust tests, the native build, and release-transcription preflight. Run the full isolated transcription smoke when local permissions allow it and report any exact blocker. Preserve all native regression tests.
 
 ### 2. Remove unused frontend state and helpers
 
@@ -31,8 +31,8 @@ When asked to implement this doc, load the `$deliver` skill, use this file as th
 
 ### 3. Remove obsolete backend code and its test
 
-- [ ] Delete the uncalled premium-source classifier and the test that only exercises it, retaining live access-policy coverage. Delete the ignored provider MIME argument and its type field.
-- [ ] Run the complete backend test runner, lint, and build; confirm live access checks and upload validation remain unchanged.
+- [x] Delete the uncalled premium-source classifier and the test that only exercises it, retaining live access-policy coverage. Delete the ignored provider MIME argument and its type field.
+- [x] Run the complete backend test runner, lint, and build; confirm live access checks and upload validation remain unchanged.
 
 ### 4. Challenge the result and finish
 

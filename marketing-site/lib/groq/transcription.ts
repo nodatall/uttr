@@ -16,7 +16,6 @@ export type GroqTranscriptionEndpoint =
 export interface GroqTranscriptionInput {
   audioFile: Blob | File;
   fileName?: string;
-  mimeType?: string;
   language?: string | null;
   model?: string | null;
   translateToEnglish: boolean;
