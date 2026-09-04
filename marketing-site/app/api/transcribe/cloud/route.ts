@@ -419,7 +419,6 @@ export async function POST(request: Request) {
       const groqResult = await transcribeWithGroq({
         audioFile: fileEntry,
         fileName: fileEntry.name || "uttr.wav",
-        mimeType: fileEntry.type || "audio/wav",
         language: parseTextField(formData.get("language")),
         model: requestedModel,
         translateToEnglish,

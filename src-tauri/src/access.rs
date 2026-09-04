@@ -14,8 +14,6 @@ use tauri::AppHandle;
 const BACKEND_REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_BACKEND_BASE_URL: &str = "https://uttr.pro";
 const PREMIUM_FEATURE_ACCESS_MESSAGE: &str = "Upgrade to Pro to use this feature.";
-const TRANSCRIPTION_ACCESS_MESSAGE: &str =
-    "Your trial has ended. Upgrade to Pro to keep using transcription.";
 
 static BACKEND_HTTP_CLIENT: Lazy<Client> = Lazy::new(|| {
     Client::builder()
@@ -473,10 +471,6 @@ pub async fn request_claim_token(app: &AppHandle) -> Result<ClaimTokenResult, St
 
 pub fn premium_feature_access_message() -> &'static str {
     PREMIUM_FEATURE_ACCESS_MESSAGE
-}
-
-pub fn transcription_access_message() -> &'static str {
-    TRANSCRIPTION_ACCESS_MESSAGE
 }
 
 pub fn install_access_allows_transcription(snapshot: &InstallAccessSnapshot) -> bool {

@@ -55,16 +55,12 @@ impl TranscriptionManager {
         None
     }
 
-    pub async fn transcribe(&self, _audio: Vec<f32>) -> Result<String> {
-        Ok(String::new())
-    }
-
     pub async fn transcribe_with_source(
         &self,
-        audio: Vec<f32>,
+        _audio: Vec<f32>,
         _source: Option<&str>,
     ) -> Result<String> {
-        self.transcribe(audio).await
+        Ok(String::new())
     }
 
     pub fn start_incremental_session(
@@ -86,10 +82,6 @@ impl TranscriptionManager {
     }
 
     pub fn signal_incremental_stop(&self, _binding_id: &str) {}
-
-    pub fn has_incremental_session(&self, _binding_id: &str) -> bool {
-        false
-    }
 
     pub fn has_incremental_progress(&self, _binding_id: &str) -> bool {
         false
