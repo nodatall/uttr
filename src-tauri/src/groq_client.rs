@@ -503,24 +503,6 @@ pub async fn transcribe_samples_direct_openai(
     Ok(parsed.text)
 }
 
-pub async fn transcribe_samples(
-    install_token: &str,
-    model: &str,
-    samples: &[f32],
-    selected_language: &str,
-    translate_to_english: bool,
-) -> Result<ProxyTranscriptionResult, ProxyTranscriptionError> {
-    transcribe_samples_with_metadata(
-        install_token,
-        model,
-        samples,
-        selected_language,
-        translate_to_english,
-        ProxyTranscriptionMetadata::default(),
-    )
-    .await
-}
-
 pub async fn transcribe_samples_with_metadata(
     install_token: &str,
     model: &str,

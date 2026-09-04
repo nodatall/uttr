@@ -545,7 +545,7 @@ impl TranscriptionManager {
                     let timeout_seconds = settings.model_unload_timeout.to_seconds();
 
                     if let Some(limit_seconds) = timeout_seconds {
-                        // Skip polling-based unloading for immediate timeout since it's handled directly in transcribe()
+                        // Skip polling-based unloading for immediate timeout since transcription handles it directly.
                         if settings.model_unload_timeout == ModelUnloadTimeout::Immediately {
                             continue;
                         }
@@ -768,13 +768,6 @@ impl TranscriptionManager {
             self.model_manager.get_available_models(),
             preferred_local_model_id,
         )
-    }
-
-    pub fn select_preferred_local_model_id(
-        &self,
-        preferred_local_model_id: Option<&str>,
-    ) -> Option<String> {
-        self.select_local_fallback_model_id(preferred_local_model_id)
     }
 
     fn transcribe_with_local_engine(
@@ -1021,15 +1014,6 @@ impl TranscriptionManager {
                 join_err
             )),
         }
-    }
-
-    pub async fn transcribe_local_file_with_settings(
-        &self,
-        audio: Vec<f32>,
-        settings: &AppSettings,
-    ) -> Result<String> {
-        self.transcribe_raw_local_with_settings_async(audio, settings)
-            .await
     }
 
     async fn transcribe_with_direct_groq(
@@ -2351,14 +2335,6 @@ impl TranscriptionManager {
         }
     }
 
-    pub fn has_incremental_session(&self, binding_id: &str) -> bool {
-        let guard = self.incremental_session.lock().unwrap();
-        guard
-            .as_ref()
-            .map(|session| session.binding_id == binding_id)
-            .unwrap_or(false)
-    }
-
     pub fn has_incremental_progress(&self, binding_id: &str) -> bool {
         let guard = self.incremental_session.lock().unwrap();
         let Some(session) = guard.as_ref() else {
@@ -2401,10 +2377,6 @@ impl TranscriptionManager {
 
     pub fn cancel_generation(&self) -> u64 {
         self.cancel_generation.load(Ordering::Relaxed)
-    }
-
-    pub async fn transcribe(&self, audio: Vec<f32>) -> Result<String> {
-        self.transcribe_with_source(audio, None).await
     }
 
     pub async fn transcribe_with_source(

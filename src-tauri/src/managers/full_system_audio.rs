@@ -446,11 +446,6 @@ where
         }
     }
 
-    pub fn drain_session_delta(&self, binding_id: &str) -> Option<Vec<f32>> {
-        self.drain_session_delta_sources(binding_id)
-            .and_then(|payload| payload.mixed)
-    }
-
     pub fn drain_session_delta_sources(
         &self,
         binding_id: &str,

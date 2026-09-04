@@ -1,6 +1,5 @@
-use enigo::{Enigo, Key, Keyboard, Mouse, Settings};
+use enigo::{Enigo, Key, Keyboard, Settings};
 use std::sync::Mutex;
-use tauri::{AppHandle, Manager};
 
 const KEY_CHORD_HOLD_MS: u64 = 30;
 
@@ -14,15 +13,6 @@ impl EnigoState {
             .map_err(|e| format!("Failed to initialize Enigo: {}", e))?;
         Ok(Self(Mutex::new(enigo)))
     }
-}
-
-/// Get the current mouse cursor position using the managed Enigo instance.
-/// Returns None if the state is not available or if getting the location fails.
-#[allow(dead_code)]
-pub fn get_cursor_position(app_handle: &AppHandle) -> Option<(i32, i32)> {
-    let enigo_state = app_handle.try_state::<EnigoState>()?;
-    let enigo = enigo_state.0.lock().ok()?;
-    enigo.location().ok()
 }
 
 /// Sends a Ctrl+V or Cmd+V paste command using platform-specific virtual key codes.
