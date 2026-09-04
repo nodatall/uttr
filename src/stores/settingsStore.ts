@@ -85,15 +85,8 @@ interface SettingsStore {
   setPostProcessModelOptions: (providerId: string, models: string[]) => void;
 
   // Internal state setters
-  setSettings: (settings: Settings | null) => void;
-  setDefaultSettings: (defaultSettings: Settings | null) => void;
-  setInstallAccess: (installAccess: InstallAccessSnapshot | null) => void;
-  setLoading: (loading: boolean) => void;
   setUpdating: (key: string, updating: boolean) => void;
-  setAudioDevices: (devices: AudioDevice[]) => void;
-  setOutputDevices: (devices: AudioDevice[]) => void;
   setCustomSounds: (sounds: { start: boolean; stop: boolean }) => void;
-  setPostProcessApiKeyStatuses: (statuses: PostProcessApiKeyStatuses) => void;
 }
 
 // Note: Default settings are now fetched from Rust via commands.getDefaultSettings()
@@ -194,19 +187,11 @@ export const useSettingsStore = create<SettingsStore>()(
     postProcessApiKeyStatuses: {},
 
     // Internal setters
-    setSettings: (settings) => set({ settings }),
-    setDefaultSettings: (defaultSettings) => set({ defaultSettings }),
-    setInstallAccess: (installAccess) => set({ installAccess }),
-    setLoading: (isLoading) => set({ isLoading }),
     setUpdating: (key, updating) =>
       set((state) => ({
         isUpdating: { ...state.isUpdating, [key]: updating },
       })),
-    setAudioDevices: (audioDevices) => set({ audioDevices }),
-    setOutputDevices: (outputDevices) => set({ outputDevices }),
     setCustomSounds: (customSounds) => set({ customSounds }),
-    setPostProcessApiKeyStatuses: (postProcessApiKeyStatuses) =>
-      set({ postProcessApiKeyStatuses }),
 
     // Getters
     getSetting: (key) => get().settings?.[key],

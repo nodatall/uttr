@@ -28,7 +28,6 @@ const clearDownloadState = (
     | "downloadProgress"
     | "downloadStats"
     | "extractingModels"
-    | "autoSelectDownloadedModelId"
   >,
   modelId: string,
 ) => {
@@ -36,9 +35,6 @@ const clearDownloadState = (
   delete state.downloadProgress[modelId];
   delete state.downloadStats[modelId];
   delete state.extractingModels[modelId];
-  if (state.autoSelectDownloadedModelId === modelId) {
-    state.autoSelectDownloadedModelId = null;
-  }
 };
 
 // Using Record instead of Set/Map for Immer compatibility
@@ -49,33 +45,19 @@ interface ModelsStore {
   extractingModels: Record<string, true>;
   downloadProgress: Record<string, DownloadProgress>;
   downloadStats: Record<string, DownloadStats>;
-  autoSelectDownloadedModelId: string | null;
   loading: boolean;
   error: string | null;
-  hasAnyModels: boolean;
-  isFirstRun: boolean;
   initialized: boolean;
 
   // Actions
   initialize: () => Promise<void>;
   loadModels: () => Promise<void>;
   loadCurrentModel: () => Promise<void>;
-  checkFirstRun: () => Promise<boolean>;
   selectModel: (modelId: string) => Promise<boolean>;
   downloadModel: (modelId: string) => Promise<boolean>;
   prefetchModel: (modelId: string) => Promise<boolean>;
   cancelDownload: (modelId: string) => Promise<boolean>;
   deleteModel: (modelId: string) => Promise<boolean>;
-  getModelInfo: (modelId: string) => ModelInfo | undefined;
-  isModelDownloading: (modelId: string) => boolean;
-  isModelExtracting: (modelId: string) => boolean;
-  getDownloadProgress: (modelId: string) => DownloadProgress | undefined;
-
-  // Internal setters
-  setModels: (models: ModelInfo[]) => void;
-  setCurrentModel: (modelId: string) => void;
-  setError: (error: string | null) => void;
-  setLoading: (loading: boolean) => void;
 }
 
 export const useModelStore = create<ModelsStore>()(
@@ -86,18 +68,9 @@ export const useModelStore = create<ModelsStore>()(
     extractingModels: {},
     downloadProgress: {},
     downloadStats: {},
-    autoSelectDownloadedModelId: null,
     loading: true,
     error: null,
-    hasAnyModels: false,
-    isFirstRun: false,
     initialized: false,
-
-    // Internal setters
-    setModels: (models) => set({ models }),
-    setCurrentModel: (currentModel) => set({ currentModel }),
-    setError: (error) => set({ error }),
-    setLoading: (loading) => set({ loading }),
 
     loadModels: async () => {
       try {
@@ -150,44 +123,12 @@ export const useModelStore = create<ModelsStore>()(
       }
     },
 
-    checkFirstRun: async () => {
-      try {
-        const [currentModelResult, modelsResult] = await Promise.all([
-          commands.getCurrentModel(),
-          commands.hasAnyModelsAvailable(),
-        ]);
-
-        if (
-          currentModelResult.status === "ok" &&
-          currentModelResult.data.trim().length > 0
-        ) {
-          set({ hasAnyModels: true, isFirstRun: false });
-          return false;
-        }
-
-        if (modelsResult.status === "ok") {
-          const hasModels = modelsResult.data;
-          set({ hasAnyModels: hasModels, isFirstRun: !hasModels });
-          return !hasModels;
-        }
-        return false;
-      } catch (err) {
-        console.error("Failed to check model availability:", err);
-        return false;
-      }
-    },
-
     selectModel: async (modelId: string) => {
       try {
         set({ error: null });
         const result = await commands.setActiveModel(modelId);
         if (result.status === "ok") {
-          set({
-            currentModel: modelId,
-            isFirstRun: false,
-            hasAnyModels: true,
-            autoSelectDownloadedModelId: null,
-          });
+          set({ currentModel: modelId });
           return true;
         } else {
           set({ error: `Failed to switch to model: ${result.error}` });
@@ -202,7 +143,6 @@ export const useModelStore = create<ModelsStore>()(
     downloadModel: async (modelId: string) => {
       try {
         set({ error: null });
-        set({ autoSelectDownloadedModelId: modelId });
         set(
           produce((state) => {
             state.downloadingModels[modelId] = true;
@@ -239,7 +179,7 @@ export const useModelStore = create<ModelsStore>()(
 
     prefetchModel: async (modelId: string) => {
       try {
-        set({ error: null, autoSelectDownloadedModelId: null });
+        set({ error: null });
         const currentState = get();
         const existingModel = currentState.models.find(
           (model) => model.id === modelId,
@@ -330,22 +270,6 @@ export const useModelStore = create<ModelsStore>()(
       }
     },
 
-    getModelInfo: (modelId: string) => {
-      return get().models.find((model) => model.id === modelId);
-    },
-
-    isModelDownloading: (modelId: string) => {
-      return modelId in get().downloadingModels;
-    },
-
-    isModelExtracting: (modelId: string) => {
-      return modelId in get().extractingModels;
-    },
-
-    getDownloadProgress: (modelId: string) => {
-      return get().downloadProgress[modelId];
-    },
-
     initialize: async () => {
       if (get().initialized) return;
       if (initializePromise) {
@@ -353,10 +277,10 @@ export const useModelStore = create<ModelsStore>()(
       }
 
       initializePromise = (async () => {
-        const { loadModels, loadCurrentModel, checkFirstRun } = get();
+        const { loadModels, loadCurrentModel } = get();
 
         // Load initial data
-        await Promise.all([loadModels(), loadCurrentModel(), checkFirstRun()]);
+        await Promise.all([loadModels(), loadCurrentModel()]);
 
         const state = get();
         if (state.currentModel.trim().length > 0) {

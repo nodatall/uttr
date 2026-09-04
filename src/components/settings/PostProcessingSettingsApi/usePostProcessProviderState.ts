@@ -1,29 +1,14 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import { useSettings } from "../../../hooks/useSettings";
-import { commands, type PostProcessProvider } from "@/bindings";
+import type { PostProcessProvider } from "@/bindings";
 import type { ModelOption } from "./types";
-import type { DropdownOption } from "../../ui/Dropdown";
 
 type PostProcessProviderState = {
-  providerOptions: DropdownOption[];
-  selectedProviderId: string;
-  selectedProvider: PostProcessProvider | undefined;
   isCustomProvider: boolean;
-  isAppleProvider: boolean;
-  isGroqProvider: boolean;
-  appleIntelligenceUnavailable: boolean;
-  baseUrl: string;
-  handleBaseUrlChange: (value: string) => void;
-  isBaseUrlUpdating: boolean;
-  apiKey: string;
-  handleApiKeyChange: (value: string) => void;
-  isApiKeyUpdating: boolean;
   model: string;
-  handleModelChange: (value: string) => void;
   modelOptions: ModelOption[];
   isModelUpdating: boolean;
   isFetchingModels: boolean;
-  handleProviderSelect: (providerId: string) => void;
   handleModelSelect: (value: string) => void;
   handleModelCreate: (value: string) => void;
   handleRefreshModels: () => void;
@@ -60,8 +45,6 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
     settings,
     isUpdating,
     setPostProcessProvider,
-    updatePostProcessBaseUrl,
-    updatePostProcessApiKey,
     updatePostProcessModel,
     fetchPostProcessModels,
     postProcessModelOptions,
@@ -106,9 +89,6 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
   }, [providers, selectedProviderId]);
 
   const isAppleProvider = selectedProvider?.id === APPLE_PROVIDER_ID;
-  const isGroqProvider = selectedProvider?.id === GROQ_PROVIDER_ID;
-  const [appleIntelligenceUnavailable, setAppleIntelligenceUnavailable] =
-    useState(false);
   const autoFetchedSignatures = useRef<Set<string> | null>(null);
   if (autoFetchedSignatures.current === null) {
     autoFetchedSignatures.current = new Set();
@@ -120,72 +100,6 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
     postProcessApiKeyStatuses[selectedProviderId] ?? false;
   const apiKey = hasStoredApiKey ? "stored" : "";
   const model = settings?.post_process_models?.[selectedProviderId] ?? "";
-
-  const providerOptions = useMemo<DropdownOption[]>(() => {
-    const onlyProvider = groqProvider || selectedProvider;
-    if (!onlyProvider) return [];
-    return [
-      {
-        value: onlyProvider.id,
-        label: onlyProvider.label,
-      },
-    ];
-  }, [groqProvider, selectedProvider]);
-
-  const handleProviderSelect = useCallback(
-    async (providerId: string) => {
-      // Clear error state on any selection attempt (allows dismissing the error)
-      setAppleIntelligenceUnavailable(false);
-
-      if (providerId === selectedProviderId) return;
-
-      // Check Apple Intelligence availability before selecting
-      if (providerId === APPLE_PROVIDER_ID) {
-        const available = await commands.checkAppleIntelligenceAvailable();
-        if (!available) {
-          setAppleIntelligenceUnavailable(true);
-          // Don't return - still set the provider so dropdown shows the selection
-          // The backend gracefully handles unavailable Apple Intelligence
-        }
-      }
-
-      void setPostProcessProvider(providerId);
-    },
-    [selectedProviderId, setPostProcessProvider],
-  );
-
-  const handleBaseUrlChange = useCallback(
-    (value: string) => {
-      if (!selectedProvider || selectedProvider.id !== "custom") {
-        return;
-      }
-      const trimmed = value.trim();
-      if (trimmed && trimmed !== baseUrl) {
-        void updatePostProcessBaseUrl(selectedProvider.id, trimmed);
-      }
-    },
-    [selectedProvider, baseUrl, updatePostProcessBaseUrl],
-  );
-
-  const handleApiKeyChange = useCallback(
-    (value: string) => {
-      const trimmed = value.trim();
-      if (trimmed !== apiKey) {
-        void updatePostProcessApiKey(selectedProviderId, trimmed);
-      }
-    },
-    [apiKey, selectedProviderId, updatePostProcessApiKey],
-  );
-
-  const handleModelChange = useCallback(
-    (value: string) => {
-      const trimmed = value.trim();
-      if (trimmed !== model) {
-        void updatePostProcessModel(selectedProviderId, trimmed);
-      }
-    },
-    [model, selectedProviderId, updatePostProcessModel],
-  );
 
   const handleModelSelect = useCallback(
     (value: string) => {
@@ -236,12 +150,6 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
     return options;
   }, [availableModelsRaw, model]);
 
-  const isBaseUrlUpdating = isUpdating(
-    `post_process_base_url:${selectedProviderId}`,
-  );
-  const isApiKeyUpdating = isUpdating(
-    `post_process_api_key:${selectedProviderId}`,
-  );
   const isModelUpdating = isUpdating(
     `post_process_model:${selectedProviderId}`,
   );
@@ -297,25 +205,11 @@ export const usePostProcessProviderState = (): PostProcessProviderState => {
   ]);
 
   return {
-    providerOptions,
-    selectedProviderId,
-    selectedProvider,
     isCustomProvider,
-    isAppleProvider,
-    isGroqProvider,
-    appleIntelligenceUnavailable,
-    baseUrl,
-    handleBaseUrlChange,
-    isBaseUrlUpdating,
-    apiKey,
-    handleApiKeyChange,
-    isApiKeyUpdating,
     model,
-    handleModelChange,
     modelOptions,
     isModelUpdating,
     isFetchingModels,
-    handleProviderSelect,
     handleModelSelect,
     handleModelCreate,
     handleRefreshModels,

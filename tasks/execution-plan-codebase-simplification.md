@@ -24,10 +24,10 @@ When asked to implement this doc, load the `$deliver` skill, use this file as th
 
 ### 2. Remove unused frontend state and helpers
 
-- [ ] Delete unused date-only and relative-time formatting code while preserving `formatDateTime` output and fallbacks.
-- [ ] Trim the post-processing hook to the model controls its caller actually uses, retaining provider selection effects, filtering, refresh, and automatic fetching.
-- [ ] Delete unconsumed store getters/setters, obsolete download-selection and first-run bookkeeping, and unreachable settings export files. Preserve model loading, selection, background prefetch, and event handling.
-- [ ] Verify build, lint, existing browser tests, and focused comparisons of date formatting, model lifecycle, and post-processing controls. Capture browser evidence for the affected settings flow.
+- [x] Delete unused date-only and relative-time formatting code while preserving `formatDateTime` output and fallbacks.
+- [x] Trim the post-processing hook to the model controls its caller actually uses, retaining provider selection effects, filtering, refresh, and automatic fetching.
+- [x] Delete unconsumed store getters/setters, obsolete download-selection and first-run bookkeeping, and unreachable settings export files. Preserve model loading, selection, background prefetch, and event handling.
+- [x] Verify build, lint, existing browser tests, and focused comparisons of date formatting, model lifecycle, and post-processing controls. Capture browser evidence for the affected settings flow.
 
 ### 3. Remove obsolete backend code and its test
 
