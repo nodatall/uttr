@@ -32,5 +32,5 @@ Native verification limit: quiet spoken “thank you” was transcribed, pasted,
 
 ### 3. Review and finish
 
-- [ ] Complete the fresh final branch review and resolve verified in-scope findings.
-- [ ] Archive the completed plan and its source diagnosis, commit the finished work, and verify the final branch and working-tree state.
+- [x] Complete the fresh final branch review and resolve verified in-scope findings.
+- [x] Archive the completed plan and its source diagnosis, commit the finished work, and verify the final branch and working-tree state.
