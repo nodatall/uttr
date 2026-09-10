@@ -241,6 +241,8 @@ fn is_punctuation_only_transcription(text: &str) -> bool {
 }
 
 fn should_suppress_silence_hallucination(levels: Option<(f32, f32)>, transcription: &str) -> bool {
+    const MAX_LOW_ENERGY_RMS: f32 = 0.001;
+    const MAX_LOW_ENERGY_PEAK: f32 = 0.04;
     const SILENCE_HALLUCINATIONS: &[&str] =
         &["thank you", "thanks for watching", "thank you for watching"];
     const ALWAYS_SUPPRESS_HALLUCINATIONS: &[&str] = &[
@@ -265,7 +267,9 @@ fn should_suppress_silence_hallucination(levels: Option<(f32, f32)>, transcripti
         return false;
     }
 
+    // A brief noise spike can exceed the silence peak limit while overall energy stays very low.
     is_effectively_silent(levels)
+        || (levels.0 <= MAX_LOW_ENERGY_RMS && levels.1 <= MAX_LOW_ENERGY_PEAK)
 }
 
 fn non_silent_empty_transcription_levels(audio: &[f32], transcription: &str) -> Option<(f32, f32)> {
@@ -2753,6 +2757,28 @@ mod tests {
             "thank you"
         ));
         assert!(!should_suppress_silence_hallucination(speech_levels, "?"));
+
+        let mut silent_tap_audio: Vec<f32> = (0..SAMPLE_RATE * 5 / 4)
+            .map(|index| if index % 2 == 0 { 0.00074 } else { -0.00074 })
+            .collect();
+        silent_tap_audio[SAMPLE_RATE / 2] = 0.029622;
+        let silent_tap_levels = audio_levels(&silent_tap_audio);
+        for (levels, transcription, expected) in [
+            (silent_tap_levels, "Thank you.", true),
+            (silent_tap_levels, "Thanks for watching!", true),
+            (silent_tap_levels, "Thank you for watching.", true),
+            (silent_tap_levels, "Please continue.", false),
+            (silent_tap_levels, "yes", false),
+            (silent_tap_levels, "no", false),
+            (Some((0.002, 0.029622)), "Thank you.", false),
+            (Some((0.000768, 0.08)), "Thank you.", false),
+        ] {
+            assert_eq!(
+                should_suppress_silence_hallucination(levels, transcription),
+                expected,
+                "levels={levels:?}, transcription={transcription:?}"
+            );
+        }
     }
 
     #[test]
