@@ -269,11 +269,17 @@ const useRecordingOverlayController = () => {
         await Promise.all([
           listen("show-overlay", async (event) => {
             const overlayState = event.payload as OverlayState;
+            const isNewState =
+              !isVisibleRef.current || overlayStateRef.current !== overlayState;
             setOverlayVisibility(true);
             setOverlayMode(overlayState);
-            smoothedLevelsRef.current = Array(16).fill(0);
-            setAlertKind(overlayState === "trial_ended" ? "trial_ended" : null);
-            resetSpeechTracking();
+            // Native show retries must not erase speech already detected during
+            // this recording and send the waveform back to its idle amplitude.
+            if (isNewState) {
+              smoothedLevelsRef.current = Array(16).fill(0);
+              setAlertKind(overlayState === "trial_ended" ? "trial_ended" : null);
+              resetSpeechTracking();
+            }
             syncSiriWaveForOverlay();
 
             // Sync language from settings without blocking the overlay from

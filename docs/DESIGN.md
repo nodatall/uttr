@@ -159,6 +159,8 @@ Pills are for status, selected model/provider state, and compact metadata. Avoid
 
 The recording overlay should feel immediate and lightweight. It may use the app font and accent colors, but it must not look like a settings card. Warm, recording, transcribing, and processing states should be visually distinct without adding heavy borders.
 
+Show recording feedback at full opacity on the first rendered frame. Repeated native show events for the same visible state must preserve the waveform's current speech response.
+
 Full-system meeting recording uses the session/settings surface for status and should not show the compact bottom recording overlay while passively recording. If normal dictation runs during a meeting, show the compact overlay only for that nested dictation/transcribing flow, then return to the meeting state with the bottom overlay hidden.
 
 ## Ask Selection Panel
