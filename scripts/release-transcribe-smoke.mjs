@@ -148,6 +148,12 @@ async function main() {
     startupTimeoutMs,
     "transcribe shortcut registration",
   );
+  await waitForLog(
+    logPath,
+    "[startup] frontend post onboarding input init complete",
+    startupTimeoutMs,
+    "frontend startup completion",
+  );
 
   await openTextEditTarget();
 
