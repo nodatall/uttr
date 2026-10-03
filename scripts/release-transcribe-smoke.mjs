@@ -148,6 +148,7 @@ async function main() {
     startupTimeoutMs,
     "transcribe shortcut registration",
   );
+  await openSettingsInUttr();
   await waitForLog(
     logPath,
     "[startup] frontend post onboarding input init complete",
@@ -727,6 +728,23 @@ async function focusTextEditTarget() {
 
 async function openSettingsInUttr() {
   const pid = await findUttrProcessId();
+  const helperPath = path.join(scratchDir, "activate-uttr.swift");
+  await writeFile(
+    helperPath,
+    `import AppKit
+import Foundation
+
+guard let pid = Int32(CommandLine.arguments[1]),
+      let app = NSRunningApplication(processIdentifier: pid) else {
+    fatalError("Uttr smoke process not found")
+}
+if !app.isActive && !app.activate(options: [.activateAllWindows, .activateIgnoringOtherApps]) {
+    fatalError("Could not activate the Uttr smoke process")
+}
+`,
+    "utf8",
+  );
+  await execFileText("swift", [helperPath, String(pid)]);
   await osascript([
     'tell application "System Events"',
     `set targetProcesses to every process whose unix id is ${pid}`,
@@ -734,11 +752,11 @@ async function openSettingsInUttr() {
     "set targetProcess to item 1 of targetProcesses",
     "set frontmost of targetProcess to true",
     "repeat 20 times",
-    "if exists window 1 of targetProcess then exit repeat",
+    'if exists window "Uttr" of targetProcess then exit repeat',
     "delay 0.25",
     "end repeat",
-    'if not (exists window 1 of targetProcess) then error "Uttr settings window not found"',
-    "set targetWindow to window 1 of targetProcess",
+    'if not (exists window "Uttr" of targetProcess) then error "Uttr settings window not found"',
+    'set targetWindow to window "Uttr" of targetProcess',
     "try",
     'set value of attribute "AXMinimized" of targetWindow to false',
     "end try",
@@ -756,7 +774,7 @@ async function openSettingsInUttr() {
 
 async function openGeneralSettingsInUttr() {
   await openSettingsInUttr();
-  const clicked = await clickUttrSidebarButton("General", 1);
+  const clicked = await clickUttrSidebarButton("Settings", 1);
   if (!clicked.includes("clicked")) {
     throw new Error(
       "Could not find the General settings navigation button in Uttr.",
@@ -811,7 +829,7 @@ async function clickUttrButtonByName(buttonName) {
     `set targetProcesses to every process whose unix id is ${await findUttrProcessId()}`,
     'if (count of targetProcesses) is 0 then error "Uttr process not found"',
     "set targetProcess to item 1 of targetProcesses",
-    "set clickResult to my clickButtonNamed(window 1 of targetProcess, " +
+    'set clickResult to my clickButtonNamed(window "Uttr" of targetProcess, ' +
       appleScriptString(buttonName) +
       ")",
     "end tell",
@@ -826,7 +844,7 @@ async function clickUttrSidebarButtonByIndex(visibleIndex) {
     `set targetProcesses to every process whose unix id is ${await findUttrProcessId()}`,
     'if (count of targetProcesses) is 0 then error "Uttr process not found"',
     "set targetProcess to item 1 of targetProcesses",
-    "set windowPosition to position of window 1 of targetProcess",
+    'set windowPosition to position of window "Uttr" of targetProcess',
     "set windowX to item 1 of windowPosition",
     "set windowY to item 2 of windowPosition",
     "set clickX to windowX + 116",
