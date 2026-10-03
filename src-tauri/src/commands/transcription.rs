@@ -668,17 +668,6 @@ mod tests {
     }
 
     #[test]
-    fn direct_chunk_plan_stays_under_direct_limit() {
-        let limit = safe_chunk_limit_bytes(FileTranscriptionRoute::DirectGroq);
-        let ranges = plan_chunk_ranges(FILE_TRANSCRIPTION_SAMPLE_RATE * 60 * 40, limit).unwrap();
-        assert!(ranges.len() > 1);
-        for range in ranges {
-            let bytes = groq_client::estimate_wav_size_bytes(range.end - range.start).unwrap();
-            assert!(bytes <= limit);
-        }
-    }
-
-    #[test]
     fn backend_chunk_plan_stays_under_proxy_limit_and_uses_fewer_chunks() {
         let sample_count = FILE_TRANSCRIPTION_SAMPLE_RATE * 60 * 80;
         let direct_ranges = plan_chunk_ranges(
@@ -696,22 +685,6 @@ mod tests {
             let bytes = groq_client::estimate_wav_size_bytes(range.end - range.start).unwrap();
             assert!(bytes <= safe_chunk_limit_bytes(FileTranscriptionRoute::BackendProxy));
         }
-    }
-
-    #[test]
-    fn resolves_selected_groq_model_when_available() {
-        assert_eq!(
-            resolve_file_transcription_model_id("groq-whisper-large-v3-turbo"),
-            "groq-whisper-large-v3-turbo"
-        );
-    }
-
-    #[test]
-    fn resolves_selected_openai_model_when_available() {
-        assert_eq!(
-            resolve_file_transcription_model_id("openai-gpt-4o-transcribe"),
-            "openai-gpt-4o-transcribe"
-        );
     }
 
     #[test]

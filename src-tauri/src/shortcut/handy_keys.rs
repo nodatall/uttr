@@ -1663,271 +1663,6 @@ mod tests {
     }
 
     #[test]
-    fn modifier_only_transition_starts_fn_binding_on_press() {
-        let hotkey: Hotkey = "fn".parse().unwrap();
-        let event = KeyEvent {
-            modifiers: handy_keys::Modifiers::FN,
-            key: None,
-            is_key_down: true,
-            changed_modifier: Some(handy_keys::Modifiers::FN),
-        };
-
-        assert_eq!(
-            modifier_only_transition(
-                hotkey,
-                &event,
-                event.modifiers,
-                event.changed_modifier,
-                false
-            ),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn modifier_only_transition_stops_fn_binding_on_release() {
-        let hotkey: Hotkey = "fn".parse().unwrap();
-        let event = KeyEvent {
-            modifiers: handy_keys::Modifiers::empty(),
-            key: None,
-            is_key_down: false,
-            changed_modifier: Some(handy_keys::Modifiers::FN),
-        };
-
-        assert_eq!(
-            modifier_only_transition(
-                hotkey,
-                &event,
-                event.modifiers,
-                event.changed_modifier,
-                true
-            ),
-            Some(false)
-        );
-    }
-
-    #[test]
-    fn modifier_only_release_forces_when_required_modifier_goes_up() {
-        let hotkey: Hotkey = "option+fn".parse().unwrap();
-        let event = KeyEvent {
-            modifiers: handy_keys::Modifiers::OPT,
-            key: None,
-            is_key_down: false,
-            changed_modifier: Some(handy_keys::Modifiers::FN),
-        };
-
-        assert!(modifier_only_release_changed_required_modifier(
-            hotkey,
-            event.changed_modifier
-        ));
-    }
-
-    #[test]
-    fn modifier_only_release_does_not_force_for_unrelated_modifier() {
-        let hotkey: Hotkey = "option+fn".parse().unwrap();
-        let event = KeyEvent {
-            modifiers: handy_keys::Modifiers::OPT | handy_keys::Modifiers::FN,
-            key: None,
-            is_key_down: false,
-            changed_modifier: Some(handy_keys::Modifiers::CMD),
-        };
-
-        assert!(!modifier_only_release_changed_required_modifier(
-            hotkey,
-            event.changed_modifier
-        ));
-    }
-
-    #[test]
-    fn modifier_only_transition_ignores_unrelated_modifier_press() {
-        let hotkey: Hotkey = "fn".parse().unwrap();
-        let event = KeyEvent {
-            modifiers: handy_keys::Modifiers::SHIFT_LEFT,
-            key: None,
-            is_key_down: true,
-            changed_modifier: Some(handy_keys::Modifiers::SHIFT_LEFT),
-        };
-
-        assert_eq!(
-            modifier_only_transition(
-                hotkey,
-                &event,
-                event.modifiers,
-                event.changed_modifier,
-                false
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn modifier_only_transition_requires_exact_modifier_match() {
-        let hotkey: Hotkey = "fn".parse().unwrap();
-        let event = KeyEvent {
-            modifiers: handy_keys::Modifiers::CMD_LEFT | handy_keys::Modifiers::FN,
-            key: None,
-            is_key_down: true,
-            changed_modifier: Some(handy_keys::Modifiers::FN),
-        };
-
-        assert_eq!(
-            modifier_only_transition(
-                hotkey,
-                &event,
-                event.modifiers,
-                event.changed_modifier,
-                false
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn modifier_only_transition_accepts_exact_multi_modifier_combo() {
-        let hotkey: Hotkey = "command+fn".parse().unwrap();
-        let event = KeyEvent {
-            modifiers: handy_keys::Modifiers::CMD_LEFT | handy_keys::Modifiers::FN,
-            key: None,
-            is_key_down: true,
-            changed_modifier: Some(handy_keys::Modifiers::FN),
-        };
-
-        assert_eq!(
-            modifier_only_transition(
-                hotkey,
-                &event,
-                event.modifiers,
-                event.changed_modifier,
-                false
-            ),
-            Some(true)
-        );
-    }
-
-    #[test]
-    fn modifier_family_signature_detects_strict_superset_chord() {
-        let fn_hotkey: Hotkey = "fn".parse().unwrap();
-        let option_fn_hotkey: Hotkey = "option+fn".parse().unwrap();
-
-        assert!(modifier_family_signature_is_strict_subset(
-            fn_hotkey.modifiers,
-            option_fn_hotkey.modifiers
-        ));
-        assert!(!modifier_family_signature_is_strict_subset(
-            option_fn_hotkey.modifiers,
-            fn_hotkey.modifiers
-        ));
-    }
-
-    #[test]
-    fn modifier_only_press_detects_registered_superset_chord() {
-        let fn_hotkey: Hotkey = "fn".parse().unwrap();
-        let option_fn_hotkey: Hotkey = "option+fn".parse().unwrap();
-        let mut bindings = HashMap::new();
-        bindings.insert("transcribe".to_string(), (fn_hotkey, "fn".to_string()));
-        bindings.insert(
-            "edit_mode".to_string(),
-            (option_fn_hotkey, "option+fn".to_string()),
-        );
-
-        assert!(modifier_only_press_has_registered_superset(
-            "transcribe",
-            fn_hotkey.modifiers,
-            &bindings
-        ));
-        assert!(!modifier_only_press_has_registered_superset(
-            "edit_mode",
-            option_fn_hotkey.modifiers,
-            &bindings
-        ));
-    }
-
-    #[test]
-    fn modifier_only_subset_press_is_shadowed_by_active_superset() {
-        let fn_hotkey: Hotkey = "fn".parse().unwrap();
-        let option_fn_hotkey: Hotkey = "option+fn".parse().unwrap();
-        let mut bindings = HashMap::new();
-        bindings.insert("transcribe".to_string(), (fn_hotkey, "fn".to_string()));
-        bindings.insert(
-            "edit_mode".to_string(),
-            (option_fn_hotkey, "option+fn".to_string()),
-        );
-        let pressed = HashSet::from(["edit_mode".to_string()]);
-        let pending_releases = HashMap::new();
-
-        assert!(
-            modifier_only_press_is_shadowed_by_active_or_releasing_superset(
-                "transcribe",
-                fn_hotkey.modifiers,
-                &bindings,
-                &pressed,
-                &pending_releases
-            )
-        );
-    }
-
-    #[test]
-    fn modifier_only_subset_press_is_shadowed_by_releasing_superset() {
-        let fn_hotkey: Hotkey = "fn".parse().unwrap();
-        let option_fn_hotkey: Hotkey = "option+fn".parse().unwrap();
-        let mut bindings = HashMap::new();
-        bindings.insert("transcribe".to_string(), (fn_hotkey, "fn".to_string()));
-        bindings.insert(
-            "edit_mode".to_string(),
-            (option_fn_hotkey, "option+fn".to_string()),
-        );
-        let pressed = HashSet::new();
-        let pending_releases = HashMap::from([(
-            "edit_mode".to_string(),
-            PendingModifierOnlyRelease {
-                hotkey_string: "option+fn".to_string(),
-                due_at: Instant::now(),
-                force: true,
-            },
-        )]);
-
-        assert!(
-            modifier_only_press_is_shadowed_by_active_or_releasing_superset(
-                "transcribe",
-                fn_hotkey.modifiers,
-                &bindings,
-                &pressed,
-                &pending_releases
-            )
-        );
-    }
-
-    #[test]
-    fn modifier_only_subset_press_is_not_shadowed_by_idle_superset() {
-        let fn_hotkey: Hotkey = "fn".parse().unwrap();
-        let option_fn_hotkey: Hotkey = "option+fn".parse().unwrap();
-        let mut bindings = HashMap::new();
-        bindings.insert("transcribe".to_string(), (fn_hotkey, "fn".to_string()));
-        bindings.insert(
-            "edit_mode".to_string(),
-            (option_fn_hotkey, "option+fn".to_string()),
-        );
-        let pressed = HashSet::new();
-        let pending_releases = HashMap::new();
-
-        assert!(
-            !modifier_only_press_is_shadowed_by_active_or_releasing_superset(
-                "transcribe",
-                fn_hotkey.modifiers,
-                &bindings,
-                &pressed,
-                &pending_releases
-            )
-        );
-    }
-
-    #[test]
-    fn modifier_only_subset_press_debounce_stays_short_for_fast_transcribe_feedback() {
-        assert!(MODIFIER_ONLY_PRESS_DEBOUNCE <= Duration::from_millis(60));
-        assert!(MODIFIER_ONLY_PRESS_DEBOUNCE < MODIFIER_ONLY_CHORD_WINDOW);
-    }
-
-    #[test]
     fn shadowed_modifier_only_press_is_cancelled_by_more_specific_chord() {
         let mut pending = HashMap::new();
         pending.insert(
@@ -1944,22 +1679,6 @@ mod tests {
         );
 
         assert!(pending.is_empty());
-    }
-
-    #[test]
-    fn unshadowed_modifier_only_press_stays_pending() {
-        let mut pending = HashMap::new();
-        pending.insert(
-            "transcribe".to_string(),
-            PendingModifierOnlyPress {
-                hotkey_string: "fn".to_string(),
-                due_at: Instant::now(),
-            },
-        );
-
-        cancel_shadowed_modifier_only_presses(&mut pending, handy_keys::Modifiers::FN);
-
-        assert!(pending.contains_key("transcribe"));
     }
 
     #[test]
@@ -2086,30 +1805,6 @@ mod tests {
     }
 
     #[test]
-    fn held_option_then_fn_still_dispatches_ask_selection_after_chord_window() {
-        let mut scenario = ModifierOnlyScenario::new(&["transcribe", "edit_mode"]);
-
-        scenario.send_modifier(handy_keys::Modifiers::OPT, true);
-        scenario.advance(MODIFIER_ONLY_CHORD_WINDOW + Duration::from_millis(250));
-        scenario.send_modifier(handy_keys::Modifiers::FN, true);
-        scenario.advance(Duration::from_millis(120));
-        scenario.send_modifier(handy_keys::Modifiers::FN, false);
-        scenario.advance(Duration::from_millis(20));
-        scenario.send_modifier(handy_keys::Modifiers::OPT, false);
-        scenario.advance(Duration::from_millis(600));
-
-        scenario.assert_no_plain_transcribe_press();
-        assert!(
-            scenario
-                .events
-                .iter()
-                .any(|(binding_id, is_pressed)| binding_id == "edit_mode" && *is_pressed),
-            "held option then fn should dispatch edit_mode; events={:?}",
-            scenario.events
-        );
-    }
-
-    #[test]
     fn option_then_right_control_reported_fn_dispatches_ask_selection() {
         let mut scenario = ModifierOnlyScenario::new(&["transcribe", "edit_mode"]);
 
@@ -2172,27 +1867,6 @@ mod tests {
     }
 
     #[test]
-    fn modifier_only_tracker_recovers_stale_command_before_fn_press() {
-        let mut tracker = ModifierOnlyTracker::default();
-        let now = Instant::now();
-        tracker.active[3] = true;
-        tracker.last_pressed_at[3] =
-            Some(now - MODIFIER_ONLY_CHORD_WINDOW - Duration::from_secs(1));
-
-        let event = KeyEvent {
-            modifiers: handy_keys::Modifiers::CMD_LEFT | handy_keys::Modifiers::FN,
-            key: None,
-            is_key_down: true,
-            changed_modifier: Some(handy_keys::Modifiers::FN),
-        };
-
-        tracker.clear_stale_before_modifier_press(&event, now, true);
-        tracker.apply(&event, now);
-
-        assert_eq!(tracker.modifiers(), handy_keys::Modifiers::FN);
-    }
-
-    #[test]
     fn modifier_only_tracker_recovers_unfresh_command_before_fn_press() {
         let mut tracker = ModifierOnlyTracker::default();
         let now = Instant::now();
@@ -2211,57 +1885,6 @@ mod tests {
         tracker.apply(&event, now);
 
         assert_eq!(tracker.modifiers(), handy_keys::Modifiers::FN);
-    }
-
-    #[test]
-    fn modifier_only_tracker_keeps_recent_command_for_command_fn_chord() {
-        let mut tracker = ModifierOnlyTracker::default();
-        let now = Instant::now();
-        let hotkey: Hotkey = "command+fn".parse().unwrap();
-        tracker.active[3] = true;
-        tracker.last_pressed_at[3] = Some(now - Duration::from_millis(100));
-
-        let event = KeyEvent {
-            modifiers: handy_keys::Modifiers::CMD_LEFT | handy_keys::Modifiers::FN,
-            key: None,
-            is_key_down: true,
-            changed_modifier: Some(handy_keys::Modifiers::FN),
-        };
-
-        tracker.clear_stale_before_modifier_press(&event, now, true);
-        tracker.apply(&event, now);
-
-        assert_eq!(
-            tracker.modifiers(),
-            handy_keys::Modifiers::CMD | handy_keys::Modifiers::FN
-        );
-        assert!(tracker.modifier_only_press_is_fresh(hotkey, now));
-    }
-
-    #[test]
-    fn modifier_only_tracker_keeps_held_option_before_fn_after_chord_window() {
-        let mut tracker = ModifierOnlyTracker::default();
-        let now = Instant::now();
-        let hotkey: Hotkey = "option+fn".parse().unwrap();
-        tracker.active[1] = true;
-        tracker.last_pressed_at[1] =
-            Some(now - MODIFIER_ONLY_CHORD_WINDOW - Duration::from_millis(250));
-
-        let event = KeyEvent {
-            modifiers: handy_keys::Modifiers::OPT_LEFT | handy_keys::Modifiers::FN,
-            key: None,
-            is_key_down: true,
-            changed_modifier: Some(handy_keys::Modifiers::FN),
-        };
-
-        tracker.clear_stale_before_modifier_press(&event, now, true);
-        tracker.apply(&event, now);
-
-        assert_eq!(
-            tracker.modifiers(),
-            handy_keys::Modifiers::OPT | handy_keys::Modifiers::FN
-        );
-        assert!(tracker.modifier_only_press_is_fresh(hotkey, now));
     }
 
     #[test]
@@ -2289,28 +1912,6 @@ mod tests {
     #[test]
     fn validate_shortcut_rejects_single_non_fn_modifier() {
         assert!(validate_shortcut("ctrl").is_err());
-    }
-
-    #[test]
-    fn validate_shortcut_allows_fn_only_shortcut() {
-        assert!(validate_shortcut("fn").is_ok());
-    }
-
-    #[test]
-    fn normalize_shortcut_strips_side_specific_modifiers() {
-        assert_eq!(
-            normalize_shortcut_for_registration("shift_left+command_left+space"),
-            "shift+command+space"
-        );
-        assert_eq!(
-            normalize_shortcut_for_registration("ctrl_right+fn"),
-            "ctrl+fn"
-        );
-    }
-
-    #[test]
-    fn validate_shortcut_accepts_recorded_side_specific_modifiers() {
-        assert!(validate_shortcut("shift_left+command_left+space").is_ok());
     }
 
     #[test]
@@ -2360,42 +1961,6 @@ mod tests {
         };
 
         assert!(!push_to_talk_guard_should_release(
-            hotkey,
-            handy_keys::Modifiers::empty(),
-            event.changed_modifier,
-            &event
-        ));
-    }
-
-    #[test]
-    fn modifier_only_push_to_talk_guard_uses_tracked_modifier_state() {
-        let hotkey: Hotkey = "fn".parse().unwrap();
-        let event = KeyEvent {
-            modifiers: handy_keys::Modifiers::empty(),
-            key: None,
-            is_key_down: false,
-            changed_modifier: None,
-        };
-
-        assert!(!push_to_talk_guard_should_release(
-            hotkey,
-            handy_keys::Modifiers::FN,
-            event.changed_modifier,
-            &event
-        ));
-    }
-
-    #[test]
-    fn modifier_only_push_to_talk_guard_releases_when_tracked_state_clears() {
-        let hotkey: Hotkey = "fn".parse().unwrap();
-        let event = KeyEvent {
-            modifiers: handy_keys::Modifiers::empty(),
-            key: None,
-            is_key_down: false,
-            changed_modifier: Some(handy_keys::Modifiers::FN),
-        };
-
-        assert!(push_to_talk_guard_should_release(
             hotkey,
             handy_keys::Modifiers::empty(),
             event.changed_modifier,

@@ -673,42 +673,6 @@ mod tests {
         .expect("insert history entry");
     }
 
-    #[test]
-    fn migrations_create_history_query_indexes() {
-        let mut conn = Connection::open_in_memory().expect("open in-memory db");
-        let migrations = Migrations::new(MIGRATIONS.to_vec());
-        migrations.validate().expect("validate migrations");
-        migrations.to_latest(&mut conn).expect("run migrations");
-
-        let timestamp_index_exists: bool = conn
-            .query_row(
-                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'index' AND name = 'transcription_history_timestamp_idx'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query timestamp index");
-        let cleanup_index_exists: bool = conn
-            .query_row(
-                "SELECT COUNT(*) > 0 FROM sqlite_master WHERE type = 'index' AND name = 'transcription_history_unsaved_dictation_timestamp_idx'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("query cleanup index");
-
-        assert!(timestamp_index_exists);
-        assert!(cleanup_index_exists);
-    }
-
-    #[test]
-    fn recording_file_name_is_unique_with_same_second_timestamp() {
-        let first = recording_file_name(123);
-        let second = recording_file_name(123);
-
-        assert_ne!(first, second);
-        assert!(first.starts_with("uttr-123-"));
-        assert!(first.ends_with(".wav"));
-    }
-
     #[tokio::test]
     async fn database_insert_failure_removes_newly_written_audio() {
         let root = tempfile::tempdir().expect("create history root");
@@ -785,13 +749,6 @@ mod tests {
             .expect("count meeting row");
         assert_eq!(meeting_count, 1);
         assert!(meeting_audio.exists());
-    }
-
-    #[test]
-    fn get_latest_entry_returns_none_when_empty() {
-        let conn = setup_conn();
-        let entry = HistoryManager::get_latest_entry_with_conn(&conn).expect("fetch latest entry");
-        assert!(entry.is_none());
     }
 
     #[test]

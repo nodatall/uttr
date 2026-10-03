@@ -55,7 +55,7 @@ The site expects these runtime variables:
 - `GROQ_API_KEY` - server-held Groq key for default cloud transcription proxying.
 - `GROQ_TRANSCRIPTION_MODEL_DEFAULT` - optional default Groq transcription model name.
 - `OPENAI_API_KEY` - server-held OpenAI key for live session summaries.
-- `OPENAI_SESSION_SUMMARY_MODEL` - optional OpenAI model override for session summaries.
+- `OPENAI_SUMMARY_MODEL_DEFAULT` - optional OpenAI model override for session summaries.
 - `UTTR_PRO_DAILY_AUDIO_SECONDS_LIMIT` - optional Pro rolling 24-hour audio cap in seconds; defaults to `18000` (5 hours).
 - `UTTR_PRO_DAILY_REQUEST_LIMIT` - optional Pro rolling 24-hour transcription and summary request cap; defaults to `500`.
 - `UTTR_PRO_BURST_REQUEST_LIMIT` - optional Pro burst transcription and summary request cap; defaults to `60`.

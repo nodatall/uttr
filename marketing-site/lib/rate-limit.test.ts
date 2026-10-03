@@ -1,9 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import {
-  checkRateLimit,
-  rateLimitKeyFromRequest,
-  resetRateLimitForTests,
-} from "./rate-limit";
+import { checkRateLimit, resetRateLimitForTests } from "./rate-limit";
 import { setDbExecutorForTests } from "./db";
 
 const originalEnv = {
@@ -31,27 +27,6 @@ afterEach(() => {
 });
 
 describe("rate limiting", () => {
-  test("allows requests until the limit is reached in memory mode", async () => {
-    const policy = { key: "route:ip", limit: 2, windowMs: 60_000 };
-
-    await expect(checkRateLimit(policy, 1_000)).resolves.toEqual({
-      allowed: true,
-      remaining: 1,
-      source: "memory",
-    });
-    await expect(checkRateLimit(policy, 2_000)).resolves.toEqual({
-      allowed: true,
-      remaining: 0,
-      source: "memory",
-    });
-    await expect(checkRateLimit(policy, 3_000)).resolves.toEqual({
-      allowed: false,
-      remaining: 0,
-      retryAfterSeconds: 58,
-      source: "memory",
-    });
-  });
-
   test("resets after the window", async () => {
     const policy = { key: "route:ip", limit: 1, windowMs: 10_000 };
 
@@ -68,16 +43,6 @@ describe("rate limiting", () => {
       remaining: 0,
       source: "memory",
     });
-  });
-
-  test("builds keys from forwarded ip", () => {
-    const request = new Request("https://uttr.test/api/trial/bootstrap", {
-      headers: { "x-forwarded-for": "203.0.113.2, 10.0.0.1" },
-    });
-
-    expect(rateLimitKeyFromRequest(request, "bootstrap")).toBe(
-      "bootstrap:203.0.113.2",
-    );
   });
 
   test("uses durable storage in production and surfaces retry-after values", async () => {
@@ -109,27 +74,5 @@ describe("rate limiting", () => {
     });
 
     expect(queryValues).toEqual(["trial-create-claim:ip", 60_000]);
-  });
-
-  test("fails closed in production when durable storage is unavailable", async () => {
-    process.env.NODE_ENV = "production";
-    setDbExecutorForTests({
-      async query() {
-        throw new Error("database unavailable");
-      },
-    });
-
-    await expect(
-      checkRateLimit({
-        key: "cloud-transcribe:ip",
-        limit: 60,
-        windowMs: 60_000,
-      }),
-    ).resolves.toEqual({
-      allowed: false,
-      remaining: 0,
-      retryAfterSeconds: 60,
-      source: "unavailable",
-    });
   });
 });

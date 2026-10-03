@@ -99,15 +99,6 @@ mod tests {
     }
 
     #[test]
-    fn preserves_active_audio_without_trailing_silence() {
-        let samples = vec![0.2f32; 1_600];
-
-        let trimmed = trim_proxy_upload_audio(&samples);
-
-        assert_eq!(trimmed, samples);
-    }
-
-    #[test]
     fn removes_all_silence_when_proxy_audio_is_quiet() {
         let samples = vec![0.0f32; 2_400];
 

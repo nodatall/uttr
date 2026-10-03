@@ -91,6 +91,10 @@ type FullSystemAudioTestState = {
   startFullSystemAudioSessionEvent?: SessionWindowState;
   stopFullSystemAudioSessionEvent?: SessionWindowState;
   sessionWindowState?: SessionWindowState;
+  commandFailures?: Record<
+    string,
+    { error: string; persistedAlwaysOn?: boolean; transport?: boolean }
+  >;
   fullSystemAudio: {
     supportStatus: {
       supported: boolean;
@@ -313,6 +317,15 @@ async function installBrowserMocks(
         ).__UTTR_E2E__;
         e2eState.invokedCommands.push({ cmd, args });
 
+        const failure = e2eState.commandFailures?.[cmd];
+        if (failure) {
+          if (failure.persistedAlwaysOn !== undefined) {
+            e2eState.settings.always_on_microphone = failure.persistedAlwaysOn;
+          }
+          // Native command errors reject with strings, while IPC failures throw.
+          throw failure.transport ? new Error(failure.error) : failure.error;
+        }
+
         switch (cmd) {
           case "plugin:app|version":
             return "0.1.2-test";
@@ -500,6 +513,74 @@ async function installBrowserMocks(
 }
 
 test.describe("full-system audio settings", () => {
+  for (const persistedAlwaysOn of [false, true]) {
+    test(`shows failed microphone updates and reconciles persisted value ${persistedAlwaysOn}`, async ({
+      page,
+    }, testInfo) => {
+      const state = createTestState(false, true);
+      state.commandFailures = {
+        update_microphone_mode: {
+          error: "Microphone could not be opened.",
+          persistedAlwaysOn,
+        },
+      };
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error.message));
+      await installBrowserMocks(page, state);
+      await page.goto("/");
+      await page.getByRole("button", { name: /^Settings$/i }).click();
+      const toggle = page.getByRole("checkbox", {
+        name: /Always.*Microphone/i,
+      });
+      await toggle.locator("..").click();
+      await expect(
+        page.getByText("Microphone could not be opened."),
+      ).toBeVisible();
+      await expect(toggle).toBeEnabled();
+      if (persistedAlwaysOn) {
+        await expect(toggle).toBeChecked();
+      } else {
+        await expect(toggle).not.toBeChecked();
+      }
+      expect(pageErrors).toEqual([]);
+      await page.screenshot({
+        path: testInfo.outputPath("microphone-update-failed.png"),
+      });
+    });
+  }
+
+  for (const provider of ["groq", "openai"] as const) {
+    test(`keeps the ${provider} API key draft and shows failed saves`, async ({
+      page,
+    }, testInfo) => {
+      const state = createTestState(false, true);
+      state.settings.debug_mode = true;
+      state.commandFailures = {
+        change_post_process_api_key_setting: {
+          error: "Unable to save the key.",
+          transport: provider === "openai",
+        },
+      };
+      const pageErrors: string[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error.message));
+      await installBrowserMocks(page, state);
+      await page.goto("/");
+      await page.getByRole("button", { name: /^API Keys$/i }).click();
+      const index = provider === "groq" ? 0 : 1;
+      const draft = `test-${provider}-draft`;
+      const input = page.locator('input[type="password"]').nth(index);
+      await input.fill(draft);
+      await page.getByRole("button", { name: "Save key" }).nth(index).click();
+      await expect(page.getByText("Unable to save the key.")).toBeVisible();
+      await expect(input).toHaveValue(draft);
+      await expect(input).toBeEnabled();
+      expect(pageErrors).toEqual([]);
+      await page.screenshot({
+        path: testInfo.outputPath("api-key-save-failed.png"),
+      });
+    });
+  }
+
   test("starts a full-system session from Home without file or side cards", async ({
     page,
   }) => {

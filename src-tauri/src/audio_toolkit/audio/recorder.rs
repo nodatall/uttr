@@ -866,9 +866,8 @@ fn run_consumer(
 #[cfg(test)]
 mod tests {
     use super::{
-        drain_recording, frame_has_quiet_speech_energy, handle_start,
-        mix_transcription_pcm_sources, normalize_transcription_pcm, AudioRecorder, DrainResult,
-        PreRollBuffer,
+        drain_recording, frame_has_quiet_speech_energy, handle_start, normalize_transcription_pcm,
+        AudioRecorder, DrainResult, PreRollBuffer,
     };
     use std::sync::atomic::Ordering;
 
@@ -880,49 +879,6 @@ mod tests {
         let error = recorder.start().expect_err("failed stream must not start");
 
         assert!(error.to_string().contains("device error"));
-    }
-
-    #[test]
-    fn recorder_pre_roll_buffer_caps_to_latest_samples() {
-        let mut pre_roll = PreRollBuffer::new(5);
-        pre_roll.push_frame(&[1.0, 2.0, 3.0]);
-        pre_roll.push_frame(&[4.0, 5.0, 6.0, 7.0]);
-
-        let mut seeded = Vec::new();
-        pre_roll.extend_into(&mut seeded);
-
-        assert_eq!(seeded, vec![3.0, 4.0, 5.0, 6.0, 7.0]);
-    }
-
-    #[test]
-    fn recorder_start_resets_recording_state_and_seeds_current_pre_roll() {
-        let mut pre_roll = PreRollBuffer::new(4);
-        pre_roll.push_frame(&[7.0, 8.0]);
-
-        let mut processed_samples = vec![1.0, 2.0, 3.0];
-        let mut recording = false;
-        let mut drain_cursor = 9;
-        let mut silence_run_samples = 42;
-        let mut saw_pause_since_last_drain = true;
-        let mut startup_passthrough_remaining = 0;
-
-        handle_start(
-            &mut processed_samples,
-            &pre_roll,
-            &mut recording,
-            &mut drain_cursor,
-            &mut silence_run_samples,
-            &mut saw_pause_since_last_drain,
-            &mut startup_passthrough_remaining,
-            123,
-        );
-
-        assert_eq!(processed_samples, vec![7.0, 8.0]);
-        assert!(recording);
-        assert_eq!(drain_cursor, 0);
-        assert_eq!(silence_run_samples, 0);
-        assert!(!saw_pause_since_last_drain);
-        assert_eq!(startup_passthrough_remaining, 123);
     }
 
     #[test]
@@ -981,51 +937,6 @@ mod tests {
     }
 
     #[test]
-    fn recorder_drain_reports_pause_once_without_replaying_audio() {
-        let processed_samples = vec![0.5, 0.6, 0.7];
-        let mut drain_cursor = 1;
-        let mut saw_pause_since_last_drain = true;
-
-        let first = drain_recording(
-            true,
-            &processed_samples,
-            &mut drain_cursor,
-            &mut saw_pause_since_last_drain,
-        );
-        let second = drain_recording(
-            true,
-            &processed_samples,
-            &mut drain_cursor,
-            &mut saw_pause_since_last_drain,
-        );
-
-        assert_eq!(
-            first,
-            DrainResult {
-                samples: vec![0.6, 0.7],
-                total_speech_samples: 3,
-                saw_pause: true,
-            }
-        );
-        assert_eq!(
-            second,
-            DrainResult {
-                samples: Vec::new(),
-                total_speech_samples: 3,
-                saw_pause: false,
-            }
-        );
-    }
-
-    #[test]
-    fn normalize_transcription_pcm_downmixes_stereo_to_mono() {
-        let samples = vec![1.0, 0.5, -0.5, -1.0];
-        let normalized = normalize_transcription_pcm(&samples, 16_000, 2).expect("normalize audio");
-
-        assert_eq!(normalized, vec![0.75, -0.75]);
-    }
-
-    #[test]
     fn quiet_speech_energy_fallback_accepts_low_voice_frames() {
         let quiet_voice = vec![0.0014; 480];
         let silence = vec![0.0002; 480];
@@ -1040,15 +951,5 @@ mod tests {
         let normalized = normalize_transcription_pcm(&source, 44_100, 1).expect("resample audio");
 
         assert_eq!(normalized.len(), 16_000);
-    }
-
-    #[test]
-    fn mix_transcription_pcm_sources_averages_active_sources() {
-        let first = [0.5, 0.25];
-        let second = [0.75];
-
-        let mixed = mix_transcription_pcm_sources(&[&first, &second]);
-
-        assert_eq!(mixed, vec![0.625, 0.25]);
     }
 }

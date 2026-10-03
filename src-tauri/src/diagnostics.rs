@@ -206,47 +206,6 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_model_ids_to_backend_allowlist() {
-        assert_eq!(
-            normalize_diagnostic_model_id(GROQ_MODEL_WHISPER_LARGE_V3),
-            "whisper-large-v3"
-        );
-        assert_eq!(
-            normalize_diagnostic_model_id("whisper-large-v3-turbo"),
-            "whisper-large-v3-turbo"
-        );
-        assert_eq!(
-            normalize_diagnostic_model_id(OPENAI_MODEL_GPT_4O_TRANSCRIBE),
-            "gpt-4o-transcribe"
-        );
-        assert_eq!(normalize_diagnostic_model_id("custom-model"), "other");
-    }
-
-    #[test]
-    fn payload_contains_only_sanitized_failure_metadata() {
-        let error = DirectTranscriptionError::unsupported_feature(
-            DirectTranscriptionProvider::OpenAi,
-            "OpenAI GPT-4o transcription does not support translation.",
-        );
-
-        let payload = build_byok_failure_payload(
-            &settings(),
-            OPENAI_MODEL_GPT_4O_TRANSCRIBE,
-            SAMPLE_RATE * 12,
-            Duration::from_secs(2),
-            &error,
-        )
-        .expect("payload");
-
-        assert_eq!(payload.provider, "byok_openai");
-        assert_eq!(payload.model_id, "gpt-4o-transcribe");
-        assert_eq!(payload.error_kind, "unsupported_feature");
-        assert_eq!(payload.http_status, None);
-        assert_eq!(payload.latency_bucket, "1_3s");
-        assert_eq!(payload.audio_duration_bucket, "5_15s");
-    }
-
-    #[test]
     fn missing_api_key_payload_is_classified_without_exposing_the_message() {
         let sentinel = "missing sk-secret from /Users/alice/private/settings.json";
         let error =

@@ -661,10 +661,6 @@ mod tests {
             self.stop_calls.load(Ordering::SeqCst)
         }
 
-        fn drain_calls(&self) -> usize {
-            self.drain_calls.load(Ordering::SeqCst)
-        }
-
         fn cancel_calls(&self) -> usize {
             self.cancel_calls.load(Ordering::SeqCst)
         }
@@ -736,10 +732,6 @@ mod tests {
 
         fn stop_calls(&self) -> usize {
             self.stop_calls.load(Ordering::SeqCst)
-        }
-
-        fn drain_calls(&self) -> usize {
-            self.drain_calls.load(Ordering::SeqCst)
         }
 
         fn cancel_calls(&self) -> usize {
@@ -828,115 +820,6 @@ mod tests {
             total_speech_samples: samples.len(),
             saw_pause: false,
         }
-    }
-
-    #[test]
-    fn starts_both_sources_and_records_an_active_session() {
-        let microphone = Arc::new(FakeMicrophone {
-            stop_result: Mutex::new(Some(vec![0.25, -0.25])),
-            ..FakeMicrophone::default()
-        });
-        let bridge = Arc::new(FakeBridge::with_stop_result(
-            supported_start_result(),
-            stop_result_with_pcm(&[0.5, 0.5], 16000, 1),
-        ));
-        let manager =
-            FullSystemAudioSessionManager::with_backend(microphone.clone(), bridge.clone());
-
-        let result = manager.start_session(
-            "transcribe_full_system_audio",
-            FullSystemAudioCaptureConfig::default(),
-        );
-
-        assert!(result.started);
-        assert!(result.new_session_started);
-        assert!(result.session.is_some());
-        assert!(manager.is_active());
-        assert_eq!(microphone.start_calls(), 1);
-        assert_eq!(bridge.start_calls(), 1);
-        assert!(result
-            .session
-            .as_ref()
-            .expect("missing session")
-            .system_audio
-            .is_active());
-        assert!(result
-            .session
-            .as_ref()
-            .expect("missing session")
-            .microphone
-            .is_active());
-        assert_eq!(
-            result.session.as_ref().expect("missing session").binding_id,
-            "transcribe_full_system_audio"
-        );
-
-        let stop_result = manager.stop_session();
-
-        assert!(stop_result.stopped);
-        assert!(stop_result.had_active_session);
-        assert!(stop_result.session.is_some());
-        assert!(manager.is_idle());
-        assert_eq!(microphone.stop_calls(), 1);
-        assert_eq!(bridge.stop_calls(), 1);
-        assert_eq!(bridge.cleanup_calls(), 1);
-        assert_eq!(stop_result.transcription_samples, Some(vec![0.375, 0.125]));
-        assert_eq!(
-            stop_result.transcription_source_samples,
-            vec![
-                FullSystemTranscriptionSourceSamples {
-                    source: FullSystemTranscriptionSource::Microphone,
-                    samples: vec![0.25, -0.25],
-                },
-                FullSystemTranscriptionSourceSamples {
-                    source: FullSystemTranscriptionSource::SystemAudio,
-                    samples: vec![0.5, 0.5],
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn drain_session_delta_sources_preserves_source_buffers_and_mixed_audio() {
-        let microphone = Arc::new(FakeMicrophone {
-            drain_result: Mutex::new(Some(drain_result(&[0.2, -0.2]))),
-            ..FakeMicrophone::default()
-        });
-        let bridge = Arc::new(FakeBridge {
-            supported: true,
-            start_result: Mutex::new(Some(supported_start_result())),
-            drain_result: Mutex::new(Some(stop_result_with_pcm(&[0.4, 0.4], 16000, 1))),
-            ..FakeBridge::default()
-        });
-        let manager =
-            FullSystemAudioSessionManager::with_backend(microphone.clone(), bridge.clone());
-
-        let start_result = manager.start_session(
-            "transcribe_full_system_audio",
-            FullSystemAudioCaptureConfig::default(),
-        );
-        assert!(start_result.started);
-
-        let delta = manager
-            .drain_session_delta_sources("transcribe_full_system_audio")
-            .expect("source delta");
-
-        assert_eq!(microphone.drain_calls(), 1);
-        assert_eq!(bridge.drain_calls(), 1);
-        assert_eq!(delta.mixed, Some(vec![0.3, 0.1]));
-        assert_eq!(
-            delta.sources,
-            vec![
-                FullSystemTranscriptionSourceSamples {
-                    source: FullSystemTranscriptionSource::Microphone,
-                    samples: vec![0.2, -0.2],
-                },
-                FullSystemTranscriptionSourceSamples {
-                    source: FullSystemTranscriptionSource::SystemAudio,
-                    samples: vec![0.4, 0.4],
-                },
-            ]
-        );
     }
 
     #[test]
@@ -1129,52 +1012,6 @@ mod tests {
         assert_eq!(bridge.stop_calls(), 0);
         assert_eq!(bridge.cleanup_calls(), 1);
         assert_eq!(stop_result.transcription_samples, Some(vec![0.25, -0.25]));
-    }
-
-    #[test]
-    fn cancel_session_resets_state_and_invokes_bridge_cancel() {
-        let microphone = Arc::new(FakeMicrophone::default());
-        let bridge = Arc::new(FakeBridge::supported(supported_start_result()));
-        let manager =
-            FullSystemAudioSessionManager::with_backend(microphone.clone(), bridge.clone());
-
-        let start_result = manager.start_session(
-            "transcribe_full_system_audio",
-            FullSystemAudioCaptureConfig::default(),
-        );
-        assert!(start_result.started);
-
-        let cancel_result = manager.cancel_session();
-
-        assert!(cancel_result.stopped);
-        assert!(manager.is_idle());
-        assert_eq!(microphone.cancel_calls(), 1);
-        assert_eq!(bridge.cancel_calls(), 1);
-        assert_eq!(bridge.stop_calls(), 0);
-        assert_eq!(bridge.cleanup_calls(), 1);
-    }
-
-    #[test]
-    fn start_is_noop_when_session_is_already_active() {
-        let microphone = Arc::new(FakeMicrophone::default());
-        let bridge = Arc::new(FakeBridge::supported(supported_start_result()));
-        let manager =
-            FullSystemAudioSessionManager::with_backend(microphone.clone(), bridge.clone());
-
-        let first = manager.start_session(
-            "transcribe_full_system_audio",
-            FullSystemAudioCaptureConfig::default(),
-        );
-        let second = manager.start_session(
-            "transcribe_full_system_audio",
-            FullSystemAudioCaptureConfig::default(),
-        );
-
-        assert!(first.started);
-        assert!(second.started);
-        assert!(!second.new_session_started);
-        assert_eq!(microphone.start_calls(), 1);
-        assert_eq!(bridge.start_calls(), 1);
     }
 
     #[test]

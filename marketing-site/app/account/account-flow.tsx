@@ -31,6 +31,8 @@ type AccountState = {
   password: string;
   signedInEmail: string | null;
   hasCheckedSession: boolean;
+  isCheckingSession: boolean;
+  sessionCheckFailed: boolean;
   status: AccountStatus;
   error: string | null;
 };
@@ -40,6 +42,7 @@ type AccountAction =
   | { type: "password"; password: string }
   | { type: "checking_session" }
   | { type: "session_loaded"; email: string | null }
+  | { type: "session_failed"; error: string }
   | { type: "session_refresh_requested" }
   | { type: "status"; status: AccountStatus; error?: string | null }
   | { type: "signed_in"; email: string }
@@ -50,6 +53,8 @@ const accountInitialState: AccountState = {
   password: "",
   signedInEmail: null,
   hasCheckedSession: false,
+  isCheckingSession: false,
+  sessionCheckFailed: false,
   status: "idle",
   error: null,
 };
@@ -64,12 +69,23 @@ const accountReducer = (
     case "password":
       return { ...state, password: action.password };
     case "checking_session":
-      return { ...state, hasCheckedSession: false };
+      return { ...state, isCheckingSession: true };
     case "session_loaded":
       return {
         ...state,
         signedInEmail: action.email,
         hasCheckedSession: true,
+        isCheckingSession: false,
+        sessionCheckFailed: false,
+        error: state.sessionCheckFailed ? null : state.error,
+      };
+    case "session_failed":
+      return {
+        ...state,
+        hasCheckedSession: true,
+        isCheckingSession: false,
+        sessionCheckFailed: true,
+        error: action.error,
       };
     case "session_refresh_requested":
       return {
@@ -83,6 +99,8 @@ const accountReducer = (
       return {
         ...state,
         status: action.status,
+        isCheckingSession:
+          action.status === "logout" ? false : state.isCheckingSession,
         error: action.error ?? null,
       };
     case "signed_in":
@@ -90,6 +108,8 @@ const accountReducer = (
         ...state,
         signedInEmail: action.email,
         hasCheckedSession: true,
+        isCheckingSession: false,
+        sessionCheckFailed: false,
         status: "portal",
       };
     case "signed_out":
@@ -99,6 +119,8 @@ const accountReducer = (
         password: "",
         signedInEmail: null,
         hasCheckedSession: true,
+        isCheckingSession: false,
+        sessionCheckFailed: false,
         status: "idle",
         error: null,
       };
@@ -108,9 +130,24 @@ const accountReducer = (
 export function AccountFlow() {
   const downloadUrl = getDownloadUrl();
   const [auth] = useState(() => createAuthClient());
-  const sessionCheckRef = useRef<Promise<AuthSession | null> | null>(null);
+  const sessionCheckRef = useRef<{
+    controller: AbortController;
+    promise: Promise<AuthSession | null>;
+  } | null>(null);
+  const sessionVersionRef = useRef(0);
+  const actionInProgressRef = useRef<AccountStatus>("idle");
+  const [sessionCheckAttempt, retrySessionCheck] = useState(0);
   const [
-    { email, password, signedInEmail, hasCheckedSession, status, error },
+    {
+      email,
+      password,
+      signedInEmail,
+      hasCheckedSession,
+      isCheckingSession,
+      sessionCheckFailed,
+      status,
+      error,
+    },
     dispatch,
   ] = useReducer(accountReducer, accountInitialState);
   const canSubmitCredentials =
@@ -120,25 +157,70 @@ export function AccountFlow() {
     let cancelled = false;
 
     const getVerifiedSession = () => {
-      sessionCheckRef.current ??= auth.getSession().finally(() => {
-        sessionCheckRef.current = null;
-      });
+      if (!sessionCheckRef.current) {
+        const controller = new AbortController();
+        const request = {
+          controller,
+          promise: auth.getSession({ signal: controller.signal }),
+        };
+        request.promise = request.promise.finally(() => {
+          if (sessionCheckRef.current === request) {
+            sessionCheckRef.current = null;
+          }
+        });
+        sessionCheckRef.current = request;
+      }
 
       return sessionCheckRef.current;
     };
 
     const syncSession = async () => {
-      dispatch({ type: "checking_session" });
-
-      const session = await getVerifiedSession();
-      if (cancelled) {
+      if (actionInProgressRef.current !== "idle") {
         return;
       }
+      dispatch({ type: "checking_session" });
+      const sessionVersion = sessionVersionRef.current;
+      const request = getVerifiedSession();
 
-      dispatch({ type: "session_loaded", email: session?.user.email ?? null });
+      try {
+        const session = await request.promise;
+        if (
+          cancelled ||
+          request.controller.signal.aborted ||
+          actionInProgressRef.current !== "idle" ||
+          sessionVersion !== sessionVersionRef.current
+        ) {
+          return;
+        }
+
+        dispatch({
+          type: "session_loaded",
+          email: session?.user.email ?? null,
+        });
+      } catch (err) {
+        if (
+          cancelled ||
+          request.controller.signal.aborted ||
+          actionInProgressRef.current !== "idle" ||
+          sessionVersion !== sessionVersionRef.current
+        ) {
+          return;
+        }
+
+        dispatch({
+          type: "session_failed",
+          error:
+            err instanceof Error
+              ? err.message
+              : "Unable to check your session.",
+        });
+      }
     };
 
     const refreshSession = () => {
+      if (actionInProgressRef.current !== "idle") {
+        return;
+      }
       dispatch({ type: "session_refresh_requested" });
       void syncSession();
     };
@@ -151,17 +233,20 @@ export function AccountFlow() {
 
     return () => {
       cancelled = true;
+      sessionCheckRef.current?.controller.abort();
+      sessionCheckRef.current = null;
       window.removeEventListener("pageshow", refreshSession);
       window.removeEventListener("focus", refreshSession);
       document.removeEventListener("visibilitychange", refreshSession);
     };
-  }, [auth]);
+  }, [auth, sessionCheckAttempt]);
 
   const signIn = async () => {
-    if (!canSubmitCredentials) {
+    if (!canSubmitCredentials || actionInProgressRef.current !== "idle") {
       return;
     }
 
+    actionInProgressRef.current = "auth";
     dispatch({ type: "status", status: "auth" });
 
     try {
@@ -170,6 +255,7 @@ export function AccountFlow() {
         password,
       });
 
+      sessionVersionRef.current += 1;
       dispatch({ type: "signed_in", email: session.user.email ?? email });
       await openBillingPortal();
     } catch (err) {
@@ -178,10 +264,16 @@ export function AccountFlow() {
         status: "idle",
         error: err instanceof Error ? err.message : "Unable to sign in.",
       });
+    } finally {
+      actionInProgressRef.current = "idle";
     }
   };
 
   const manageBilling = async () => {
+    if (actionInProgressRef.current !== "idle") {
+      return;
+    }
+    actionInProgressRef.current = "portal";
     dispatch({ type: "status", status: "portal" });
 
     try {
@@ -198,15 +290,25 @@ export function AccountFlow() {
         error:
           err instanceof Error ? err.message : "Unable to open billing portal.",
       });
+    } finally {
+      actionInProgressRef.current = "idle";
     }
   };
 
   const logOut = async () => {
+    if (actionInProgressRef.current !== "idle") {
+      return;
+    }
+    actionInProgressRef.current = "logout";
+    sessionVersionRef.current += 1;
+    sessionCheckRef.current?.controller.abort();
+    sessionCheckRef.current = null;
     dispatch({ type: "status", status: "logout" });
 
     try {
       await auth.signOut();
 
+      sessionVersionRef.current += 1;
       dispatch({ type: "signed_out" });
     } catch (err) {
       dispatch({
@@ -214,6 +316,8 @@ export function AccountFlow() {
         status: "idle",
         error: err instanceof Error ? err.message : "Unable to log out.",
       });
+    } finally {
+      actionInProgressRef.current = "idle";
     }
   };
 
@@ -221,7 +325,7 @@ export function AccountFlow() {
     <div className="mx-auto mt-9 min-h-[17rem] w-full max-w-xl text-left">
       {!hasCheckedSession ? (
         <div aria-busy="true" className="h-[17rem]" />
-      ) : signedInEmail ? (
+      ) : sessionCheckFailed && !signedInEmail ? null : signedInEmail ? (
         <div className="space-y-4 text-sm text-cosmic-200">
           <button
             type="button"
@@ -312,7 +416,23 @@ export function AccountFlow() {
       )}
 
       {error ? (
-        <p className="text-center text-sm text-rose-200">{error}</p>
+        <p role="alert" className="text-center text-sm text-rose-200">
+          {error}
+        </p>
+      ) : null}
+      {sessionCheckFailed ? (
+        <button
+          type="button"
+          onClick={() => {
+            if (actionInProgressRef.current === "idle") {
+              retrySessionCheck((attempt) => attempt + 1);
+            }
+          }}
+          disabled={isCheckingSession || status !== "idle"}
+          className="mx-auto mt-4 block rounded-full border border-white/20 px-4 py-2 text-sm text-cosmic-100 transition hover:border-white/40 disabled:cursor-not-allowed disabled:opacity-70"
+        >
+          {isCheckingSession ? "Checking session..." : "Retry"}
+        </button>
       ) : null}
     </div>
   );

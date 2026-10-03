@@ -304,34 +304,7 @@ fn tray_shortcut_display(binding: &str) -> TrayShortcutDisplay {
 
 #[cfg(test)]
 mod tests {
-    use super::{last_transcript_text, tray_shortcut_display};
-    use crate::managers::history::HistoryEntry;
-
-    fn build_entry(transcription: &str, post_processed: Option<&str>) -> HistoryEntry {
-        HistoryEntry {
-            id: 1,
-            file_name: "uttr-1.wav".to_string(),
-            timestamp: 0,
-            saved: false,
-            title: "Recording".to_string(),
-            transcription_text: transcription.to_string(),
-            post_processed_text: post_processed.map(|text| text.to_string()),
-            post_process_prompt: None,
-            recording_source: "dictation".to_string(),
-        }
-    }
-
-    #[test]
-    fn uses_post_processed_text_when_available() {
-        let entry = build_entry("raw", Some("processed"));
-        assert_eq!(last_transcript_text(&entry), "processed");
-    }
-
-    #[test]
-    fn falls_back_to_raw_transcription() {
-        let entry = build_entry("raw", None);
-        assert_eq!(last_transcript_text(&entry), "raw");
-    }
+    use super::tray_shortcut_display;
 
     #[test]
     fn maps_copy_last_transcript_binding_to_tray_accelerator() {

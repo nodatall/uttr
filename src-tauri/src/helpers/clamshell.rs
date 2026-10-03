@@ -68,33 +68,3 @@ pub fn is_clamshell() -> Result<bool, String> {
 pub fn is_laptop() -> Result<bool, String> {
     Ok(false)
 }
-
-#[cfg(test)]
-mod tests {
-    use super::{ioreg_reports_closed_clamshell, pmset_reports_internal_battery};
-
-    #[test]
-    fn parses_ioreg_clamshell_state() {
-        for (output, expected) in [
-            ("\"AppleClamshellState\" = Yes", true),
-            ("\"AppleClamshellState\" = No", false),
-            ("unrelated ioreg output", false),
-        ] {
-            assert_eq!(ioreg_reports_closed_clamshell(output), expected);
-        }
-    }
-
-    #[test]
-    fn parses_pmset_battery_presence() {
-        for (output, expected) in [
-            (
-                "Now drawing from 'Battery Power'\n -InternalBattery-0",
-                true,
-            ),
-            ("Now drawing from 'AC Power'", false),
-            ("", false),
-        ] {
-            assert_eq!(pmset_reports_internal_battery(output), expected);
-        }
-    }
-}

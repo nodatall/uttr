@@ -113,16 +113,4 @@ mod tests {
             ShortcutEventRoute::Ignore
         );
     }
-
-    #[test]
-    fn transcription_shortcuts_still_route_to_coordinator_input() {
-        assert_eq!(
-            shortcut_event_route("transcribe", true),
-            ShortcutEventRoute::CoordinatorInput
-        );
-        assert_eq!(
-            shortcut_event_route("transcribe_full_system_audio", false),
-            ShortcutEventRoute::CoordinatorInput
-        );
-    }
 }

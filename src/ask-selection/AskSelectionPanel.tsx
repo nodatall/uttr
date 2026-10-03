@@ -96,6 +96,8 @@ const useAskSelectionPanelController = () => {
   const [draft, setDraft] = useState("");
   const [isSending, setIsSending] = useState(false);
   const payloadRef = useRef<AskSelectionPayload | null>(null);
+  const payloadRevisionRef = useRef(0);
+  const followUpRequestRef = useRef(0);
   const copyResetRef = useRef<number | null>(null);
   const messageListRef = useRef<HTMLDivElement | null>(null);
   const applyPayloadRef = useRef<
@@ -109,10 +111,13 @@ const useAskSelectionPanelController = () => {
         if (payloadRef.current === null) {
           return;
         }
+        payloadRevisionRef.current += 1;
+        followUpRequestRef.current += 1;
         payloadRef.current = null;
         setPayload(null);
         setCopied(false);
         setIsSending(false);
+        setDraft("");
         return;
       }
 
@@ -125,6 +130,12 @@ const useAskSelectionPanelController = () => {
         return;
       }
 
+      if (payloadRef.current?.sessionId !== normalizedPayload.sessionId) {
+        followUpRequestRef.current += 1;
+        setDraft("");
+      }
+
+      payloadRevisionRef.current += 1;
       payloadRef.current = normalizedPayload;
       setPayload(normalizedPayload);
       setCopied(false);
@@ -134,9 +145,13 @@ const useAskSelectionPanelController = () => {
   );
 
   const refreshPayload = useCallback(() => {
+    const revision = payloadRevisionRef.current;
     void commands
       .getAskSelectionPayload()
       .then((latestPayload) => {
+        if (payloadRevisionRef.current !== revision) {
+          return;
+        }
         applyPayload(latestPayload as AskSelectionPayload | null);
       })
       .catch(() => {});
@@ -240,20 +255,31 @@ const useAskSelectionPanelController = () => {
       state: "thinking",
       messages: optimisticMessages,
     };
-    payloadRef.current = optimisticPayload;
-    setPayload(optimisticPayload);
+    const requestId = ++followUpRequestRef.current;
+    const ownsCurrentRequest = () =>
+      followUpRequestRef.current === requestId &&
+      payloadRef.current?.sessionId === sessionId;
+    applyPayload(optimisticPayload);
     setDraft("");
     setCopied(false);
     setIsSending(true);
 
     try {
       const result = await commands.askSelectionFollowUp(sessionId, message);
+      if (!ownsCurrentRequest()) {
+        return;
+      }
       if (result.status === "ok") {
-        applyPayload(result.data as AskSelectionPayload);
+        if (result.data.sessionId === sessionId) {
+          applyPayload(result.data as AskSelectionPayload);
+        }
       } else {
         throw new Error(result.error);
       }
     } catch (error) {
+      if (!ownsCurrentRequest()) {
+        return;
+      }
       const errorPayload: AskSelectionPayload = {
         ...(payloadRef.current ?? DEFAULT_PAYLOAD),
         state: "error",
@@ -261,7 +287,9 @@ const useAskSelectionPanelController = () => {
       };
       applyPayload(errorPayload);
     } finally {
-      setIsSending(false);
+      if (ownsCurrentRequest()) {
+        setIsSending(false);
+      }
     }
   }, [applyPayload, draft, isSending, payload]);
 

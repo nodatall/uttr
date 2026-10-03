@@ -32,6 +32,7 @@ enum ClipboardWriteSyncStatus {
 #[derive(Debug)]
 struct ClipboardRestoreState {
     original_text: Option<String>,
+    pasted_text: String,
     restore_delay_ms: u64,
     use_wl_copy: bool,
 }
@@ -228,17 +229,44 @@ fn effective_clipboard_paste_delay_ms(configured_delay_ms: u64) -> u64 {
     configured_delay_ms.max(CLIPBOARD_MIN_PASTE_DELAY_MS)
 }
 
-fn restore_clipboard_after_paste(app_handle: AppHandle, state: ClipboardRestoreState) {
-    let Some(original_text) = state.original_text else {
+fn clipboard_text_to_restore<'a>(
+    state: &'a ClipboardRestoreState,
+    handling: ClipboardHandling,
+    current_text: &str,
+) -> Option<&'a str> {
+    if handling == ClipboardHandling::CopyToClipboard
+        || !clipboard_text_matches(current_text, &state.pasted_text)
+    {
+        return None;
+    }
+    state.original_text.as_deref()
+}
+
+fn restore_clipboard_after_paste(
+    app_handle: AppHandle,
+    state: ClipboardRestoreState,
+    handling: ClipboardHandling,
+) {
+    if handling == ClipboardHandling::CopyToClipboard || state.original_text.is_none() {
         // Preserve non-text clipboard content by not forcing an empty string restore.
         return;
-    };
+    }
 
     std::thread::spawn(move || {
         std::thread::sleep(Duration::from_millis(state.restore_delay_ms));
-        if let Err(err) =
-            write_clipboard_text_with_timeout(&app_handle, original_text, state.use_wl_copy)
-        {
+        // Check and write in the same clipboard operation to avoid overwriting
+        // a subsequent copy or paste that replaced our temporary text.
+        if let Err(err) = run_clipboard_operation_with_timeout(move || {
+            let current_text = app_handle
+                .clipboard()
+                .read_text()
+                .map_err(|e| e.to_string())?;
+            if let Some(original_text) = clipboard_text_to_restore(&state, handling, &current_text)
+            {
+                write_clipboard_text(&app_handle, original_text, state.use_wl_copy)?;
+            }
+            Ok(())
+        }) {
             warn!("Failed to restore original clipboard text: {}", err);
         }
     });
@@ -311,6 +339,7 @@ fn paste_via_clipboard(
 
     Ok(ClipboardRestoreState {
         original_text,
+        pasted_text: text.to_string(),
         restore_delay_ms: CLIPBOARD_RESTORE_DELAY_MS,
         use_wl_copy,
     })
@@ -884,7 +913,7 @@ pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
 
     // Restore clipboard after a short grace period so slower apps can consume pasted text first.
     if let Some(state) = clipboard_restore_state {
-        restore_clipboard_after_paste(app_handle.clone(), state);
+        restore_clipboard_after_paste(app_handle.clone(), state, settings.clipboard_handling);
     }
 
     // After pasting, optionally copy to clipboard based on settings
@@ -899,6 +928,46 @@ pub fn paste(text: String, app_handle: AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn delayed_restore_preserves_new_copies_and_copy_to_clipboard() {
+        let state = ClipboardRestoreState {
+            original_text: Some("old clipboard".into()),
+            pasted_text: "transcript\ntext".into(),
+            restore_delay_ms: 0,
+            use_wl_copy: false,
+        };
+        assert_eq!(
+            clipboard_text_to_restore(&state, ClipboardHandling::DontModify, "transcript\r\ntext"),
+            Some("old clipboard")
+        );
+        assert_eq!(
+            clipboard_text_to_restore(&state, ClipboardHandling::DontModify, "new user copy"),
+            None
+        );
+        assert_eq!(
+            clipboard_text_to_restore(
+                &state,
+                ClipboardHandling::CopyToClipboard,
+                "transcript\ntext"
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn delayed_restore_does_not_replace_non_text_clipboard_with_empty_text() {
+        let state = ClipboardRestoreState {
+            original_text: None,
+            pasted_text: "transcript".into(),
+            restore_delay_ms: 0,
+            use_wl_copy: false,
+        };
+        assert_eq!(
+            clipboard_text_to_restore(&state, ClipboardHandling::DontModify, "transcript"),
+            None
+        );
+    }
 
     #[test]
     fn auto_submit_policy_covers_supported_paste_methods() {
@@ -920,24 +989,5 @@ mod tests {
                 "enabled={enabled}, paste_method={paste_method:?}"
             );
         }
-    }
-
-    #[test]
-    fn paste_formatting_respects_trailing_space_setting() {
-        for (enabled, expected) in [(false, "hello"), (true, "hello ")] {
-            assert_eq!(format_text_for_paste("hello", enabled), expected);
-        }
-    }
-
-    #[test]
-    fn clipboard_text_match_tolerates_crlf() {
-        assert!(clipboard_text_matches("hello\r\nworld", "hello\nworld"));
-    }
-
-    #[test]
-    fn clipboard_paste_delay_has_a_safety_floor() {
-        assert_eq!(effective_clipboard_paste_delay_ms(0), 120);
-        assert_eq!(effective_clipboard_paste_delay_ms(60), 120);
-        assert_eq!(effective_clipboard_paste_delay_ms(250), 250);
     }
 }

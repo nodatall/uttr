@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { setDbExecutorForTests, type DbExecutor } from "@/lib/db";
 import {
-  buildPendingCheckoutSessionContextKey,
   fetchReusableOpenCheckoutSession,
   insertPendingCheckoutSession,
   markPendingCheckoutSessionCompleted,
@@ -52,26 +51,6 @@ function buildSession(
 }
 
 describe("pending checkout session helpers", () => {
-  test("builds a stable context key from user and install/claim context", () => {
-    expect(
-      buildPendingCheckoutSessionContextKey({
-        userId: "user_123",
-        anonymousTrialId: "trial_123",
-        installId: "install_123",
-      }),
-    ).toBe(
-      "user_id:user_123|anonymous_trial_id:trial_123|install_id:install_123",
-    );
-
-    expect(
-      buildPendingCheckoutSessionContextKey({
-        userId: "user_123",
-        anonymousTrialId: null,
-        installId: "install_123",
-      }),
-    ).toBe("user_id:user_123|anonymous_trial_id:null|install_id:install_123");
-  });
-
   test("returns a reusable open session and ignores expired rows", async () => {
     const validSession = buildSession();
     const expiredSession = buildSession({

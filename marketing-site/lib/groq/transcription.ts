@@ -116,7 +116,9 @@ async function fetchGroqWithRetry(
   buildInit: () => RequestInit,
   maxAttempts = 3,
 ) {
-  const attemptFetch = async (attempt: number): Promise<Response> => {
+  const attemptFetch = async (
+    attempt: number,
+  ): Promise<{ response: Response; payload: unknown }> => {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 90_000);
 
@@ -131,7 +133,11 @@ async function fetchGroqWithRetry(
         !isRetryableGroqStatus(response.status) ||
         attempt === maxAttempts
       ) {
-        return response;
+        // Fetch resolves at headers; keep the deadline through body consumption.
+        const payload = response.ok
+          ? await response.json()
+          : await response.arrayBuffer().then(() => null);
+        return { response, payload };
       }
 
       const retryAfterMs = parseRetryAfterMs(
@@ -172,7 +178,7 @@ export async function transcribeWithGroq({
   const endpoint = resolveGroqEndpoint(translateToEnglish);
   const normalizedLanguage = normalizeGroqLanguage(language);
 
-  const response = await fetchGroqWithRetry(
+  const { response, payload } = await fetchGroqWithRetry(
     `${GROQ_BASE_URL}/${endpoint}`,
     () => {
       const body = new FormData();
@@ -195,14 +201,17 @@ export async function transcribeWithGroq({
   );
 
   if (!response.ok) {
-    await response.arrayBuffer().catch(() => null);
     throw new Error(
       `Groq API request failed (${response.status} ${response.statusText})`,
     );
   }
 
-  const payload = (await response.json()) as { text?: string };
-  if (typeof payload.text !== "string") {
+  if (
+    !payload ||
+    typeof payload !== "object" ||
+    !("text" in payload) ||
+    typeof payload.text !== "string"
+  ) {
     throw new Error("Groq transcription response missing text.");
   }
 

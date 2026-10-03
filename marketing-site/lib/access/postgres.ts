@@ -280,13 +280,17 @@ export async function fetchAuthenticatedUser(
   return user;
 }
 
-export async function fetchEntitlementByUserId(userId: string) {
+export async function fetchEntitlementByUserId(
+  userId: string,
+  executor: DbExecutor = { query: dbQuery },
+) {
   const rows = await queryRows<EntitlementRow>(
     `select *
        from public.entitlements
       where user_id = $1
       limit 1`,
     [userId],
+    executor,
   );
 
   return firstOrNull(rows);
@@ -294,6 +298,8 @@ export async function fetchEntitlementByUserId(userId: string) {
 
 export async function upsertEntitlementState(
   row: Omit<EntitlementRow, "updated_at">,
+  executor: DbExecutor = { query: dbQuery },
+  expectedStripeSubscriptionId?: string | null,
 ) {
   const rows = await queryRows<EntitlementRow>(
     `insert into public.entitlements (
@@ -309,6 +315,7 @@ export async function upsertEntitlementState(
            stripe_customer_id = excluded.stripe_customer_id,
            stripe_subscription_id = excluded.stripe_subscription_id,
            current_period_ends_at = excluded.current_period_ends_at
+     ${expectedStripeSubscriptionId !== undefined ? "where entitlements.stripe_subscription_id is not distinct from $6" : ""}
      returning *`,
     [
       row.user_id,
@@ -316,10 +323,26 @@ export async function upsertEntitlementState(
       row.stripe_customer_id,
       row.stripe_subscription_id,
       row.current_period_ends_at,
+      ...(expectedStripeSubscriptionId !== undefined
+        ? [expectedStripeSubscriptionId]
+        : []),
     ],
+    executor,
   );
 
   return firstOrNull(rows);
+}
+
+export async function withStripeCustomerEntitlementLock<T>(
+  stripeCustomerId: string,
+  callback: (executor: DbExecutor) => Promise<T>,
+) {
+  return dbTransaction(async (client) => {
+    await client.query("select pg_advisory_xact_lock(hashtext($1))", [
+      `stripe_entitlement:${stripeCustomerId}`,
+    ]);
+    return callback(client);
+  });
 }
 
 export async function fetchReusableOpenCheckoutSession(params: {
@@ -431,6 +454,7 @@ export async function patchEntitlementByStripeSubscriptionId(
       "subscription_status" | "stripe_customer_id" | "current_period_ends_at"
     >
   >,
+  executor: DbExecutor = { query: dbQuery },
 ) {
   const patchColumns = [
     "subscription_status",
@@ -455,6 +479,7 @@ export async function patchEntitlementByStripeSubscriptionId(
       where stripe_subscription_id = $1
       returning *`,
     values,
+    executor,
   );
 
   return firstOrNull(rows);

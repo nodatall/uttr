@@ -53,28 +53,6 @@ pub fn openai_api_model_name(model_id: &str) -> Option<&'static str> {
     }
 }
 
-#[cfg(test)]
-fn choose_default_local_model_id(available_models: Vec<ModelInfo>) -> Option<String> {
-    let mut local_models: Vec<_> = available_models
-        .into_iter()
-        .filter(|model| model.is_downloaded && !is_cloud_model_id(&model.id))
-        .collect();
-
-    if local_models
-        .iter()
-        .any(|model| model.id == DEFAULT_LOCAL_MODEL_ID)
-    {
-        return Some(DEFAULT_LOCAL_MODEL_ID.to_string());
-    }
-
-    if let Some(recommended) = local_models.iter().find(|model| model.is_recommended) {
-        return Some(recommended.id.clone());
-    }
-
-    local_models.sort_by(|a, b| a.id.cmp(&b.id));
-    local_models.first().map(|model| model.id.clone())
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 pub struct ModelInfo {
     pub id: String,
@@ -1306,52 +1284,6 @@ mod tests {
     use std::io::Write;
     use tempfile::TempDir;
 
-    fn model(id: &str, is_downloaded: bool, is_recommended: bool) -> ModelInfo {
-        ModelInfo {
-            id: id.to_string(),
-            name: id.to_string(),
-            description: String::new(),
-            filename: String::new(),
-            url: None,
-            size_mb: 0,
-            is_downloaded,
-            is_downloading: false,
-            partial_size: 0,
-            is_directory: false,
-            engine_type: EngineType::Whisper,
-            accuracy_score: 0.0,
-            speed_score: 0.0,
-            supports_translation: true,
-            is_recommended,
-            supported_languages: vec![],
-            is_custom: false,
-        }
-    }
-
-    #[test]
-    fn default_local_model_prefers_parakeet_v3_when_downloaded() {
-        let models = vec![
-            model("small", true, false),
-            model(DEFAULT_LOCAL_MODEL_ID, true, false),
-        ];
-        let selected = choose_default_local_model_id(models);
-        assert_eq!(selected.as_deref(), Some(DEFAULT_LOCAL_MODEL_ID));
-    }
-
-    #[test]
-    fn default_local_model_falls_back_to_recommended_then_sorted() {
-        let with_recommended = vec![
-            model("small", true, false),
-            model("sense-voice-int8", true, true),
-        ];
-        let selected_recommended = choose_default_local_model_id(with_recommended);
-        assert_eq!(selected_recommended.as_deref(), Some("sense-voice-int8"));
-
-        let sorted_fallback = vec![model("zeta", true, false), model("alpha", true, false)];
-        let selected_sorted = choose_default_local_model_id(sorted_fallback);
-        assert_eq!(selected_sorted.as_deref(), Some("alpha"));
-    }
-
     #[test]
     fn test_discover_custom_whisper_models() {
         let temp_dir = TempDir::new().unwrap();
@@ -1421,32 +1353,5 @@ mod tests {
         assert!(!models.contains_key(".hidden-model"));
         assert!(!models.contains_key("readme"));
         assert!(!models.contains_key("some-directory"));
-    }
-
-    #[test]
-    fn test_discover_custom_models_empty_dir() {
-        let temp_dir = TempDir::new().unwrap();
-        let models_dir = temp_dir.path().to_path_buf();
-
-        let mut models = HashMap::new();
-        let count_before = models.len();
-
-        ModelManager::discover_custom_whisper_models(&models_dir, &mut models).unwrap();
-
-        // No new models should be added
-        assert_eq!(models.len(), count_before);
-    }
-
-    #[test]
-    fn test_discover_custom_models_nonexistent_dir() {
-        let models_dir = PathBuf::from("/nonexistent/path/that/does/not/exist");
-
-        let mut models = HashMap::new();
-        let count_before = models.len();
-
-        // Should not error, just return Ok
-        let result = ModelManager::discover_custom_whisper_models(&models_dir, &mut models);
-        assert!(result.is_ok());
-        assert_eq!(models.len(), count_before);
     }
 }

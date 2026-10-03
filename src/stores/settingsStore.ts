@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { subscribeWithSelector } from "zustand/middleware";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { toast } from "sonner";
 import type {
   AppSettings as Settings,
   AudioDevice,
@@ -97,6 +98,21 @@ const DEFAULT_AUDIO_DEVICE: AudioDevice = {
   name: "Default",
   is_default: true,
 };
+
+const checkCommandResult = (result: unknown) => {
+  if (
+    result !== null &&
+    typeof result === "object" &&
+    "status" in result &&
+    result.status === "error" &&
+    "error" in result
+  ) {
+    throw new Error(String(result.error));
+  }
+};
+
+const settingErrorMessage = (error: unknown) =>
+  error instanceof Error ? error.message : String(error);
 
 const settingUpdaters: {
   [K in keyof Settings]?: (value: Settings[K]) => Promise<unknown>;
@@ -403,7 +419,7 @@ export const useSettingsStore = create<SettingsStore>()(
 
         const updater = settingUpdaters[key];
         if (updater) {
-          await updater(value);
+          checkCommandResult(await updater(value));
           if (key === "byok_enabled") {
             await get().refreshInstallAccess();
           }
@@ -413,8 +429,16 @@ export const useSettingsStore = create<SettingsStore>()(
       } catch (error) {
         console.error(`Failed to update setting ${String(key)}:`, error);
         if (settings) {
-          set({ settings: { ...settings, [key]: originalValue } });
+          set((state) => ({
+            settings: state.settings
+              ? { ...state.settings, [key]: originalValue }
+              : null,
+          }));
         }
+        // Some native setters persist before applying their runtime change.
+        // Re-read the saved value instead of assuming the command was atomic.
+        await get().refreshSettings();
+        toast.error(settingErrorMessage(error));
       } finally {
         setUpdating(updateKey, false);
       }
@@ -517,10 +541,11 @@ export const useSettingsStore = create<SettingsStore>()(
       setUpdating(updateKey, true);
 
       try {
-        await commands.resetBinding(id);
+        checkCommandResult(await commands.resetBinding(id));
         await refreshSettings();
       } catch (error) {
         console.error(`Failed to reset binding ${id}:`, error);
+        toast.error(settingErrorMessage(error));
       } finally {
         setUpdating(updateKey, false);
       }
@@ -542,7 +567,7 @@ export const useSettingsStore = create<SettingsStore>()(
       }
 
       try {
-        await commands.setPostProcessProvider(providerId);
+        checkCommandResult(await commands.setPostProcessProvider(providerId));
         await refreshSettings();
       } catch (error) {
         console.error("Failed to set post-process provider:", error);
@@ -553,6 +578,8 @@ export const useSettingsStore = create<SettingsStore>()(
               : null,
           }));
         }
+        await refreshSettings();
+        toast.error(settingErrorMessage(error));
       } finally {
         setUpdating(updateKey, false);
       }
@@ -571,11 +598,17 @@ export const useSettingsStore = create<SettingsStore>()(
 
       try {
         if (settingType === "base_url") {
-          await commands.changePostProcessBaseUrlSetting(providerId, value);
+          checkCommandResult(
+            await commands.changePostProcessBaseUrlSetting(providerId, value),
+          );
         } else if (settingType === "api_key") {
-          await commands.changePostProcessApiKeySetting(providerId, value);
+          checkCommandResult(
+            await commands.changePostProcessApiKeySetting(providerId, value),
+          );
         } else if (settingType === "model") {
-          await commands.changePostProcessModelSetting(providerId, value);
+          checkCommandResult(
+            await commands.changePostProcessModelSetting(providerId, value),
+          );
         }
         await refreshSettings();
       } catch (error) {
@@ -583,6 +616,11 @@ export const useSettingsStore = create<SettingsStore>()(
           `Failed to update post-process ${settingType.replace("_", " ")}:`,
           error,
         );
+        await refreshSettings();
+        if (settingType === "api_key") {
+          throw error;
+        }
+        toast.error(settingErrorMessage(error));
       } finally {
         setUpdating(updateKey, false);
       }
@@ -593,6 +631,7 @@ export const useSettingsStore = create<SettingsStore>()(
     },
 
     updatePostProcessApiKey: async (providerId, apiKey) => {
+      await get().updatePostProcessSetting("api_key", providerId, apiKey);
       // Clear cached models when API key changes - user should click refresh after
       set((state) => ({
         postProcessModelOptions: {
@@ -600,7 +639,6 @@ export const useSettingsStore = create<SettingsStore>()(
           [providerId]: [],
         },
       }));
-      await get().updatePostProcessSetting("api_key", providerId, apiKey);
       if (providerId === "groq" || providerId === "openai") {
         await get().refreshInstallAccess();
       }

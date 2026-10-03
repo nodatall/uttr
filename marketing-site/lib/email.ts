@@ -39,10 +39,13 @@ export async function sendTransactionalEmail(payload: MailPayload) {
     return;
   }
 
-  await client.emails.send({
+  const { error } = await client.emails.send({
     from,
     to: payload.to,
     subject: payload.subject,
     html: payload.html,
   });
+  if (error) {
+    throw new Error(`Transactional email failed: ${error.message}`);
+  }
 }

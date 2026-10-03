@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { useSettings } from "@/hooks/useSettings";
 import { openUrl } from "@tauri-apps/plugin-opener";
+import { toast } from "sonner";
 
 const GROQ_KEYS_URL = "https://console.groq.com/keys";
 const OPENAI_KEYS_URL = "https://platform.openai.com/api-keys";
@@ -33,24 +34,23 @@ export const ApiKeysSettings: React.FC = () => {
   const isGroqKeyUpdating = isUpdating("post_process_api_key:groq");
   const isOpenAiKeyUpdating = isUpdating("post_process_api_key:openai");
 
-  const handleSaveGroqKey = async () => {
-    await updatePostProcessApiKey("groq", groqApiKeyDraft.trim());
-    setGroqApiKeyDraft("");
-  };
-
-  const handleClearGroqKey = async () => {
-    await updatePostProcessApiKey("groq", "");
-    setGroqApiKeyDraft("");
-  };
-
-  const handleSaveOpenAiKey = async () => {
-    await updatePostProcessApiKey("openai", openAiApiKeyDraft.trim());
-    setOpenAiApiKeyDraft("");
-  };
-
-  const handleClearOpenAiKey = async () => {
-    await updatePostProcessApiKey("openai", "");
-    setOpenAiApiKeyDraft("");
+  const updateKey = async (providerId: "groq" | "openai", value: string) => {
+    try {
+      await updatePostProcessApiKey(providerId, value);
+      if (providerId === "groq") {
+        setGroqApiKeyDraft("");
+      } else {
+        setOpenAiApiKeyDraft("");
+      }
+    } catch (error) {
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : t("settings.apiKeys.saveFailed", {
+              defaultValue: "Unable to update API key.",
+            }),
+      );
+    }
   };
 
   return (
@@ -108,7 +108,7 @@ export const ApiKeysSettings: React.FC = () => {
               variant="primary-soft"
               size="sm"
               onClick={() => {
-                void handleSaveGroqKey();
+                void updateKey("groq", groqApiKeyDraft.trim());
               }}
               disabled={
                 isGroqKeyUpdating ||
@@ -124,7 +124,7 @@ export const ApiKeysSettings: React.FC = () => {
                 variant="ghost"
                 size="sm"
                 onClick={() => {
-                  void handleClearGroqKey();
+                  void updateKey("groq", "");
                 }}
                 disabled={isGroqKeyUpdating}
               >
@@ -184,7 +184,7 @@ export const ApiKeysSettings: React.FC = () => {
               variant="primary-soft"
               size="sm"
               onClick={() => {
-                void handleSaveOpenAiKey();
+                void updateKey("openai", openAiApiKeyDraft.trim());
               }}
               disabled={
                 isOpenAiKeyUpdating ||
@@ -200,7 +200,7 @@ export const ApiKeysSettings: React.FC = () => {
                 variant="ghost"
                 size="sm"
                 onClick={() => {
-                  void handleClearOpenAiKey();
+                  void updateKey("openai", "");
                 }}
                 disabled={isOpenAiKeyUpdating}
               >

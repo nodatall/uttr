@@ -36,6 +36,7 @@ export {
   upsertAnonymousTrialHeartbeat,
   upsertEntitlementState,
   withAnonymousTrialUsageLock,
+  withStripeCustomerEntitlementLock,
   withUserUsageLock,
 } from "./postgres";
 export {

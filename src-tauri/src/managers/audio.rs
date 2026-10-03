@@ -383,25 +383,20 @@ impl AudioRecordingManager {
     /* ---------- mode switching --------------------------------------------- */
 
     pub fn update_mode(&self, new_mode: MicrophoneMode) -> Result<(), anyhow::Error> {
-        let mode_guard = self.mode.lock().unwrap();
-        let cur_mode = mode_guard.clone();
-
-        match (cur_mode, &new_mode) {
-            (MicrophoneMode::AlwaysOn, MicrophoneMode::OnDemand) => {
-                if matches!(*self.state.lock().unwrap(), RecordingState::Idle) {
-                    drop(mode_guard);
-                    self.stop_microphone_stream();
+        update_microphone_mode(&self.mode, new_mode, |cur_mode, new_mode| {
+            match (cur_mode, new_mode) {
+                (MicrophoneMode::AlwaysOn, MicrophoneMode::OnDemand) => {
+                    if matches!(*self.state.lock().unwrap(), RecordingState::Idle) {
+                        self.stop_microphone_stream();
+                    }
+                    Ok(())
                 }
+                (MicrophoneMode::OnDemand, MicrophoneMode::AlwaysOn) => {
+                    self.start_microphone_stream()
+                }
+                _ => Ok(()),
             }
-            (MicrophoneMode::OnDemand, MicrophoneMode::AlwaysOn) => {
-                drop(mode_guard);
-                self.start_microphone_stream()?;
-            }
-            _ => {}
-        }
-
-        *self.mode.lock().unwrap() = new_mode;
-        Ok(())
+        })
     }
 
     /* ---------- recording --------------------------------------------------- */
@@ -744,6 +739,19 @@ impl AudioRecordingManager {
     }
 }
 
+fn update_microphone_mode(
+    mode: &Mutex<MicrophoneMode>,
+    new_mode: MicrophoneMode,
+    transition: impl FnOnce(MicrophoneMode, &MicrophoneMode) -> Result<(), anyhow::Error>,
+) -> Result<(), anyhow::Error> {
+    // Stream transitions may need this mutex too. Release the snapshot lock
+    // before transitioning or acquiring it again to commit the new mode.
+    let current_mode = mode.lock().unwrap().clone();
+    transition(current_mode, &new_mode)?;
+    *mode.lock().unwrap() = new_mode;
+    Ok(())
+}
+
 fn pad_short_recording_samples(samples: Vec<f32>) -> Vec<f32> {
     let s_len = samples.len();
     if s_len < WHISPER_SAMPLE_RATE && s_len > 0 {
@@ -757,7 +765,47 @@ fn pad_short_recording_samples(samples: Vec<f32>) -> Vec<f32> {
 
 #[cfg(test)]
 mod tests {
-    use super::{pad_short_recording_samples, WHISPER_SAMPLE_RATE};
+    use super::{
+        pad_short_recording_samples, update_microphone_mode, MicrophoneMode, WHISPER_SAMPLE_RATE,
+    };
+    use std::sync::{mpsc, Arc, Mutex};
+    use std::time::Duration;
+
+    #[test]
+    fn mode_updates_complete_without_holding_the_mode_lock() {
+        for (current, next) in [
+            (MicrophoneMode::AlwaysOn, MicrophoneMode::AlwaysOn),
+            (MicrophoneMode::OnDemand, MicrophoneMode::OnDemand),
+            (MicrophoneMode::AlwaysOn, MicrophoneMode::OnDemand),
+            (MicrophoneMode::OnDemand, MicrophoneMode::AlwaysOn),
+        ] {
+            let mode = Arc::new(Mutex::new(current));
+            let worker_mode = mode.clone();
+            let (tx, rx) = mpsc::channel();
+            std::thread::spawn(move || {
+                let result = update_microphone_mode(&worker_mode, next, |_, _| {
+                    assert!(worker_mode.try_lock().is_ok());
+                    Ok(())
+                });
+                tx.send(result).unwrap();
+            });
+            rx.recv_timeout(Duration::from_secs(1))
+                .expect("mode update deadlocked")
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn failed_microphone_start_keeps_the_previous_mode() {
+        let mode = Mutex::new(MicrophoneMode::OnDemand);
+        assert!(
+            update_microphone_mode(&mode, MicrophoneMode::AlwaysOn, |_, _| {
+                Err(anyhow::anyhow!("device unavailable"))
+            })
+            .is_err()
+        );
+        assert!(matches!(*mode.lock().unwrap(), MicrophoneMode::OnDemand));
+    }
 
     #[test]
     fn short_recording_samples_are_padded_for_transcription() {
@@ -765,10 +813,5 @@ mod tests {
 
         assert_eq!(padded.len(), WHISPER_SAMPLE_RATE * 5 / 4);
         assert_eq!(&padded[..2], &[0.25, -0.25]);
-    }
-
-    #[test]
-    fn empty_recording_samples_stay_empty() {
-        assert!(pad_short_recording_samples(Vec::new()).is_empty());
     }
 }

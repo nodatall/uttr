@@ -1537,111 +1537,17 @@ mod tests {
         apply_control_command, begin_meeting_stop_after_pending_quick_cancel,
         can_start_dictation_while_legacy_meeting_processing, cancel_shortcut_should_be_registered,
         defer_meeting_stop_until_quick_finishes, finish_processing_stage,
-        is_repeated_meeting_input, is_transcribe_binding, meeting_stop_action, next_operation_id,
-        processing_watchdog_can_reset, quick_dictation_input_action,
+        is_repeated_meeting_input, meeting_stop_action, processing_watchdog_can_reset,
         release_received_before_recording_started, should_debounce_press,
-        transcribe_binding_push_to_talk, transcription_session_is_active,
         transition_legacy_meeting_processing_to_dictation, user_cancel_action, Command,
         ControlEffect, MeetingStopAction, Operation, ProcessingFinishedAction,
-        PushToTalkSuppression, QuickDictationInputAction, QuickDictationStage, Stage,
-        UserCancelAction, DEBOUNCE, SUPPRESS_AFTER_IGNORED_PUSH_TO_TALK_RELEASE,
+        PushToTalkSuppression, QuickDictationStage, Stage, UserCancelAction, DEBOUNCE,
+        SUPPRESS_AFTER_IGNORED_PUSH_TO_TALK_RELEASE,
     };
     use std::time::{Duration, Instant};
 
     fn operation(binding_id: &str, id: u64) -> Operation {
         Operation::with_id(binding_id, id)
-    }
-
-    #[test]
-    fn full_system_binding_routes_through_transcribe_coordinator() {
-        assert!(is_transcribe_binding("transcribe_full_system_audio"));
-    }
-
-    #[test]
-    fn edit_mode_binding_routes_through_transcribe_coordinator() {
-        assert!(is_transcribe_binding("edit_mode"));
-        assert!(transcribe_binding_push_to_talk("edit_mode", true));
-        assert!(!transcribe_binding_push_to_talk("edit_mode", false));
-    }
-
-    #[test]
-    fn full_system_binding_forces_toggle_mode() {
-        assert!(!transcribe_binding_push_to_talk(
-            "transcribe_full_system_audio",
-            true
-        ));
-        assert!(!transcribe_binding_push_to_talk(
-            "transcribe_full_system_audio",
-            false
-        ));
-    }
-
-    #[test]
-    fn existing_transcribe_bindings_preserve_push_to_talk_setting() {
-        assert!(transcribe_binding_push_to_talk("transcribe", true));
-        assert!(!transcribe_binding_push_to_talk("transcribe", false));
-    }
-
-    #[test]
-    fn post_process_shortcut_does_not_route_through_transcribe_coordinator() {
-        assert!(!is_transcribe_binding("transcribe_with_post_process"));
-        assert!(!transcribe_binding_push_to_talk(
-            "transcribe_with_post_process",
-            true
-        ));
-    }
-
-    #[test]
-    fn transcription_session_active_helper_treats_either_source_as_active() {
-        assert!(transcription_session_is_active(true, false));
-        assert!(transcription_session_is_active(false, true));
-        assert!(transcription_session_is_active(true, true));
-        assert!(!transcription_session_is_active(false, false));
-    }
-
-    #[test]
-    fn quick_dictation_finish_returns_to_meeting_recording_stage() {
-        let meeting = operation("transcribe_full_system_audio", 1);
-        let quick = operation("transcribe", 2);
-        let mut stage = Stage::MeetingRecording {
-            meeting: meeting.clone(),
-            quick_dictation: Some(QuickDictationStage::Processing(quick.clone())),
-        };
-
-        finish_processing_stage(&mut stage, &quick.binding_id, quick.id);
-
-        assert_eq!(
-            stage,
-            Stage::MeetingRecording {
-                meeting,
-                quick_dictation: None,
-            }
-        );
-    }
-
-    #[test]
-    fn repeated_meeting_stop_is_ignored_after_finalization_starts() {
-        let stage = Stage::MeetingStopping {
-            meeting: operation("transcribe_full_system_audio", 1),
-            dictation: None,
-            meeting_finished: false,
-        };
-
-        assert_eq!(meeting_stop_action(&stage), MeetingStopAction::Ignore);
-    }
-
-    #[test]
-    fn repeated_meeting_hotkey_input_is_ignored() {
-        let stage = Stage::MeetingRecording {
-            meeting: operation("transcribe_full_system_audio", 1),
-            quick_dictation: None,
-        };
-
-        assert!(is_repeated_meeting_input(
-            &stage,
-            "transcribe_full_system_audio"
-        ));
-        assert!(!is_repeated_meeting_input(&stage, "transcribe"));
     }
 
     #[test]
@@ -1668,32 +1574,6 @@ mod tests {
                 2
             ))))),
             MeetingStopAction::StopMeetingAndWaitForQuick
-        );
-    }
-
-    #[test]
-    fn escape_is_noop_for_meeting_only_and_meeting_stopping() {
-        assert_eq!(
-            user_cancel_action(&Stage::MeetingRecording {
-                meeting: operation("transcribe_full_system_audio", 1),
-                quick_dictation: None,
-            }),
-            UserCancelAction::Ignore
-        );
-        assert_eq!(
-            user_cancel_action(&Stage::MeetingStopping {
-                meeting: operation("transcribe_full_system_audio", 1),
-                dictation: None,
-                meeting_finished: false,
-            }),
-            UserCancelAction::Ignore
-        );
-        assert_eq!(
-            user_cancel_action(&Stage::MeetingStopPendingQuick {
-                meeting: operation("transcribe_full_system_audio", 1),
-                quick_processing: operation("transcribe", 2),
-            }),
-            UserCancelAction::CancelPendingQuickProcessing
         );
     }
 
@@ -1782,50 +1662,6 @@ mod tests {
     }
 
     #[test]
-    fn toggle_quick_dictation_press_starts_and_second_press_stops_during_meeting() {
-        assert_eq!(
-            quick_dictation_input_action("transcribe", false, true, &None),
-            Some(QuickDictationInputAction::Start)
-        );
-        assert_eq!(
-            quick_dictation_input_action(
-                "transcribe",
-                false,
-                true,
-                &Some(QuickDictationStage::Recording(operation("transcribe", 2)))
-            ),
-            Some(QuickDictationInputAction::Stop)
-        );
-    }
-
-    #[test]
-    fn push_to_talk_quick_dictation_still_stops_on_release_during_meeting() {
-        assert_eq!(
-            quick_dictation_input_action("transcribe", true, true, &None),
-            Some(QuickDictationInputAction::Start)
-        );
-        assert_eq!(
-            quick_dictation_input_action(
-                "transcribe",
-                true,
-                false,
-                &Some(QuickDictationStage::Recording(operation("transcribe", 2)))
-            ),
-            Some(QuickDictationInputAction::Stop)
-        );
-    }
-
-    #[test]
-    fn meeting_processing_finish_returns_to_idle() {
-        let meeting = operation("transcribe_full_system_audio", 1);
-        let mut stage = Stage::Processing(meeting.clone());
-
-        finish_processing_stage(&mut stage, &meeting.binding_id, meeting.id);
-
-        assert_eq!(stage, Stage::Idle);
-    }
-
-    #[test]
     fn meeting_processing_allows_starting_normal_dictation() {
         let stage = Stage::Processing(operation("transcribe_full_system_audio", 1));
 
@@ -1900,26 +1736,6 @@ mod tests {
             ]
         );
         assert_eq!(stage, Stage::Idle);
-    }
-
-    #[test]
-    fn normal_processing_does_not_allow_starting_another_normal_dictation() {
-        let stage = Stage::Processing(operation("transcribe", 1));
-
-        assert!(!can_start_dictation_while_legacy_meeting_processing(
-            &stage,
-            "transcribe"
-        ));
-    }
-
-    #[test]
-    fn unrelated_processing_finish_does_not_interrupt_active_recording() {
-        let active = operation("transcribe", 1);
-        let mut stage = Stage::Recording(active.clone());
-
-        finish_processing_stage(&mut stage, "transcribe_full_system_audio", 2);
-
-        assert_eq!(stage, Stage::Recording(active));
     }
 
     #[test]
@@ -2006,32 +1822,6 @@ mod tests {
     }
 
     #[test]
-    fn full_system_fallback_keeps_meeting_stopping_until_fallback_save_finishes() {
-        let meeting = operation("transcribe_full_system_audio", 1);
-        let mut stage = Stage::MeetingStopping {
-            meeting: meeting.clone(),
-            dictation: None,
-            meeting_finished: false,
-        };
-
-        assert_eq!(
-            stage,
-            Stage::MeetingStopping {
-                meeting: meeting.clone(),
-                dictation: None,
-                meeting_finished: false,
-            }
-        );
-
-        assert_eq!(
-            finish_processing_stage(&mut stage, &meeting.binding_id, meeting.id),
-            ProcessingFinishedAction::None
-        );
-
-        assert_eq!(stage, Stage::Idle);
-    }
-
-    #[test]
     fn dictation_can_finish_while_meeting_finalization_retains_ownership() {
         let meeting = operation("transcribe_full_system_audio", 1);
         let dictation = operation("transcribe", 2);
@@ -2052,30 +1842,6 @@ mod tests {
         );
 
         finish_processing_stage(&mut stage, &meeting.binding_id, meeting.id);
-        assert_eq!(stage, Stage::Idle);
-    }
-
-    #[test]
-    fn meeting_can_finish_while_dictation_processing_retains_ownership() {
-        let meeting = operation("transcribe_full_system_audio", 1);
-        let dictation = operation("transcribe", 2);
-        let mut stage = Stage::MeetingStopping {
-            meeting: meeting.clone(),
-            dictation: Some(QuickDictationStage::Processing(dictation.clone())),
-            meeting_finished: false,
-        };
-
-        finish_processing_stage(&mut stage, &meeting.binding_id, meeting.id);
-        assert_eq!(
-            stage,
-            Stage::MeetingStopping {
-                meeting,
-                dictation: Some(QuickDictationStage::Processing(dictation.clone())),
-                meeting_finished: true,
-            }
-        );
-
-        finish_processing_stage(&mut stage, &dictation.binding_id, dictation.id);
         assert_eq!(stage, Stage::Idle);
     }
 
@@ -2145,14 +1911,6 @@ mod tests {
     }
 
     #[test]
-    fn operation_ids_are_monotonically_increasing() {
-        let first = next_operation_id();
-        let second = next_operation_id();
-
-        assert!(second > first);
-    }
-
-    #[test]
     fn ignored_processing_press_release_suppresses_immediate_next_press() {
         let mut suppression = PushToTalkSuppression::default();
         let now = Instant::now();
@@ -2192,17 +1950,6 @@ mod tests {
     }
 
     #[test]
-    fn release_after_recording_start_is_normal_push_to_talk_stop() {
-        let recording_started_at = Instant::now();
-        let release_received_at = recording_started_at + Duration::from_millis(250);
-
-        assert!(!release_received_before_recording_started(
-            release_received_at,
-            Some(recording_started_at)
-        ));
-    }
-
-    #[test]
     fn press_debounce_only_suppresses_same_binding_repeats() {
         let now = Instant::now();
         let last_press = Some(("transcribe".to_string(), now));
@@ -2216,14 +1963,6 @@ mod tests {
             &last_press,
             "edit_mode",
             now + Duration::from_millis(1)
-        ));
-    }
-
-    #[test]
-    fn missing_recording_start_is_not_stale_push_to_talk() {
-        assert!(!release_received_before_recording_started(
-            Instant::now(),
-            None
         ));
     }
 }

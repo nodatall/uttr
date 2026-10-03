@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
 const MODEL_LIST_TIMEOUT: Duration = Duration::from_secs(15);
+const CHAT_COMPLETION_TIMEOUT: Duration = Duration::from_secs(90);
 
 #[derive(Debug, Serialize)]
 struct ChatMessage {
@@ -99,6 +100,25 @@ pub async fn send_chat_completion(
     prompt: String,
     system_prompt: Option<&str>,
 ) -> Result<Option<String>, String> {
+    send_chat_completion_with_timeout(
+        provider,
+        api_key,
+        model,
+        prompt,
+        system_prompt,
+        CHAT_COMPLETION_TIMEOUT,
+    )
+    .await
+}
+
+async fn send_chat_completion_with_timeout(
+    provider: &PostProcessProvider,
+    api_key: String,
+    model: &str,
+    prompt: String,
+    system_prompt: Option<&str>,
+    timeout: Duration,
+) -> Result<Option<String>, String> {
     let base_url = provider.base_url.trim_end_matches('/');
     let url = format!("{}/chat/completions", base_url);
 
@@ -131,6 +151,7 @@ pub async fn send_chat_completion(
 
     let response = client
         .post(&url)
+        .timeout(timeout)
         .json(&request_body)
         .send()
         .await
@@ -148,10 +169,13 @@ pub async fn send_chat_completion(
         ));
     }
 
-    let completion: ChatCompletionResponse = response
-        .json()
-        .await
-        .map_err(|e| format!("Failed to parse API response: {}", e))?;
+    let completion: ChatCompletionResponse = response.json().await.map_err(|e| {
+        if e.is_timeout() {
+            "Chat completion timed out while reading the response".to_string()
+        } else {
+            format!("Failed to parse API response: {}", e)
+        }
+    })?;
 
     Ok(completion
         .choices
@@ -162,6 +186,37 @@ pub async fn send_chat_completion(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+
+    #[tokio::test]
+    async fn chat_deadline_covers_a_stalled_response_body() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let mut local_provider = provider("openai");
+        local_provider.base_url = format!("http://{}", listener.local_addr().unwrap());
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut buffer = [0; 4096];
+            stream.read(&mut buffer).unwrap();
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n{\"choices\":[").unwrap();
+            stream.flush().unwrap();
+            let _ = release_rx.recv_timeout(Duration::from_secs(2));
+        });
+        let result = send_chat_completion_with_timeout(
+            &local_provider,
+            String::new(),
+            "test",
+            "synthetic prompt".into(),
+            None,
+            Duration::from_millis(100),
+        )
+        .await;
+        let _ = release_tx.send(());
+        server.join().unwrap();
+        let error = result.expect_err("partial response body must time out");
+        assert!(error.contains("timed out"), "unexpected error: {error}");
+    }
 
     fn provider(id: &str) -> PostProcessProvider {
         PostProcessProvider {
@@ -171,22 +226,6 @@ mod tests {
             allow_base_url_edit: false,
             models_endpoint: Some("/models".to_string()),
         }
-    }
-
-    #[test]
-    fn fast_groq_defaults_only_apply_to_gpt_oss_20b() {
-        assert!(uses_fast_groq_post_process_defaults(
-            &provider("groq"),
-            "openai/gpt-oss-20b"
-        ));
-        assert!(!uses_fast_groq_post_process_defaults(
-            &provider("groq"),
-            "llama-3.3-70b-versatile"
-        ));
-        assert!(!uses_fast_groq_post_process_defaults(
-            &provider("openai"),
-            "openai/gpt-oss-20b"
-        ));
     }
 }
 

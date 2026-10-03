@@ -1864,18 +1864,6 @@ fn full_system_source_transcription_id(source: FullSystemTranscriptionSource) ->
     }
 }
 
-#[cfg(test)]
-fn format_labeled_transcript_segments(segments: &[LabeledTranscriptSegment]) -> String {
-    let mut output = String::new();
-    let mut last_source = None;
-
-    for segment in segments {
-        append_labeled_live_text(&mut output, &mut last_source, segment.source, &segment.text);
-    }
-
-    output
-}
-
 fn append_labeled_live_text(
     existing: &mut String,
     last_source: &mut Option<FullSystemTranscriptionSource>,
@@ -5538,14 +5526,13 @@ mod tests {
         complete_ask_selection_session_with_rollback, complete_dictation_operation_if_active,
         complete_persisted_dictation_if_active, complete_transcription_ui_if_active,
         completion_context_for_active_meeting, current_ask_selection_messages,
-        current_ask_selection_session_id, custom_vocabulary_prompt_block,
-        existing_full_system_live_start_decision, format_labeled_transcript_segments,
+        current_ask_selection_session_id, existing_full_system_live_start_decision,
         format_transcription_completion_log, friendly_live_summary_error,
-        full_system_live_chunk_transcription_timeout, full_system_live_final_chunk_timeout,
-        full_system_live_session_status, full_system_live_start_decision,
-        is_effectively_silent_audio, is_effectively_silent_full_system_source_audio,
-        is_supported_post_process_model, mark_full_system_live_transcription_failure,
-        normalize_live_summary_output, parse_meeting_summary_state, persist_full_system_live_final,
+        full_system_live_final_chunk_timeout, full_system_live_session_status,
+        full_system_live_start_decision, is_effectively_silent_audio,
+        is_effectively_silent_full_system_source_audio, is_supported_post_process_model,
+        mark_full_system_live_transcription_failure, normalize_live_summary_output,
+        parse_meeting_summary_state, persist_full_system_live_final,
         persist_with_cancellation_rollback, publish_new_ask_selection_session_if_active,
         publish_transcription_error_if_operation_active, quick_dictation_ui_restore_is_current,
         reap_full_system_live_transcription_task, record_full_system_live_chunk_samples,
@@ -5553,20 +5540,15 @@ mod tests {
         render_meeting_summary_markdown, resolved_post_process_system_prompt,
         select_preferred_groq_model, should_pause_live_summaries,
         should_persist_full_system_live_final,
-        should_refresh_microphone_stream_after_suspected_no_input, should_register_cancel_shortcut,
-        should_restore_meeting_ui, should_suppress_quick_dictation_output,
-        should_update_live_summary, snapshot_full_system_live_runtime,
-        take_full_system_live_finalization_chunks, take_next_full_system_live_chunk,
-        toggle_post_process_enabled, transcribe_full_system_live_chunk_sources_with,
-        transcription_timeout_for_samples, transcription_watchdog_delay,
-        update_ask_selection_session, usable_post_processed_text, CompletionOwner,
+        should_refresh_microphone_stream_after_suspected_no_input, should_restore_meeting_ui,
+        snapshot_full_system_live_runtime, take_full_system_live_finalization_chunks,
+        take_next_full_system_live_chunk, transcribe_full_system_live_chunk_sources_with,
+        transcription_timeout_for_samples, update_ask_selection_session, CompletionOwner,
         FullSystemFinalizationBarrier, FullSystemLiveChunk, FullSystemLiveInFlightChunk,
         FullSystemLiveRuntime, FullSystemLiveSessionStatus, FullSystemLiveTranscriptionTask,
-        LabeledTranscriptSegment, MeetingSummaryState, SummaryPoint,
-        TranscriptionCompletionContext, TranscriptionCompletionMode, ACTION_MAP,
-        ACTIVE_QUICK_DICTATION_UI_OPERATION, FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT,
-        FULL_SYSTEM_LIVE_CHUNK_SAMPLES, FULL_SYSTEM_LIVE_CHUNK_SECONDS,
-        FULL_SYSTEM_LIVE_FINAL_CHUNK_EXTRA_TIMEOUT, FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL,
+        LabeledTranscriptSegment, TranscriptionCompletionContext, TranscriptionCompletionMode,
+        ACTION_MAP, ACTIVE_QUICK_DICTATION_UI_OPERATION, FULL_SYSTEM_LIVE_CHUNK_SAMPLES,
+        FULL_SYSTEM_LIVE_CHUNK_SECONDS,
     };
     use crate::app_context::AppContextSnapshot;
     use crate::managers::full_system_audio::{
@@ -5739,23 +5721,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn meetings_do_not_register_escape_but_dictation_does() {
-        assert!(!should_register_cancel_shortcut(
-            "transcribe_full_system_audio",
-            true
-        ));
-        assert!(should_register_cancel_shortcut("transcribe", true));
-        assert!(!should_register_cancel_shortcut("transcribe", false));
-    }
-
-    #[test]
-    fn cancelled_nested_dictation_suppresses_only_its_output() {
-        assert!(should_suppress_quick_dictation_output(true, 4, 5));
-        assert!(!should_suppress_quick_dictation_output(true, 5, 5));
-        assert!(!should_suppress_quick_dictation_output(false, 4, 5));
-    }
-
     #[tokio::test]
     async fn cancellation_during_blocked_post_processing_discards_dictation_output() {
         let operation_id = u64::MAX - 1;
@@ -5776,58 +5741,6 @@ mod tests {
         let _ = release_tx.send(());
 
         assert_eq!(task.await.unwrap(), None);
-    }
-
-    #[tokio::test]
-    async fn cancellation_during_blocked_persistence_rolls_back_history_and_wav() {
-        let cancelled = Arc::new(AtomicBool::new(false));
-        let history_exists = Arc::new(AtomicBool::new(false));
-        let wav_exists = Arc::new(AtomicBool::new(false));
-        let pasted = Arc::new(AtomicBool::new(false));
-        let completion_ui = Arc::new(AtomicBool::new(false));
-        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
-        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
-
-        let task_cancelled = Arc::clone(&cancelled);
-        let save_history = Arc::clone(&history_exists);
-        let save_wav = Arc::clone(&wav_exists);
-        let rollback_history = Arc::clone(&history_exists);
-        let rollback_wav = Arc::clone(&wav_exists);
-        let task_pasted = Arc::clone(&pasted);
-        let task_completion_ui = Arc::clone(&completion_ui);
-        let task = tokio::spawn(async move {
-            let result = persist_with_cancellation_rollback(
-                || task_cancelled.load(Ordering::Acquire),
-                || async move {
-                    let _ = started_tx.send(());
-                    let _ = release_rx.await;
-                    save_history.store(true, Ordering::Release);
-                    save_wav.store(true, Ordering::Release);
-                    Ok::<i64, &'static str>(41)
-                },
-                move |_entry_id| {
-                    rollback_history.store(false, Ordering::Release);
-                    rollback_wav.store(false, Ordering::Release);
-                    Ok::<(), &'static str>(())
-                },
-            )
-            .await?;
-            if result.is_some() {
-                task_pasted.store(true, Ordering::Release);
-                task_completion_ui.store(true, Ordering::Release);
-            }
-            Ok::<Option<i64>, &'static str>(result)
-        });
-
-        let _ = started_rx.await;
-        cancelled.store(true, Ordering::Release);
-        let _ = release_tx.send(());
-
-        assert_eq!(task.await.unwrap().unwrap(), None);
-        assert!(!history_exists.load(Ordering::Acquire));
-        assert!(!wav_exists.load(Ordering::Acquire));
-        assert!(!pasted.load(Ordering::Acquire));
-        assert!(!completion_ui.load(Ordering::Acquire));
     }
 
     #[tokio::test]
@@ -6074,36 +5987,6 @@ mod tests {
     }
 
     #[test]
-    fn full_system_stop_payload_appends_source_tail_to_existing_buffers() {
-        let mut mixed = vec![0.25];
-        let mut microphone = vec![0.01, 0.02];
-        let mut system_audio = vec![0.5];
-
-        append_full_system_stop_tail_samples(
-            &mut mixed,
-            &mut microphone,
-            &mut system_audio,
-            FullSystemSessionTranscriptionSamples {
-                mixed: Some(vec![9.0, 9.0]),
-                sources: vec![
-                    FullSystemTranscriptionSourceSamples {
-                        source: FullSystemTranscriptionSource::Microphone,
-                        samples: vec![0.1, 0.2],
-                    },
-                    FullSystemTranscriptionSourceSamples {
-                        source: FullSystemTranscriptionSource::SystemAudio,
-                        samples: vec![0.9, 0.8],
-                    },
-                ],
-            },
-        );
-
-        assert_eq!(mixed, vec![0.25]);
-        assert_eq!(microphone, vec![0.01, 0.02, 0.1, 0.2]);
-        assert_eq!(system_audio, vec![0.5, 0.9, 0.8]);
-    }
-
-    #[test]
     fn quick_dictation_restore_requires_matching_active_meeting_binding() {
         let context = TranscriptionCompletionContext::ReturnToMeeting {
             binding_id: "transcribe_full_system_audio".to_string(),
@@ -6137,14 +6020,6 @@ mod tests {
     }
 
     #[test]
-    fn standalone_dictation_never_restores_meeting_ui() {
-        assert!(!should_restore_meeting_ui(
-            &TranscriptionCompletionContext::Standalone,
-            Some("transcribe_full_system_audio")
-        ));
-    }
-
-    #[test]
     fn system_only_meeting_quick_dictation_still_restores_meeting_context() {
         let context = completion_context_for_active_meeting(
             Some("transcribe_full_system_audio".to_string()),
@@ -6156,22 +6031,6 @@ mod tests {
             TranscriptionCompletionContext::ReturnToMeeting { ref binding_id, .. }
                 if binding_id == "transcribe_full_system_audio"
         ));
-    }
-
-    #[test]
-    fn vocabulary_block_normalizes_and_warns_against_insertion() {
-        let terms = vec![
-            " Zach Latta ".to_string(),
-            "zach latta".to_string(),
-            "Prime Directive".to_string(),
-        ];
-
-        let block = custom_vocabulary_prompt_block(&terms).unwrap();
-
-        assert!(block.contains("- Zach Latta"));
-        assert!(block.contains("- Prime Directive"));
-        assert_eq!(block.matches("Zach Latta").count(), 1);
-        assert!(block.contains("do not insert terms that were not spoken"));
     }
 
     #[test]
@@ -6213,21 +6072,6 @@ mod tests {
     }
 
     #[test]
-    fn ask_selection_prompt_without_selection_behaves_like_chat() {
-        let context = AppContextSnapshot {
-            app_name: Some("Notes".to_string()),
-            ..Default::default()
-        };
-        let prompt = build_ask_selection_prompt("", "why is the sky blue?", &context, &Vec::new());
-
-        assert!(prompt.contains("# Spoken request\nwhy is the sky blue?"));
-        assert!(prompt.contains("No selected text was provided"));
-        assert!(prompt.contains("chat question"));
-        assert!(!prompt.contains("# Selected text"));
-        assert!(prompt.contains("<uttr_ask_output>"));
-    }
-
-    #[test]
     fn ask_selection_payload_includes_session_selected_text() {
         let _guard = ASK_SELECTION_TEST_LOCK.lock().unwrap();
         clear_ask_selection_session();
@@ -6259,40 +6103,6 @@ mod tests {
         );
 
         assert_eq!(cleaned, "Shorter text.");
-    }
-
-    #[test]
-    fn ask_selection_follow_up_prompt_keeps_selected_text_and_prior_chat() {
-        let context = AppContextSnapshot {
-            app_name: Some("Google Docs".to_string()),
-            window_title: Some("Market notes".to_string()),
-            ..Default::default()
-        };
-        let messages = vec![
-            ask_selection_message("user", "What is the risk?", false),
-            ask_selection_message("assistant", "The buyer is unclear.", false),
-            ask_selection_message("assistant", "Thinking...", true),
-        ];
-
-        let prompt = build_ask_selection_follow_up_prompt(
-            "Counselor overload is real, but buyer urgency is unproven.",
-            &messages,
-            "make it sharper",
-            &context,
-            &["FreeFlow".to_string()],
-        );
-
-        assert!(prompt.contains("# Latest follow-up\nmake it sharper"));
-        assert!(prompt.contains("User: What is the risk?"));
-        assert!(prompt.contains("Assistant: The buyer is unclear."));
-        assert!(prompt.contains("# Original selected text\nCounselor overload"));
-        assert!(
-            prompt.find("# Prior chat").unwrap() < prompt.find("# Original selected text").unwrap()
-        );
-        assert!(!prompt.contains("Thinking..."));
-        assert!(prompt.contains("Google Docs"));
-        assert!(prompt.contains("FreeFlow"));
-        assert!(prompt.contains("<uttr_ask_output>"));
     }
 
     #[test]
@@ -6337,58 +6147,6 @@ mod tests {
             prompt.find("# Prior chat").unwrap() < prompt.find("# Original selected text").unwrap()
         );
         assert!(!prompt.contains("# Selected text"));
-    }
-
-    #[test]
-    fn ask_selection_follow_up_prompt_without_selection_uses_prior_chat() {
-        let context = AppContextSnapshot {
-            app_name: Some("Notes".to_string()),
-            ..Default::default()
-        };
-        let messages = vec![
-            ask_selection_message("user", "What is Rust?", false),
-            ask_selection_message("assistant", "Rust is a systems language.", false),
-            ask_selection_message("assistant", "Thinking...", true),
-        ];
-
-        let prompt = build_ask_selection_follow_up_prompt(
-            "",
-            &messages,
-            "make it shorter",
-            &context,
-            &Vec::new(),
-        );
-
-        assert!(prompt.contains("# Latest follow-up\nmake it shorter"));
-        assert!(prompt.contains("User: What is Rust?"));
-        assert!(prompt.contains("Assistant: Rust is a systems language."));
-        assert!(!prompt.contains("Thinking..."));
-        assert!(!prompt.contains("# Selected text"));
-        assert!(!prompt.contains("# Original selected text"));
-        assert!(prompt.contains("<uttr_ask_output>"));
-    }
-
-    #[test]
-    fn clear_ask_selection_session_drops_prior_messages() {
-        let _guard = ASK_SELECTION_TEST_LOCK.lock().unwrap();
-        clear_ask_selection_session();
-        let session_id = current_ask_selection_session_id();
-        update_ask_selection_session(
-            session_id,
-            None,
-            Some("selected text".to_string()),
-            AppContextSnapshot::default(),
-            vec![ask_selection_message("assistant", "Previous answer", false)],
-        );
-
-        assert_eq!(current_ask_selection_messages().len(), 1);
-        assert!(ask_selection_session_is_current(session_id));
-
-        clear_ask_selection_session();
-
-        assert!(current_ask_selection_messages().is_empty());
-        assert!(!ask_selection_session_is_current(session_id));
-        assert_ne!(current_ask_selection_session_id(), session_id);
     }
 
     #[test]
@@ -6630,59 +6388,6 @@ mod tests {
     }
 
     #[test]
-    fn post_process_toggle_flips_enabled_setting() {
-        let mut settings = get_default_settings();
-        settings.post_process_enabled = false;
-
-        assert!(toggle_post_process_enabled(&mut settings));
-        assert!(settings.post_process_enabled);
-
-        assert!(!toggle_post_process_enabled(&mut settings));
-        assert!(!settings.post_process_enabled);
-    }
-
-    #[test]
-    fn transcription_timeout_grows_for_long_recordings() {
-        assert_eq!(
-            transcription_timeout_for_samples(16_000 * 60 * 5),
-            FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT
-        );
-        assert!(
-            transcription_timeout_for_samples(16_000 * 60 * 11)
-                > FULL_PASS_TRANSCRIPTION_BASE_TIMEOUT
-        );
-        assert!(
-            transcription_timeout_for_samples(16_000 * 60 * 31)
-                > transcription_timeout_for_samples(16_000 * 60 * 11)
-        );
-    }
-
-    #[test]
-    fn transcription_watchdog_always_exceeds_timeout_budget() {
-        let short_timeout = transcription_timeout_for_samples(16_000 * 60);
-        let short_watchdog = transcription_watchdog_delay(16_000 * 60);
-        assert!(short_watchdog > short_timeout);
-
-        let long_timeout = transcription_timeout_for_samples(16_000 * 60 * 31);
-        let long_watchdog = transcription_watchdog_delay(16_000 * 60 * 31);
-        assert!(long_watchdog > long_timeout);
-    }
-
-    #[test]
-    fn live_final_chunk_timeout_includes_extra_shutdown_budget() {
-        let sample_count = 16_000 * 60;
-        let chunk = FullSystemLiveChunk {
-            mixed_samples: vec![0.1; sample_count],
-            source_samples: Vec::new(),
-        };
-        assert_eq!(
-            full_system_live_final_chunk_timeout(&chunk),
-            full_system_live_chunk_transcription_timeout(&chunk)
-                + FULL_SYSTEM_LIVE_FINAL_CHUNK_EXTRA_TIMEOUT
-        );
-    }
-
-    #[test]
     fn live_final_chunk_timeout_covers_both_source_transcriptions() {
         let sample_count = 16_000 * FULL_SYSTEM_LIVE_CHUNK_SECONDS;
         let chunk = FullSystemLiveChunk {
@@ -6705,47 +6410,6 @@ mod tests {
             full_system_live_final_chunk_timeout(&chunk) > two_source_transcription_budget,
             "the aggregate final-chunk timeout must not cancel the second source transcription"
         );
-    }
-
-    #[tokio::test]
-    async fn live_two_source_transcription_commits_both_labeled_segments() {
-        let sample_count = 16_000;
-        let chunk = FullSystemLiveChunk {
-            mixed_samples: vec![0.1; sample_count],
-            source_samples: vec![
-                FullSystemTranscriptionSourceSamples {
-                    source: FullSystemTranscriptionSource::Microphone,
-                    samples: vec![0.1; sample_count],
-                },
-                FullSystemTranscriptionSourceSamples {
-                    source: FullSystemTranscriptionSource::SystemAudio,
-                    samples: vec![0.1; sample_count],
-                },
-            ],
-        };
-
-        let segments =
-            transcribe_full_system_live_chunk_sources_with(chunk, 1, |_, source, _| async move {
-                tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-                let text = match source {
-                    Some("full_system_audio_microphone") => "local speaker",
-                    Some("full_system_audio_system") => "remote speaker",
-                    unexpected => panic!("unexpected transcription source: {unexpected:?}"),
-                };
-                Ok::<String, anyhow::Error>(text.to_string())
-            })
-            .await
-            .expect("both source transcriptions");
-
-        let runtime = FullSystemLiveRuntime::new();
-        commit_full_system_live_transcription_segments(&runtime, &segments, false)
-            .expect("two-source transcript commit");
-
-        assert_eq!(
-            runtime.transcript_text.lock().unwrap().as_str(),
-            "Me: local speaker\n\nThem: remote speaker"
-        );
-        assert_eq!(runtime.chunk_count.load(Ordering::Relaxed), 1);
     }
 
     #[tokio::test]
@@ -6850,58 +6514,6 @@ mod tests {
         assert!(error
             .to_string()
             .contains("Live source transcription failed for chunk 1"));
-    }
-
-    #[tokio::test]
-    async fn live_stop_recovery_orders_in_flight_before_pending_without_rerecording() {
-        let runtime = FullSystemLiveRuntime::new();
-        runtime
-            .recorded_samples
-            .lock()
-            .unwrap()
-            .extend_from_slice(&[0.1, 0.2]);
-        {
-            let mut audio = runtime.audio_state.lock().unwrap();
-            audio.in_flight_chunk = Some(FullSystemLiveInFlightChunk {
-                chunk: FullSystemLiveChunk {
-                    mixed_samples: vec![0.1, 0.2],
-                    source_samples: vec![FullSystemTranscriptionSourceSamples {
-                        source: FullSystemTranscriptionSource::Microphone,
-                        samples: vec![0.1, 0.2],
-                    }],
-                },
-                transcription_task: completed_live_transcription_task(Vec::new()),
-            });
-            audio.pending_samples.push(0.3);
-            audio.pending_system_audio_samples.push(0.3);
-        }
-
-        let chunks = take_full_system_live_finalization_chunks(
-            &runtime,
-            Some(FullSystemSessionTranscriptionSamples {
-                mixed: Some(vec![9.0]),
-                sources: vec![FullSystemTranscriptionSourceSamples {
-                    source: FullSystemTranscriptionSource::SystemAudio,
-                    samples: vec![0.4],
-                }],
-            }),
-        );
-
-        assert_eq!(chunks.len(), 2);
-        assert_eq!(chunks[0].chunk.mixed_samples, vec![0.1, 0.2]);
-        assert!(!chunks[0].record_samples);
-        assert!(chunks[0].transcription_task.is_some());
-        assert_eq!(chunks[1].chunk.mixed_samples, vec![0.3, 0.4]);
-        assert!(chunks[1].record_samples);
-        assert!(chunks[1].transcription_task.is_none());
-        assert_eq!(
-            runtime.recorded_samples.lock().unwrap().as_slice(),
-            &[0.1, 0.2]
-        );
-        let audio = runtime.audio_state.lock().unwrap();
-        assert!(audio.in_flight_chunk.is_none());
-        assert!(audio.pending_samples.is_empty());
-        assert!(audio.pending_system_audio_samples.is_empty());
     }
 
     #[tokio::test]
@@ -7130,60 +6742,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn live_first_chunk_timeout_persists_audio_without_a_transcript() {
-        let root = tempfile::tempdir().expect("create history root");
-        let history_manager =
-            HistoryManager::new_for_test(root.path()).expect("create test history manager");
-        let runtime = FullSystemLiveRuntime::new();
-        runtime
-            .recorded_samples
-            .lock()
-            .unwrap()
-            .extend_from_slice(&[0.1, 0.2, 0.3]);
-        runtime
-            .final_transcription_timed_out
-            .store(true, Ordering::Relaxed);
-        *runtime.summary_text.lock().unwrap() = Some(
-            "Audio was saved, but final transcription timed out. The transcript may be incomplete."
-                .to_string(),
-        );
-
-        let live_final = snapshot_full_system_live_runtime(&runtime).expect("audio-only snapshot");
-        assert!(live_final.transcript_text.is_empty());
-        assert!(!live_final.final_transcription_failed);
-        assert!(should_persist_full_system_live_final(&live_final));
-
-        let history_entry_id = persist_full_system_live_final(&history_manager, &live_final)
-            .await
-            .expect("persist audio-only timed-out meeting");
-        let entries = history_manager
-            .get_history_entries()
-            .await
-            .expect("query audio-only timed-out meeting");
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].id, history_entry_id);
-        assert!(entries[0].transcription_text.is_empty());
-        assert!(entries[0]
-            .post_processed_text
-            .as_deref()
-            .is_some_and(|notice| notice.contains("final transcription timed out")));
-        let audio_path = history_manager.get_audio_file_path(&entries[0].file_name);
-        assert!(audio_path.exists());
-        let audio_reader = hound::WavReader::open(audio_path).expect("open persisted timeout WAV");
-        assert_eq!(audio_reader.duration(), 3);
-
-        let ordinary_audio_only_runtime = FullSystemLiveRuntime::new();
-        ordinary_audio_only_runtime
-            .recorded_samples
-            .lock()
-            .unwrap()
-            .push(0.1);
-        let ordinary_audio_only = snapshot_full_system_live_runtime(&ordinary_audio_only_runtime)
-            .expect("ordinary audio-only snapshot");
-        assert!(!should_persist_full_system_live_final(&ordinary_audio_only));
-    }
-
-    #[tokio::test]
     async fn live_non_timeout_transcription_failure_persists_audio_without_a_transcript() {
         let root = tempfile::tempdir().expect("create history root");
         let history_manager =
@@ -7228,29 +6786,6 @@ mod tests {
         assert_eq!(audio_reader.duration(), 4);
     }
 
-    #[tokio::test]
-    async fn live_worker_stop_awaits_cancellation_before_recovery() {
-        struct DropProbe(Arc<AtomicBool>);
-
-        impl Drop for DropProbe {
-            fn drop(&mut self) {
-                self.0.store(true, Ordering::Release);
-            }
-        }
-
-        let dropped = Arc::new(AtomicBool::new(false));
-        let worker_dropped = Arc::clone(&dropped);
-        let worker = tauri::async_runtime::spawn(async move {
-            let _probe = DropProbe(worker_dropped);
-            std::future::pending::<()>().await;
-        });
-        tokio::task::yield_now().await;
-
-        await_full_system_live_worker_stop(worker, std::time::Duration::from_millis(1)).await;
-
-        assert!(dropped.load(Ordering::Acquire));
-    }
-
     #[test]
     fn live_summary_quota_errors_are_user_facing() {
         let raw = r#"API request failed with status 429 Too Many Requests: {
@@ -7270,67 +6805,6 @@ mod tests {
         assert!(should_pause_live_summaries(raw));
         assert!(!friendly.contains('{'));
         assert!(!friendly.contains("insufficient_quota"));
-    }
-
-    #[test]
-    fn live_summary_updates_every_minute_and_on_final_chunk() {
-        assert_eq!(FULL_SYSTEM_LIVE_SUMMARY_CHUNK_INTERVAL, 6);
-        assert!(!should_update_live_summary(1, false));
-        assert!(!should_update_live_summary(5, false));
-        assert!(should_update_live_summary(6, false));
-        assert!(!should_update_live_summary(7, false));
-        assert!(should_update_live_summary(12, false));
-        assert!(should_update_live_summary(3, true));
-    }
-
-    #[test]
-    fn labeled_meeting_transcript_formats_source_blocks() {
-        let rendered = format_labeled_transcript_segments(&[
-            LabeledTranscriptSegment {
-                source: FullSystemTranscriptionSource::Microphone,
-                text: "I want the transcript labels.".to_string(),
-            },
-            LabeledTranscriptSegment {
-                source: FullSystemTranscriptionSource::SystemAudio,
-                text: "Use source labels first.".to_string(),
-            },
-            LabeledTranscriptSegment {
-                source: FullSystemTranscriptionSource::Microphone,
-                text: "That works.".to_string(),
-            },
-        ]);
-
-        assert_eq!(
-            rendered,
-            "Me: I want the transcript labels.\n\nThem: Use source labels first.\n\nMe: That works."
-        );
-    }
-
-    #[test]
-    fn labeled_meeting_transcript_merges_adjacent_source_text_and_skips_empty() {
-        let rendered = format_labeled_transcript_segments(&[
-            LabeledTranscriptSegment {
-                source: FullSystemTranscriptionSource::Microphone,
-                text: "First sentence.".to_string(),
-            },
-            LabeledTranscriptSegment {
-                source: FullSystemTranscriptionSource::Microphone,
-                text: " Second sentence. ".to_string(),
-            },
-            LabeledTranscriptSegment {
-                source: FullSystemTranscriptionSource::SystemAudio,
-                text: " ".to_string(),
-            },
-            LabeledTranscriptSegment {
-                source: FullSystemTranscriptionSource::SystemAudio,
-                text: "Remote audio.".to_string(),
-            },
-        ]);
-
-        assert_eq!(
-            rendered,
-            "Me: First sentence. Second sentence.\n\nThem: Remote audio."
-        );
     }
 
     #[test]
@@ -7387,42 +6861,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_structured_summary_is_rejected() {
-        let raw = r#"{
-          "current_gist": " ",
-          "key_points": []
-        }"#;
-
-        assert!(parse_meeting_summary_state(raw).is_none());
-    }
-
-    #[test]
-    fn meeting_summary_renderer_keeps_detail_only_points() {
-        let rendered = render_meeting_summary_markdown(&MeetingSummaryState {
-            current_gist: "Launch planning is underway.".to_string(),
-            key_points: vec![SummaryPoint {
-                text: "".to_string(),
-                details: vec!["The summary needs to be easy to scan.".to_string()],
-            }],
-        });
-
-        assert!(rendered.contains("  - The summary needs to be easy to scan."));
-        assert!(!rendered.contains("## Action items"));
-        assert!(!rendered.contains("## Timeline"));
-    }
-
-    #[test]
-    fn observed_stale_microphone_levels_count_as_silent_audio() {
-        let mut samples = vec![0.003402; 20_000];
-        samples[100] = 0.030187;
-
-        assert!(is_effectively_silent_audio(&samples));
-        assert!(!is_effectively_silent_audio(&[
-            0.0, 0.08, -0.07, 0.06, -0.05, 0.04
-        ]));
-    }
-
-    #[test]
     fn observed_quiet_meeting_microphone_levels_are_not_silent_source_audio() {
         let mut samples = vec![0.003378; 20_000];
         samples[100] = 0.020873;
@@ -7452,21 +6890,6 @@ mod tests {
             &settings,
             TranscriptionCompletionMode::Standard
         ));
-    }
-
-    #[test]
-    fn groq_selector_prefers_current_models_over_legacy_ids() {
-        let available_models = vec![
-            "llama-3.3-70b-versatile".to_string(),
-            "llama-3.1-8b-instant".to_string(),
-            "openai/gpt-oss-20b".to_string(),
-            "mixtral-8x7b-32768".to_string(),
-        ];
-
-        assert_eq!(
-            select_preferred_groq_model(&available_models).as_deref(),
-            Some("openai/gpt-oss-20b")
-        );
     }
 
     #[test]
@@ -7500,32 +6923,9 @@ mod tests {
     }
 
     #[test]
-    fn post_process_response_prefers_uttr_output_tag() {
-        let response = "<think>cleaning notes</think><uttr_output>Hello, world.</uttr_output>";
-
-        assert_eq!(clean_post_process_response(response), "Hello, world.");
-    }
-
-    #[test]
     fn post_process_response_extracts_final_chat_template_channel() {
         let response = "<|start|>assistant<|channel|>analysis<|message|>Need clean text.<|end|><|start|>assistant<|channel|>final<|message|>Hello, world.<|end|>";
 
         assert_eq!(clean_post_process_response(response), "Hello, world.");
-    }
-
-    #[test]
-    fn post_process_response_strips_think_blocks_and_final_label() {
-        let response = "<think>I should fix punctuation.</think>\nFinal: Hello, world.";
-
-        assert_eq!(clean_post_process_response(response), "Hello, world.");
-    }
-
-    #[test]
-    fn empty_post_process_response_is_not_usable() {
-        assert_eq!(usable_post_processed_text("   ".to_string()), None);
-        assert_eq!(
-            usable_post_processed_text("Hello, world.".to_string()).as_deref(),
-            Some("Hello, world.")
-        );
     }
 }

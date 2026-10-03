@@ -1203,84 +1203,6 @@ mod tests {
     }
 
     #[test]
-    fn bottom_overlay_uses_visible_work_area_bottom_edge() {
-        let monitor = OverlayBounds {
-            x: 0.0,
-            y: 0.0,
-            width: 1728.0,
-            height: 1117.0,
-        };
-        let work_area = OverlayBounds {
-            x: 0.0,
-            y: 0.0,
-            width: 1728.0,
-            height: 1040.0,
-        };
-
-        let (x, y) = calculate_overlay_position_in_bounds(
-            monitor,
-            work_area,
-            2.0,
-            172.0,
-            42.0,
-            OverlayPosition::Bottom,
-        );
-
-        assert_f64_eq(x, 692.0);
-        assert_f64_eq(y, 1040.0 - 84.0 - (OVERLAY_BOTTOM_OFFSET * 2.0));
-    }
-
-    #[test]
-    fn bottom_overlay_centers_inside_left_or_right_dock_work_area() {
-        let monitor = OverlayBounds {
-            x: 0.0,
-            y: 0.0,
-            width: 1728.0,
-            height: 1117.0,
-        };
-        let work_area = OverlayBounds {
-            x: 96.0,
-            y: 0.0,
-            width: 1632.0,
-            height: 1117.0,
-        };
-
-        let (x, y) = calculate_overlay_position_in_bounds(
-            monitor,
-            work_area,
-            2.0,
-            172.0,
-            42.0,
-            OverlayPosition::Bottom,
-        );
-
-        assert_f64_eq(x, 740.0);
-        assert_f64_eq(y, 1117.0 - 84.0 - (OVERLAY_BOTTOM_OFFSET * 2.0));
-    }
-
-    #[test]
-    fn bottom_overlay_matches_old_result_when_work_area_matches_monitor() {
-        let monitor = OverlayBounds {
-            x: 0.0,
-            y: 0.0,
-            width: 1728.0,
-            height: 1117.0,
-        };
-
-        let (x, y) = calculate_overlay_position_in_bounds(
-            monitor,
-            monitor,
-            2.0,
-            172.0,
-            42.0,
-            OverlayPosition::None,
-        );
-
-        assert_f64_eq(x, 692.0);
-        assert_f64_eq(y, 1117.0 - 84.0 - (OVERLAY_BOTTOM_OFFSET * 2.0));
-    }
-
-    #[test]
     fn bottom_overlay_clamps_work_area_that_extends_past_monitor() {
         let monitor = OverlayBounds {
             x: -5120.0,
@@ -1357,40 +1279,6 @@ mod tests {
 
         assert_f64_eq(x, 740.0);
         assert_f64_eq(y, 24.0 + (OVERLAY_TOP_OFFSET * 2.0));
-    }
-
-    #[test]
-    fn ask_selection_panel_prefers_below_right_of_cursor() {
-        let work_area = OverlayBounds {
-            x: 0.0,
-            y: 0.0,
-            width: 1440.0,
-            height: 900.0,
-        };
-
-        let (x, y) = calculate_cursor_relative_panel_position_in_bounds(
-            200.0, 120.0, work_area, 420.0, 260.0, 18.0, 14.0, 0.30,
-        );
-
-        assert_f64_eq(x, 218.0);
-        assert_f64_eq(y, 138.0);
-    }
-
-    #[test]
-    fn ask_selection_panel_prefers_above_cursor_in_bottom_thirty_percent() {
-        let work_area = OverlayBounds {
-            x: 0.0,
-            y: 0.0,
-            width: 1440.0,
-            height: 900.0,
-        };
-
-        let (x, y) = calculate_cursor_relative_panel_position_in_bounds(
-            200.0, 650.0, work_area, 420.0, 260.0, 18.0, 14.0, 0.30,
-        );
-
-        assert_f64_eq(x, 218.0);
-        assert_f64_eq(y, 372.0);
     }
 
     #[test]

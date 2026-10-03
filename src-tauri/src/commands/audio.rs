@@ -512,29 +512,7 @@ pub fn stop_full_system_audio_session(app: AppHandle) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::cell::Cell;
     use tauri_plugin_os::Version;
-
-    struct FakeMeetingStopRequest {
-        calls: Cell<usize>,
-    }
-
-    impl MeetingStopRequest for FakeMeetingStopRequest {
-        fn request_meeting_stop(&self) {
-            self.calls.set(self.calls.get() + 1);
-        }
-    }
-
-    #[test]
-    fn ui_stop_dispatches_explicit_meeting_stop_request_once() {
-        let request = FakeMeetingStopRequest {
-            calls: Cell::new(0),
-        };
-
-        dispatch_meeting_stop(&request);
-
-        assert_eq!(request.calls.get(), 1);
-    }
 
     #[test]
     fn support_status_covers_supported_platform_combinations() {

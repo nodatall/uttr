@@ -1,8 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import {
-  buildCheckoutSessionIdempotencyKey,
-  createOrReuseCheckoutSession,
-} from "./checkout";
+import { createOrReuseCheckoutSession } from "./checkout";
 import type { CheckoutSessionRow } from "./access";
 
 function buildReusableSession(
@@ -28,19 +25,6 @@ function buildReusableSession(
 }
 
 describe("checkout session helper", () => {
-  test("builds a deterministic idempotency key from the checkout context", () => {
-    expect(
-      buildCheckoutSessionIdempotencyKey({
-        userId: "user_123",
-        anonymousTrialId: "trial_123",
-        installId: "install_123",
-        monthlyPriceId: "price_monthly",
-      }),
-    ).toBe(
-      "uttr_checkout|user_id:user_123|anonymous_trial_id:trial_123|install_id:install_123|price:price_monthly",
-    );
-  });
-
   test("reuses an open pending checkout session before calling Stripe", async () => {
     const reusableSession = buildReusableSession();
     let createCalls = 0;

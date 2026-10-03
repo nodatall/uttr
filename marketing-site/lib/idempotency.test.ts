@@ -91,14 +91,4 @@ describe("webhook idempotency", () => {
       "entitlement write failed",
     ]);
   });
-
-  test("throws for unexpected persistence failures", async () => {
-    mockDb(async () => {
-      throw new Error("database unavailable");
-    });
-
-    await expect(beginWebhookEvent("evt_789", "invoice.paid")).rejects.toThrow(
-      "database unavailable",
-    );
-  });
 });

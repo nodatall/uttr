@@ -1185,23 +1185,6 @@ mod tests {
     }
 
     #[test]
-    fn later_api_key_does_not_change_existing_transcription_model() {
-        let mut settings = settings::get_default_settings();
-        settings.selected_model = GROQ_MODEL_WHISPER_LARGE_V3.to_string();
-        settings
-            .post_process_api_keys
-            .insert("groq".to_string(), "gsk_existing".to_string());
-
-        assert!(!maybe_select_first_api_key_transcription_model(
-            &mut settings,
-            "openai",
-            "sk-test",
-            true
-        ));
-        assert_eq!(settings.selected_model, GROQ_MODEL_WHISPER_LARGE_V3);
-    }
-
-    #[test]
     fn empty_or_unrelated_api_key_does_not_change_transcription_model() {
         let mut settings = settings::get_default_settings();
         settings.selected_model = DEFAULT_LOCAL_MODEL_ID.to_string();

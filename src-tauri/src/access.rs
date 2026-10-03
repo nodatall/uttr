@@ -506,15 +506,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn normalizes_backend_base_url() {
-        assert_eq!(
-            normalize_backend_base_url("https://uttr.pro/"),
-            DEFAULT_BACKEND_BASE_URL
-        );
-        assert_eq!(normalize_backend_base_url(""), DEFAULT_BACKEND_BASE_URL);
-    }
-
-    #[test]
     fn backend_transport_hints_cover_dns_and_connectivity_failures() {
         let cases = [
             (

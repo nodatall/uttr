@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import Stripe from "stripe";
 import { sendTransactionalEmail } from "@/lib/email";
 import {
+  fetchEntitlementByUserId,
+  withStripeCustomerEntitlementLock,
   markPendingCheckoutSessionCompleted,
   markPendingCheckoutSessionExpired,
   patchEntitlementByStripeSubscriptionId,
@@ -80,8 +82,9 @@ function mapSubscriptionStatus(
 }
 
 function currentPeriodEndsAt(subscription: Stripe.Subscription): string | null {
-  const currentPeriodEnd = (subscription as { current_period_end?: unknown })
-    .current_period_end;
+  const currentPeriodEnd =
+    subscription.items?.data[0]?.current_period_end ??
+    (subscription as { current_period_end?: unknown }).current_period_end;
 
   if (typeof currentPeriodEnd !== "number") {
     return null;
@@ -90,35 +93,110 @@ function currentPeriodEndsAt(subscription: Stripe.Subscription): string | null {
   return new Date(currentPeriodEnd * 1000).toISOString();
 }
 
-async function retrieveSubscriptionForCheckout(
-  session: Stripe.Checkout.Session,
-  stripe: Stripe,
-) {
-  const subscriptionId = stripeId(session.subscription);
-  if (!subscriptionId) {
-    return null;
-  }
-
-  return stripe.subscriptions.retrieve(subscriptionId);
-}
-
-async function fetchInvoiceSubscription(
-  invoice: Stripe.Invoice,
-  stripe: Stripe,
-) {
-  const subscriptionId = stripeId(
-    (invoice as { subscription?: string | { id?: string } | null })
-      .subscription ?? null,
+function invoiceSubscriptionId(invoice: Stripe.Invoice): string | null {
+  return stripeId(
+    invoice.parent?.subscription_details?.subscription ??
+      (invoice as { subscription?: string | { id?: string } | null })
+        .subscription ??
+      null,
   );
-
-  if (!subscriptionId) {
-    return null;
-  }
-
-  return stripe.subscriptions.retrieve(subscriptionId);
 }
 
-async function syncEntitlementFromCheckout(
+async function syncEntitlementFromSubscription(
+  subscriptionId: string,
+  customerId: string | null,
+  stripe: Stripe,
+  checkoutUserId?: string,
+): Promise<Stripe.Subscription | null> {
+  if (!customerId) {
+    const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+    customerId = stripeId(subscription.customer);
+  }
+  if (!customerId) {
+    throw new Error("Subscription is missing customer data.");
+  }
+  const lockedCustomerId = customerId;
+
+  // Serialize the provider read with its write, not just the database update.
+  return withStripeCustomerEntitlementLock(
+    lockedCustomerId,
+    async (executor) => {
+      const subscription = await stripe.subscriptions.retrieve(subscriptionId);
+      if (stripeId(subscription.customer) !== lockedCustomerId) {
+        throw new Error(
+          "Subscription customer does not match webhook customer.",
+        );
+      }
+      const patch = {
+        subscription_status: mapSubscriptionStatus(subscription.status),
+        stripe_customer_id: lockedCustomerId,
+        current_period_ends_at: currentPeriodEndsAt(subscription),
+      };
+      const userId = checkoutUserId || subscription.metadata?.user_id;
+      if (userId) {
+        const entitlement = await fetchEntitlementByUserId(userId, executor);
+        const currentSubscriptionId =
+          entitlement?.stripe_subscription_id ?? null;
+        if (
+          currentSubscriptionId &&
+          currentSubscriptionId !== subscription.id
+        ) {
+          // Updates and invoices may reconcile only the currently associated subscription.
+          if (!checkoutUserId) {
+            return null;
+          }
+          const currentSubscription = await stripe.subscriptions.retrieve(
+            currentSubscriptionId,
+          );
+          if (
+            !Number.isFinite(subscription.created) ||
+            !Number.isFinite(currentSubscription.created)
+          ) {
+            throw new Error("Cannot determine subscription checkout order.");
+          }
+          if (subscription.created <= currentSubscription.created) {
+            return null;
+          }
+        }
+        const saved = await upsertEntitlementState(
+          {
+            user_id: userId,
+            stripe_subscription_id: subscription.id,
+            ...patch,
+          },
+          executor,
+          currentSubscriptionId,
+        );
+        if (!saved) {
+          // A checkout on another customer can race this customer-scoped lock.
+          throw new Error(
+            "Subscription association changed during reconciliation.",
+          );
+        }
+        return subscription;
+      }
+
+      const entitlement = await patchEntitlementByStripeSubscriptionId(
+        subscription.id,
+        patch,
+        executor,
+      );
+      if (!entitlement) {
+        console.warn(
+          JSON.stringify({
+            level: "warn",
+            event: "subscription_entitlement_missing_user",
+            subscriptionId: subscription.id,
+          }),
+        );
+        return null;
+      }
+      return subscription;
+    },
+  );
+}
+
+async function handleCheckoutCompleted(
   session: Stripe.Checkout.Session,
   stripe: Stripe,
 ) {
@@ -133,12 +211,9 @@ async function syncEntitlementFromCheckout(
     );
     throw new Error("Completed checkout session is missing user metadata.");
   }
-
-  const subscription = await retrieveSubscriptionForCheckout(session, stripe);
-  const subscriptionId = subscription?.id || stripeId(session.subscription);
-  const customerId =
-    stripeId(session.customer) || stripeId(subscription?.customer ?? null);
-  if (!subscriptionId || !customerId || !subscription) {
+  const subscriptionId = stripeId(session.subscription);
+  const customerId = stripeId(session.customer);
+  if (!subscriptionId) {
     console.warn(
       JSON.stringify({
         level: "warn",
@@ -152,57 +227,26 @@ async function syncEntitlementFromCheckout(
       "Completed checkout session is missing subscription or customer data.",
     );
   }
-
-  await upsertEntitlementState({
-    user_id: userId,
-    subscription_status: mapSubscriptionStatus(subscription.status),
-    stripe_customer_id: customerId,
-    stripe_subscription_id: subscriptionId,
-    current_period_ends_at: currentPeriodEndsAt(subscription),
-  });
-}
-
-async function syncEntitlementFromSubscription(
-  subscription: Stripe.Subscription,
-) {
-  const customerId = stripeId(subscription.customer);
-  const patch = {
-    subscription_status: mapSubscriptionStatus(subscription.status),
-    stripe_customer_id: customerId,
-    current_period_ends_at: currentPeriodEndsAt(subscription),
-  };
-
-  const userId = subscription.metadata?.user_id;
-  if (userId) {
-    await upsertEntitlementState({
-      user_id: userId,
-      stripe_subscription_id: subscription.id,
-      ...patch,
-    });
-    return;
-  }
-
-  const entitlement = await patchEntitlementByStripeSubscriptionId(
-    subscription.id,
-    patch,
+  return syncEntitlementFromSubscription(
+    subscriptionId,
+    customerId,
+    stripe,
+    userId,
   );
-
-  if (!entitlement) {
-    console.warn(
-      JSON.stringify({
-        level: "warn",
-        event: "subscription_entitlement_missing_user",
-        subscriptionId: subscription.id,
-      }),
-    );
-  }
 }
 
-async function handleCheckoutCompleted(
-  session: Stripe.Checkout.Session,
+async function syncEntitlementFromInvoice(
+  invoice: Stripe.Invoice,
   stripe: Stripe,
 ) {
-  await syncEntitlementFromCheckout(session, stripe);
+  const subscriptionId = invoiceSubscriptionId(invoice);
+  if (subscriptionId) {
+    await syncEntitlementFromSubscription(
+      subscriptionId,
+      stripeId(invoice.customer),
+      stripe,
+    );
+  }
 }
 
 async function sendCheckoutCompletedEmail(
@@ -360,9 +404,11 @@ export async function POST(request: Request) {
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
         await markPendingCheckoutSessionCompleted(session.id);
-        await handleCheckoutCompleted(session, stripe);
-        postCommitSideEffect = () =>
-          sendCheckoutCompletedEmail(session, stripe);
+        const subscription = await handleCheckoutCompleted(session, stripe);
+        if (subscription) {
+          postCommitSideEffect = () =>
+            sendCheckoutCompletedEmail(session, stripe);
+        }
         break;
       }
       case "checkout.session.expired": {
@@ -372,34 +418,40 @@ export async function POST(request: Request) {
       }
       case "invoice.paid": {
         const invoice = event.data.object as Stripe.Invoice;
-        const subscription = await fetchInvoiceSubscription(invoice, stripe);
-        if (subscription) {
-          await syncEntitlementFromSubscription(subscription);
-        }
+        await syncEntitlementFromInvoice(invoice, stripe);
         postCommitSideEffect = () => handleInvoicePaid(invoice, stripe);
         break;
       }
       case "invoice.payment_failed": {
         const invoice = event.data.object as Stripe.Invoice;
-        const subscription = await fetchInvoiceSubscription(invoice, stripe);
-        if (subscription) {
-          await syncEntitlementFromSubscription(subscription);
-        }
+        await syncEntitlementFromInvoice(invoice, stripe);
         postCommitSideEffect = () => handleInvoiceFailed(invoice, stripe);
         break;
       }
       case "customer.subscription.deleted": {
-        const subscription = event.data.object as Stripe.Subscription;
-        await syncEntitlementFromSubscription(subscription);
-        postCommitSideEffect = () =>
-          sendSubscriptionDeletedEmail(subscription, stripe);
+        const snapshot = event.data.object as Stripe.Subscription;
+        const subscription = await syncEntitlementFromSubscription(
+          snapshot.id,
+          stripeId(snapshot.customer),
+          stripe,
+        );
+        if (subscription?.status === "canceled") {
+          postCommitSideEffect = () =>
+            sendSubscriptionDeletedEmail(subscription, stripe);
+        }
         break;
       }
       case "customer.subscription.updated": {
-        const subscription = event.data.object as Stripe.Subscription;
-        await syncEntitlementFromSubscription(subscription);
-        postCommitSideEffect = () =>
-          sendSubscriptionUpdatedEmail(event, subscription, stripe);
+        const snapshot = event.data.object as Stripe.Subscription;
+        const subscription = await syncEntitlementFromSubscription(
+          snapshot.id,
+          stripeId(snapshot.customer),
+          stripe,
+        );
+        if (subscription) {
+          postCommitSideEffect = () =>
+            sendSubscriptionUpdatedEmail(event, subscription, stripe);
+        }
         break;
       }
       default:

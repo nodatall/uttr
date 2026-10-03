@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useReducer, useState } from "react";
+import { useEffect, useReducer, useRef, useState } from "react";
 import { createAuthClient, type AuthSession } from "@/lib/auth/client";
 import { getDownloadUrl } from "@/lib/download";
 import {
@@ -15,7 +15,7 @@ type ClaimFlowProps = {
   initialSource: string;
 };
 
-type ClaimStatus = "idle" | "auth" | "link" | "checkout";
+type ClaimStatus = "idle" | "auth" | "link" | "checkout" | "logout";
 
 type ClaimState = {
   email: string;
@@ -33,6 +33,7 @@ type ClaimAction =
   | { type: "auth_started"; mode: AuthMode }
   | { type: "session_loaded"; session: AuthSession }
   | { type: "checkout_started"; status: "link" | "checkout" }
+  | { type: "logout_started" }
   | { type: "error"; message: string }
   | { type: "different_account" };
 
@@ -64,6 +65,8 @@ const claimReducer = (state: ClaimState, action: ClaimAction): ClaimState => {
       };
     case "checkout_started":
       return { ...state, status: action.status, error: null };
+    case "logout_started":
+      return { ...state, status: "logout", error: null };
     case "error":
       return { ...state, status: "idle", error: action.message };
     case "different_account":
@@ -149,6 +152,7 @@ export function ClaimFlow({
 }: ClaimFlowProps) {
   const downloadUrl = getDownloadUrl();
   const [auth] = useState(() => createAuthClient());
+  const sessionCheckControllerRef = useRef<AbortController | null>(null);
   const [
     { email, password, authMode, status, error, signedInEmail, activeSession },
     dispatch,
@@ -179,17 +183,39 @@ export function ClaimFlow({
 
   useEffect(() => {
     let cancelled = false;
+    const controller = new AbortController();
+    sessionCheckControllerRef.current = controller;
 
-    void auth.getSession().then(async (session) => {
-      if (cancelled || !session) {
-        return;
-      }
+    void auth
+      .getSession({ signal: controller.signal })
+      .then((session) => {
+        if (cancelled || !session) {
+          return;
+        }
 
-      dispatch({ type: "session_loaded", session });
-    });
+        dispatch({ type: "session_loaded", session });
+      })
+      .catch((err) => {
+        if (cancelled || controller.signal.aborted) {
+          return;
+        }
+        dispatch({
+          type: "error",
+          message:
+            err instanceof Error
+              ? err.message
+              : "Unable to check your session.",
+        });
+      })
+      .finally(() => {
+        if (sessionCheckControllerRef.current === controller) {
+          sessionCheckControllerRef.current = null;
+        }
+      });
 
     return () => {
       cancelled = true;
+      controller.abort();
     };
   }, [auth, initialClaimToken, initialSource]);
 
@@ -221,6 +247,9 @@ export function ClaimFlow({
   };
 
   const continueWithCurrentAccount = async () => {
+    if (status !== "idle") {
+      return;
+    }
     if (!activeSession) {
       dispatch({
         type: "error",
@@ -246,8 +275,21 @@ export function ClaimFlow({
   };
 
   const handleDifferentAccount = async () => {
-    await auth.signOut();
-    dispatch({ type: "different_account" });
+    if (status !== "idle") {
+      return;
+    }
+    sessionCheckControllerRef.current?.abort();
+    sessionCheckControllerRef.current = null;
+    dispatch({ type: "logout_started" });
+    try {
+      await auth.signOut();
+      dispatch({ type: "different_account" });
+    } catch (err) {
+      dispatch({
+        type: "error",
+        message: err instanceof Error ? err.message : "Unable to log out.",
+      });
+    }
   };
 
   if (!initialClaimToken) {
@@ -266,6 +308,11 @@ export function ClaimFlow({
         >
           Download for macOS
         </a>
+        {error ? (
+          <p role="alert" className="text-sm text-rose-200">
+            {error}
+          </p>
+        ) : null}
       </div>
     );
   }
@@ -357,7 +404,11 @@ export function ClaimFlow({
         </div>
       )}
 
-      {error ? <p className="text-sm text-rose-200">{error}</p> : null}
+      {error ? (
+        <p role="alert" className="text-sm text-rose-200">
+          {error}
+        </p>
+      ) : null}
 
       {status !== "idle" ? (
         <p className="text-sm text-cosmic-100">
@@ -365,7 +416,9 @@ export function ClaimFlow({
             ? "Authenticating account..."
             : status === "link"
               ? "Linking install..."
-              : "Starting checkout..."}
+              : status === "logout"
+                ? "Logging out..."
+                : "Starting checkout..."}
         </p>
       ) : null}
     </div>

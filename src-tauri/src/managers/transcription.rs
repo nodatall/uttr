@@ -130,24 +130,6 @@ fn normalized_silence_hallucination_text(text: &str) -> String {
         .join(" ")
 }
 
-#[cfg(test)]
-fn looks_like_network_error(error_message: &str) -> bool {
-    let lower = error_message.to_ascii_lowercase();
-    [
-        "connection",
-        "connect error",
-        "dns",
-        "lookup address",
-        "timed out",
-        "timeout",
-        "network",
-        "unreachable",
-        "temporary failure",
-    ]
-    .iter()
-    .any(|needle| lower.contains(needle))
-}
-
 fn audio_levels(audio: &[f32]) -> Option<(f32, f32)> {
     if audio.is_empty() {
         return None;
@@ -2441,15 +2423,22 @@ impl TranscriptionManager {
 
         let final_result = filtered_result;
 
-        if final_result.is_empty() {
-            info!("Transcription result is empty");
-        } else {
-            info!("Transcription result: {}", final_result);
-        }
+        log_transcription_result(&final_result);
 
         self.maybe_unload_immediately("transcription");
 
         Ok(final_result)
+    }
+}
+
+fn log_transcription_result(result: &str) {
+    if result.is_empty() {
+        info!("Transcription result is empty");
+    } else {
+        info!(
+            "Transcription result contains {} characters",
+            result.chars().count()
+        );
     }
 }
 
@@ -2484,6 +2473,39 @@ impl Drop for TranscriptionManager {
 mod tests {
     use super::*;
     use std::time::Duration;
+
+    #[test]
+    fn successful_transcripts_are_not_written_to_logs() {
+        thread_local! {
+            static MESSAGES: std::cell::RefCell<Vec<String>> = const { std::cell::RefCell::new(Vec::new()) };
+        }
+        struct CaptureLogger;
+        impl log::Log for CaptureLogger {
+            fn enabled(&self, _: &log::Metadata) -> bool {
+                true
+            }
+            fn log(&self, record: &log::Record) {
+                MESSAGES.with(|messages| messages.borrow_mut().push(record.args().to_string()));
+            }
+            fn flush(&self) {}
+        }
+        static LOGGER: CaptureLogger = CaptureLogger;
+        static INIT: std::sync::Once = std::sync::Once::new();
+        INIT.call_once(|| {
+            log::set_logger(&LOGGER).unwrap();
+            log::set_max_level(log::LevelFilter::Info);
+        });
+
+        let transcript = "PRIVATE_SENTINEL_42 café";
+        log_transcription_result(transcript);
+        MESSAGES.with(|messages| {
+            let messages = messages.borrow();
+            assert_eq!(messages.len(), 1);
+            assert!(messages[0].contains(&transcript.chars().count().to_string()));
+            assert!(!messages[0].contains("PRIVATE_SENTINEL_42"));
+            assert!(!messages[0].contains("café"));
+        });
+    }
 
     fn model(id: &str, is_downloaded: bool, is_recommended: bool) -> ModelInfo {
         ModelInfo {
@@ -2544,19 +2566,6 @@ mod tests {
 
         let audio = vec![0.0, 0.2, -0.18, 0.16, -0.12];
         assert_eq!(prepare_transcription_audio(audio.clone()), audio);
-    }
-
-    #[test]
-    fn network_error_detection_matches_common_offline_failures() {
-        assert!(looks_like_network_error(
-            "Groq request failed: error sending request for url: connection refused"
-        ));
-        assert!(looks_like_network_error(
-            "Groq request failed: dns error: failed to lookup address information"
-        ));
-        assert!(!looks_like_network_error(
-            "Groq API request failed (401 Unauthorized): invalid api key"
-        ));
     }
 
     #[test]

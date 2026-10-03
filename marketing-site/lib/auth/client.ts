@@ -50,15 +50,20 @@ async function requestSession(
 
 export function createAuthClient() {
   return {
-    async getSession() {
+    async getSession({ signal }: { signal?: AbortSignal } = {}) {
       const response = await fetch("/api/auth/session", {
         method: "GET",
+        signal,
       });
       const payload = await readJson(response);
 
-      if (!response.ok || !payload.session) {
+      if (response.status === 401) {
         clearLegacyStoredToken();
         return null;
+      }
+
+      if (!response.ok || !payload.session) {
+        throw new Error(payload.error || "Unable to check your session.");
       }
 
       clearLegacyStoredToken();
@@ -80,7 +85,11 @@ export function createAuthClient() {
     },
 
     async signOut() {
-      await fetch("/api/auth/signout", { method: "POST" }).catch(() => null);
+      const response = await fetch("/api/auth/signout", { method: "POST" });
+      if (!response.ok) {
+        const payload = await readJson(response);
+        throw new Error(payload.error || "Unable to log out.");
+      }
       clearLegacyStoredToken();
     },
   };

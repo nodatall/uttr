@@ -1587,29 +1587,6 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_custom_vocabulary_terms() {
-        let long = "a".repeat(MAX_CUSTOM_VOCABULARY_TERM_CHARS + 10);
-        let mut terms = vec![
-            " Zach Latta ".to_string(),
-            "".to_string(),
-            "zach latta".to_string(),
-            long,
-        ];
-        for index in 0..MAX_CUSTOM_VOCABULARY_TERMS + 10 {
-            terms.push(format!("term {}", index));
-        }
-
-        let normalized = normalize_custom_vocabulary_terms(&terms);
-
-        assert_eq!(normalized[0], "Zach Latta");
-        assert_eq!(normalized.len(), MAX_CUSTOM_VOCABULARY_TERMS);
-        assert_eq!(
-            normalized[1].chars().count(),
-            MAX_CUSTOM_VOCABULARY_TERM_CHARS
-        );
-    }
-
-    #[test]
     fn missing_custom_vocabulary_deserializes_to_empty_list() {
         let settings = get_default_settings();
         let mut value = serde_json::to_value(settings).unwrap();

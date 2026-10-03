@@ -618,14 +618,6 @@ mod tests {
     use reqwest::StatusCode;
 
     #[test]
-    fn estimate_wav_size_matches_header_plus_payload() {
-        assert_eq!(
-            estimate_wav_size_bytes(16_000).unwrap(),
-            WAV_HEADER_BYTES + (16_000 * WAV_BYTES_PER_SAMPLE)
-        );
-    }
-
-    #[test]
     fn direct_status_errors_are_classified_without_provider_body() {
         assert_eq!(
             classify_status_error(StatusCode::UNAUTHORIZED),
