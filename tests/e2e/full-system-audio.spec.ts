@@ -857,6 +857,17 @@ test.describe("full-system audio settings", () => {
       ),
     ).toBeVisible();
     await expect(workspace.getByText("every single month.")).toHaveCount(0);
+    await expect(workspace.getByText("Complete", { exact: true })).toHaveCount(
+      0,
+    );
+    await expect(workspace.getByText("Summary", { exact: true })).toHaveCount(
+      0,
+    );
+    await expect(workspace.locator("svg.lucide-circle-check")).toHaveCount(0);
+    await expect(workspace).toHaveCSS("margin-top", "-16px");
+    await expect(
+      workspace.locator("section > div > div").first(),
+    ).toHaveCSS("justify-content", "flex-end");
 
     await workspace.getByRole("button", { name: /Raw transcript/i }).click();
 
