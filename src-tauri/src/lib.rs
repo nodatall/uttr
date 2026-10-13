@@ -135,6 +135,7 @@ fn initialize_core_logic(app_handle: &AppHandle) {
     let recording_manager = Arc::new(
         AudioRecordingManager::new(app_handle).expect("Failed to initialize recording manager"),
     );
+    recording_manager.start_recovery_monitor();
     let full_system_audio_manager = Arc::new(FullSystemAudioSessionManager::new(
         recording_manager.clone(),
     ));
@@ -544,6 +545,11 @@ pub fn run() {
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
+        if let RunEvent::Exit = event {
+            if let Some(manager) = app_handle.try_state::<Arc<AudioRecordingManager>>() {
+                manager.shutdown();
+            }
+        }
         if let RunEvent::Resumed = event {
             if app_handle
                 .try_state::<crate::commands::ShortcutsInitialized>()

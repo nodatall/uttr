@@ -14,6 +14,8 @@ use std::time::{Duration, Instant};
 use tauri::Manager;
 
 static FIRST_AUDIO_LEVEL_LOGGED: AtomicBool = AtomicBool::new(true);
+const MICROPHONE_RECOVERY_POLL_INTERVAL: Duration = Duration::from_millis(500);
+const MICROPHONE_RECOVERY_RETRY_DELAY: Duration = Duration::from_secs(5);
 
 fn set_mute(mute: bool) {
     // Expected behavior:
@@ -170,6 +172,8 @@ fn release_smoke_audio_file() -> Option<PathBuf> {
 
 #[derive(Clone)]
 pub struct AudioRecordingManager {
+    lifecycle: Arc<Mutex<()>>,
+    recovery_enabled: Arc<AtomicBool>,
     state: Arc<Mutex<RecordingState>>,
     mode: Arc<Mutex<MicrophoneMode>>,
     app_handle: tauri::AppHandle,
@@ -193,6 +197,8 @@ impl AudioRecordingManager {
         };
 
         let manager = Self {
+            lifecycle: Arc::new(Mutex::new(())),
+            recovery_enabled: Arc::new(AtomicBool::new(true)),
             state: Arc::new(Mutex::new(RecordingState::Idle)),
             mode: Arc::new(Mutex::new(mode.clone())),
             app_handle: app.clone(),
@@ -208,13 +214,67 @@ impl AudioRecordingManager {
         if matches!(mode, MicrophoneMode::AlwaysOn) {
             if let Err(err) = manager.start_microphone_stream() {
                 warn!(
-                    "Failed to initialize always-on microphone stream; falling back to on-demand microphone mode: {err}"
+                    "Failed to initialize always-on microphone stream; will retry in the background: {err}"
                 );
-                *manager.mode.lock().unwrap() = MicrophoneMode::OnDemand;
             }
         }
 
         Ok(manager)
+    }
+
+    pub fn start_recovery_monitor(self: &Arc<Self>) {
+        let manager = Arc::downgrade(self);
+        std::thread::spawn(move || {
+            monitor_microphone_recovery(
+                || {
+                    let manager = manager.upgrade()?;
+                    if !manager.recovery_enabled.load(Ordering::Acquire) {
+                        return None;
+                    }
+                    Some(manager.recover_microphone_stream())
+                },
+                MICROPHONE_RECOVERY_POLL_INTERVAL,
+                MICROPHONE_RECOVERY_RETRY_DELAY,
+            );
+        });
+    }
+
+    pub fn shutdown(&self) {
+        self.recovery_enabled.store(false, Ordering::Release);
+        let _lifecycle = self.lifecycle.lock().unwrap();
+        self.stop_microphone_stream_locked();
+    }
+
+    fn recover_microphone_stream(&self) -> Result<(), anyhow::Error> {
+        if release_smoke_audio_file().is_some() {
+            return Ok(());
+        }
+        recover_idle_always_on_microphone(
+            &self.lifecycle,
+            &self.recovery_enabled,
+            &self.mode,
+            &self.state,
+            || {
+                !*self.is_open.lock().unwrap()
+                    || self
+                        .recorder
+                        .lock()
+                        .unwrap()
+                        .as_ref()
+                        .is_none_or(AudioRecorder::has_stream_failed)
+            },
+            || {
+                let started = Instant::now();
+                info!("Recovering always-on microphone stream in the background");
+                self.stop_microphone_stream_locked();
+                self.start_microphone_stream_locked()?;
+                info!(
+                    "Always-on microphone stream recovered in {}ms",
+                    started.elapsed().as_millis()
+                );
+                Ok(())
+            },
+        )
     }
 
     /* ---------- helper methods --------------------------------------------- */
@@ -250,6 +310,7 @@ impl AudioRecordingManager {
 
     /// Applies mute if mute_while_recording is enabled and stream is open
     pub fn apply_mute(&self) {
+        let _lifecycle = self.lifecycle.lock().unwrap();
         let settings = get_settings(&self.app_handle);
         let mut did_mute_guard = self.did_mute.lock().unwrap();
 
@@ -274,6 +335,12 @@ impl AudioRecordingManager {
     }
 
     pub fn start_microphone_stream(&self) -> Result<(), anyhow::Error> {
+        let _lifecycle = self.lifecycle.lock().unwrap();
+        self.start_microphone_stream_locked()
+    }
+
+    // Callers hold lifecycle across stream transitions and recording state changes.
+    fn start_microphone_stream_locked(&self) -> Result<(), anyhow::Error> {
         let mut open_flag = self.is_open.lock().unwrap();
         if *open_flag {
             debug!("Microphone stream already active");
@@ -329,7 +396,7 @@ impl AudioRecordingManager {
         Ok(())
     }
 
-    pub fn stop_microphone_stream(&self) {
+    fn stop_microphone_stream_locked(&self) {
         {
             let mut open_flag = self.is_open.lock().unwrap();
             if !*open_flag {
@@ -376,23 +443,24 @@ impl AudioRecordingManager {
 
     fn close_on_demand_stream(&self) {
         if matches!(*self.mode.lock().unwrap(), MicrophoneMode::OnDemand) {
-            self.stop_microphone_stream();
+            self.stop_microphone_stream_locked();
         }
     }
 
     /* ---------- mode switching --------------------------------------------- */
 
     pub fn update_mode(&self, new_mode: MicrophoneMode) -> Result<(), anyhow::Error> {
+        let _lifecycle = self.lifecycle.lock().unwrap();
         update_microphone_mode(&self.mode, new_mode, |cur_mode, new_mode| {
             match (cur_mode, new_mode) {
                 (MicrophoneMode::AlwaysOn, MicrophoneMode::OnDemand) => {
                     if matches!(*self.state.lock().unwrap(), RecordingState::Idle) {
-                        self.stop_microphone_stream();
+                        self.stop_microphone_stream_locked();
                     }
                     Ok(())
                 }
                 (MicrophoneMode::OnDemand, MicrophoneMode::AlwaysOn) => {
-                    self.start_microphone_stream()
+                    self.start_microphone_stream_locked()
                 }
                 _ => Ok(()),
             }
@@ -416,6 +484,7 @@ impl AudioRecordingManager {
 
     pub fn try_start_recording(&self, binding_id: &str) -> bool {
         let start_time = Instant::now();
+        let _lifecycle = self.lifecycle.lock().unwrap();
 
         if !matches!(*self.state.lock().unwrap(), RecordingState::Idle) {
             info!(
@@ -427,7 +496,7 @@ impl AudioRecordingManager {
         } else {
             // Ensure microphone is open in on-demand mode
             if matches!(*self.mode.lock().unwrap(), MicrophoneMode::OnDemand) {
-                if let Err(e) = self.start_microphone_stream() {
+                if let Err(e) = self.start_microphone_stream_locked() {
                     error!("Failed to open microphone stream: {e}");
                     return false;
                 }
@@ -436,8 +505,8 @@ impl AudioRecordingManager {
             FIRST_AUDIO_LEVEL_LOGGED.store(false, Ordering::Relaxed);
             let start_result = self.start_recorder_command().or_else(|err| {
                 warn!("Recorder start failed; restarting microphone stream: {err}");
-                self.stop_microphone_stream();
-                self.start_microphone_stream()
+                self.stop_microphone_stream_locked();
+                self.start_microphone_stream_locked()
                     .map_err(|restart_err| restart_err.to_string())?;
                 self.start_recorder_command()
             });
@@ -463,15 +532,17 @@ impl AudioRecordingManager {
     }
 
     pub fn update_selected_device(&self) -> Result<(), anyhow::Error> {
+        let _lifecycle = self.lifecycle.lock().unwrap();
         // If currently open, restart the microphone stream to use the new device
         if *self.is_open.lock().unwrap() {
-            self.stop_microphone_stream();
-            self.start_microphone_stream()?;
+            self.stop_microphone_stream_locked();
+            self.start_microphone_stream_locked()?;
         }
         Ok(())
     }
 
     pub fn stop_recording(&self, binding_id: &str) -> Option<Vec<f32>> {
+        let _lifecycle = self.lifecycle.lock().unwrap();
         let mut state = self.state.lock().unwrap();
 
         match *state {
@@ -520,7 +591,7 @@ impl AudioRecordingManager {
                 *self.recording_started_at.lock().unwrap() = None;
 
                 if should_reset_stream {
-                    self.stop_microphone_stream();
+                    self.stop_microphone_stream_locked();
                 } else {
                     self.close_on_demand_stream();
                 }
@@ -721,6 +792,7 @@ impl AudioRecordingManager {
 
     /// Cancel any ongoing recording without returning audio samples
     pub fn cancel_recording(&self) {
+        let _lifecycle = self.lifecycle.lock().unwrap();
         let mut state = self.state.lock().unwrap();
 
         if let RecordingState::Recording { .. } = *state {
@@ -736,6 +808,47 @@ impl AudioRecordingManager {
 
             self.close_on_demand_stream();
         }
+    }
+}
+
+fn recover_idle_always_on_microphone(
+    lifecycle: &Mutex<()>,
+    recovery_enabled: &AtomicBool,
+    mode: &Mutex<MicrophoneMode>,
+    state: &Mutex<RecordingState>,
+    needs_recovery: impl FnOnce() -> bool,
+    reopen: impl FnOnce() -> Result<(), anyhow::Error>,
+) -> Result<(), anyhow::Error> {
+    // Do not queue behind a recording start/stop or device/mode change. The next
+    // monitor tick can check again without interfering with the user's action.
+    let Ok(_lifecycle) = lifecycle.try_lock() else {
+        return Ok(());
+    };
+    if !recovery_enabled.load(Ordering::Acquire)
+        || !matches!(*mode.lock().unwrap(), MicrophoneMode::AlwaysOn)
+        || !matches!(*state.lock().unwrap(), RecordingState::Idle)
+        || !needs_recovery()
+    {
+        return Ok(());
+    }
+    reopen()
+}
+
+fn monitor_microphone_recovery(
+    mut recover: impl FnMut() -> Option<Result<(), anyhow::Error>>,
+    poll_interval: Duration,
+    retry_delay: Duration,
+) {
+    loop {
+        let delay = match recover() {
+            None => return,
+            Some(Ok(())) => poll_interval,
+            Some(Err(err)) => {
+                warn!("Always-on microphone recovery failed; will retry: {err}");
+                retry_delay
+            }
+        };
+        std::thread::sleep(delay);
     }
 }
 
@@ -766,10 +879,128 @@ fn pad_short_recording_samples(samples: Vec<f32>) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        pad_short_recording_samples, update_microphone_mode, MicrophoneMode, WHISPER_SAMPLE_RATE,
+        monitor_microphone_recovery, pad_short_recording_samples,
+        recover_idle_always_on_microphone, update_microphone_mode, MicrophoneMode, RecordingState,
+        WHISPER_SAMPLE_RATE,
     };
-    use std::sync::{mpsc, Arc, Mutex};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        mpsc, Arc, Mutex,
+    };
     use std::time::Duration;
+
+    #[test]
+    fn background_monitor_recovers_and_retries_without_a_recording_action() {
+        let lifecycle = Mutex::new(());
+        let enabled = AtomicBool::new(true);
+        let mode = Mutex::new(MicrophoneMode::AlwaysOn);
+        let state = Mutex::new(RecordingState::Idle);
+        // A failed stream is still marked open, just as it is after the device
+        // error callback. The first reopen fails while the device is unavailable.
+        let open = AtomicBool::new(true);
+        let failed = AtomicBool::new(true);
+        let mut attempts = 0;
+        let mut ticks = 0;
+
+        monitor_microphone_recovery(
+            || {
+                ticks += 1;
+                if ticks == 4 {
+                    return None;
+                }
+                Some(recover_idle_always_on_microphone(
+                    &lifecycle,
+                    &enabled,
+                    &mode,
+                    &state,
+                    || !open.load(Ordering::Acquire) || failed.load(Ordering::Acquire),
+                    || {
+                        attempts += 1;
+                        open.store(false, Ordering::Release);
+                        failed.store(false, Ordering::Release);
+                        if attempts == 1 {
+                            return Err(anyhow::anyhow!("device unavailable"));
+                        }
+                        open.store(true, Ordering::Release);
+                        Ok(())
+                    },
+                ))
+            },
+            Duration::ZERO,
+            Duration::ZERO,
+        );
+
+        assert_eq!(
+            attempts, 2,
+            "closed streams must retry, healthy streams must not"
+        );
+        assert!(open.load(Ordering::Acquire));
+        assert!(!failed.load(Ordering::Acquire));
+        assert!(matches!(*state.lock().unwrap(), RecordingState::Idle));
+    }
+
+    #[test]
+    fn background_recovery_respects_mode_recording_and_shutdown() {
+        let lifecycle = Mutex::new(());
+        let enabled = AtomicBool::new(true);
+        let mode = Mutex::new(MicrophoneMode::OnDemand);
+        let state = Mutex::new(RecordingState::Idle);
+        let mut reopen_count = 0;
+        let mut tick = || {
+            recover_idle_always_on_microphone(
+                &lifecycle,
+                &enabled,
+                &mode,
+                &state,
+                || true,
+                || {
+                    reopen_count += 1;
+                    Ok(())
+                },
+            )
+            .unwrap();
+        };
+
+        tick(); // On-demand streams stay closed until requested.
+        *mode.lock().unwrap() = MicrophoneMode::AlwaysOn;
+        *state.lock().unwrap() = RecordingState::Recording {
+            binding_id: "record_full_system_audio".to_string(),
+        };
+        tick(); // Preserve captured samples and the meeting's microphone owner.
+        *state.lock().unwrap() = RecordingState::Idle;
+        tick(); // Recover automatically as soon as the recording ends.
+        enabled.store(false, Ordering::Release);
+        tick(); // Do not reopen on shutdown.
+
+        assert_eq!(reopen_count, 1);
+    }
+
+    #[test]
+    fn background_recovery_cannot_replace_a_stream_during_start_or_stop() {
+        let lifecycle = Arc::new(Mutex::new(()));
+        let worker_lifecycle = Arc::clone(&lifecycle);
+        let operation = lifecycle.lock().unwrap();
+        let (tx, rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            // Stop has already changed the state to Idle but still owns the
+            // lifecycle gate while reading captured samples from the recorder.
+            let result = recover_idle_always_on_microphone(
+                &worker_lifecycle,
+                &AtomicBool::new(true),
+                &Mutex::new(MicrophoneMode::AlwaysOn),
+                &Mutex::new(RecordingState::Idle),
+                || panic!("must not inspect a stream during a lifecycle operation"),
+                || panic!("must not discard the recorder during start/stop"),
+            );
+            tx.send(result).unwrap();
+        });
+
+        rx.recv_timeout(Duration::from_secs(1))
+            .expect("monitor must skip a busy lifecycle without queuing")
+            .unwrap();
+        drop(operation);
+        worker.join().unwrap();
+    }
 
     #[test]
     fn mode_updates_complete_without_holding_the_mode_lock() {

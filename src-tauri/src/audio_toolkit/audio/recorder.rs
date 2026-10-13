@@ -326,6 +326,9 @@ impl AudioRecorder {
                 return Err(Box::new(Error::new(std::io::ErrorKind::Other, err)));
             }
             Err(mpsc::RecvTimeoutError::Timeout) => {
+                // Startup may finish after this timeout. Ensure that worker
+                // exits instead of leaving an unowned microphone stream alive.
+                let _ = cmd_tx.send(Cmd::Shutdown);
                 return Err(Box::new(Error::new(
                     std::io::ErrorKind::TimedOut,
                     "Timed out waiting for recorder worker to become ready",
@@ -370,17 +373,27 @@ impl AudioRecorder {
         Ok(())
     }
 
+    pub fn has_stream_failed(&self) -> bool {
+        self.stream_failed.load(Ordering::Acquire)
+            || self
+                .worker_handle
+                .as_ref()
+                .is_some_and(|worker| worker.is_finished())
+    }
+
     pub fn start(&self) -> Result<(), Box<dyn std::error::Error>> {
-        if self.stream_failed.load(Ordering::Acquire) {
+        if self.has_stream_failed() {
             return Err(Box::new(Error::new(
                 std::io::ErrorKind::BrokenPipe,
                 "Microphone input stream reported a device error",
             )));
         }
 
-        if let Some(tx) = &self.cmd_tx {
-            tx.send(Cmd::Start)?;
-        }
+        let tx = self
+            .cmd_tx
+            .as_ref()
+            .ok_or_else(|| Error::new(std::io::ErrorKind::BrokenPipe, "Recorder is not open"))?;
+        tx.send(Cmd::Start)?;
         Ok(())
     }
 
@@ -872,13 +885,41 @@ mod tests {
     use std::sync::atomic::Ordering;
 
     #[test]
+    fn recorder_start_rejects_an_unopened_stream() {
+        let recorder = AudioRecorder::new().expect("create recorder");
+
+        let error = recorder.start().expect_err("closed stream must not start");
+
+        assert!(error.to_string().contains("not open"));
+    }
+
+    #[test]
     fn recorder_start_rejects_a_stream_after_device_error() {
         let recorder = AudioRecorder::new().expect("create recorder");
+        assert!(!recorder.has_stream_failed());
         recorder.stream_failed.store(true, Ordering::Release);
+        assert!(recorder.has_stream_failed());
 
         let error = recorder.start().expect_err("failed stream must not start");
 
         assert!(error.to_string().contains("device error"));
+    }
+
+    #[test]
+    fn recorder_detects_a_worker_that_exited_without_a_device_error() {
+        let mut recorder = AudioRecorder::new().expect("create recorder");
+        let (tx, rx) = std::sync::mpsc::channel();
+        recorder.worker_handle = Some(std::thread::spawn(move || {
+            rx.recv().unwrap();
+        }));
+        assert!(!recorder.has_stream_failed());
+        tx.send(()).unwrap();
+        while !recorder.worker_handle.as_ref().unwrap().is_finished() {
+            std::thread::yield_now();
+        }
+        assert!(recorder.has_stream_failed());
+        assert!(recorder.start().is_err());
+        recorder.close().unwrap();
     }
 
     #[test]
