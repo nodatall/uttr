@@ -11,7 +11,6 @@ import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import {
   Activity,
   AudioLines,
-  CheckCircle2,
   Copy,
   FileText,
   History as HistoryIcon,
@@ -575,15 +574,17 @@ const HomeHeader: React.FC<HomeHeaderProps> = ({
             {recording ? (
               <MeetingAudioWave active={recording} statusLabel={statusLabel} />
             ) : (
-              <span
-                className={
-                  showElapsed
-                    ? "text-sm font-medium text-logo-primary"
-                    : "text-2xl font-semibold tracking-tight text-text"
-                }
-              >
-                {statusLabel}
-              </span>
+              !complete && (
+                <span
+                  className={
+                    showElapsed
+                      ? "text-sm font-medium text-logo-primary"
+                      : "text-2xl font-semibold tracking-tight text-text"
+                  }
+                >
+                  {statusLabel}
+                </span>
+              )
             )}
           </div>
         ) : isStarting ? (
@@ -743,21 +744,19 @@ const SessionSummaryPanel: React.FC<SessionSummaryPanelProps> = ({
       <section className="min-h-[320px] rounded-[20px] border border-white/7 bg-white/[0.025] p-6">
         {live || complete ? (
           <div className="flex h-full flex-col gap-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div className="flex items-center gap-2 text-xs uppercase tracking-[0.16em] text-text/35">
-                {complete ? (
-                  <CheckCircle2 className="h-4 w-4 text-logo-primary" />
-                ) : (
+            <div
+              className={`flex flex-wrap items-center gap-3 ${complete ? "justify-end" : "justify-between"}`}
+            >
+              {live && (
+                <div className="flex items-center gap-2 text-xs uppercase tracking-[0.16em] text-text/35">
                   <Activity className="h-4 w-4 text-logo-primary" />
-                )}
-                <span>
-                  {complete
-                    ? t("workspace.home.summary", { defaultValue: "Summary" })
-                    : t("workspace.home.liveSummary", {
-                        defaultValue: "Live summary",
-                      })}
-                </span>
-              </div>
+                  <span>
+                    {t("workspace.home.liveSummary", {
+                      defaultValue: "Live summary",
+                    })}
+                  </span>
+                </div>
+              )}
               {complete && hasRawTranscript && (
                 <Button
                   type="button"
@@ -1131,7 +1130,7 @@ export const HomeWorkspace: React.FC<HomeWorkspaceProps> = ({
   return (
     <div
       data-testid="home-workspace"
-      className="mx-auto flex w-full max-w-5xl flex-col gap-5"
+      className={`mx-auto flex w-full max-w-5xl flex-col gap-5 ${complete ? "-mt-[16px]" : ""}`}
     >
       <HomeHeader
         showingHistory={showingHistory}

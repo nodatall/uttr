@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Completed meeting header</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font:
+          15px/1.6 "Space Grotesk",
+          "Avenir Next",
+          sans-serif;
+        color: #e6edf3;
+        background: #0d1117;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 12px 36px 36px;
+      }
+      main {
+        max-width: 920px;
+        margin: 0 auto;
+      }
+      header {
+        display: flex;
+        min-height: 48px;
+        justify-content: flex-end;
+        align-items: center;
+        margin-bottom: 16px;
+      }
+      button {
+        border: 1px solid rgba(255, 255, 255, 0.1);
+        border-radius: 999px;
+        padding: 10px 18px;
+        background: #13251e;
+        color: #67d7a3;
+        font: inherit;
+      }
+      section {
+        min-height: 320px;
+        padding: 24px;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 20px;
+        background: rgba(255, 255, 255, 0.025);
+      }
+      h2 {
+        margin: 28px 0 12px;
+        font-size: 13px;
+        font-weight: 500;
+        letter-spacing: 0.16em;
+        color: rgba(230, 237, 243, 0.4);
+      }
+      p {
+        color: rgba(230, 237, 243, 0.75);
+      }
+    </style>
+  </head>
+  <body>
+    <main aria-label="Completed meeting workspace mockup">
+      <header><button type="button">▷ Start</button></header>
+      <section>
+        <h2>Current gist</h2>
+        <p>
+          The meeting summary starts directly below the controls, without a
+          status heading, summary label, or checkmark.
+        </p>
+      </section>
+    </main>
+  </body>
+</html>
