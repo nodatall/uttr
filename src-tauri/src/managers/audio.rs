@@ -16,6 +16,7 @@ use tauri::Manager;
 static FIRST_AUDIO_LEVEL_LOGGED: AtomicBool = AtomicBool::new(true);
 const MICROPHONE_RECOVERY_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const MICROPHONE_RECOVERY_RETRY_DELAY: Duration = Duration::from_secs(5);
+const MICROPHONE_DEVICE_CHECK_INTERVAL: Duration = Duration::from_secs(5);
 
 fn set_mute(mute: bool) {
     // Expected behavior:
@@ -225,13 +226,14 @@ impl AudioRecordingManager {
     pub fn start_recovery_monitor(self: &Arc<Self>) {
         let manager = Arc::downgrade(self);
         std::thread::spawn(move || {
+            let mut last_device_check = None;
             monitor_microphone_recovery(
                 || {
                     let manager = manager.upgrade()?;
                     if !manager.recovery_enabled.load(Ordering::Acquire) {
                         return None;
                     }
-                    Some(manager.recover_microphone_stream())
+                    Some(manager.recover_microphone_stream(&mut last_device_check))
                 },
                 MICROPHONE_RECOVERY_POLL_INTERVAL,
                 MICROPHONE_RECOVERY_RETRY_DELAY,
@@ -245,7 +247,10 @@ impl AudioRecordingManager {
         self.stop_microphone_stream_locked();
     }
 
-    fn recover_microphone_stream(&self) -> Result<(), anyhow::Error> {
+    fn recover_microphone_stream(
+        &self,
+        last_device_check: &mut Option<Instant>,
+    ) -> Result<(), anyhow::Error> {
         if release_smoke_audio_file().is_some() {
             return Ok(());
         }
@@ -255,13 +260,16 @@ impl AudioRecordingManager {
             &self.mode,
             &self.state,
             || {
-                !*self.is_open.lock().unwrap()
+                let stream_failed = !*self.is_open.lock().unwrap()
                     || self
                         .recorder
                         .lock()
                         .unwrap()
                         .as_ref()
-                        .is_none_or(AudioRecorder::has_stream_failed)
+                        .is_none_or(AudioRecorder::has_stream_failed);
+                stream_failed
+                    || (microphone_device_check_due(last_device_check, Instant::now())
+                        && self.should_restore_preferred_microphone())
             },
             || {
                 let started = Instant::now();
@@ -279,31 +287,63 @@ impl AudioRecordingManager {
 
     /* ---------- helper methods --------------------------------------------- */
 
-    fn get_effective_microphone_device(&self, settings: &AppSettings) -> Option<cpal::Device> {
+    fn get_effective_microphone_name<'a>(&self, settings: &'a AppSettings) -> Option<&'a str> {
         // Check if we're in clamshell mode and have a clamshell microphone configured
-        let use_clamshell_mic = if let Ok(is_clamshell) = clamshell::is_clamshell() {
-            is_clamshell && settings.clamshell_microphone.is_some()
-        } else {
-            false
-        };
+        let use_clamshell_mic =
+            settings.clamshell_microphone.is_some() && clamshell::is_clamshell().unwrap_or(false);
 
-        let device_name = if use_clamshell_mic {
-            settings.clamshell_microphone.as_ref().unwrap()
+        if use_clamshell_mic {
+            settings.clamshell_microphone.as_deref()
         } else {
-            settings.selected_microphone.as_ref()?
-        };
+            settings.selected_microphone.as_deref()
+        }
+    }
+
+    fn get_effective_microphone_device(&self, settings: &AppSettings) -> Option<cpal::Device> {
+        let device_name = self.get_effective_microphone_name(settings)?;
 
         // Find the device by name
         match list_input_devices() {
             Ok(devices) => devices
                 .into_iter()
-                .find(|d| d.name == *device_name)
+                .find(|d| d.name == device_name)
                 .map(|d| d.device),
             Err(e) => {
                 debug!("Failed to list devices, using default: {}", e);
                 None
             }
         }
+    }
+
+    fn should_restore_preferred_microphone(&self) -> bool {
+        if release_smoke_audio_file().is_some() {
+            return false;
+        }
+        let settings = get_settings(&self.app_handle);
+        let preferred_name = self.get_effective_microphone_name(&settings);
+        let active_name = self
+            .recorder
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|recorder| recorder.input_device_name().map(str::to_owned));
+
+        preferred_microphone_needs_restore(preferred_name, active_name.as_deref(), |name| {
+            match list_input_devices() {
+                Ok(devices) if devices.iter().any(|device| device.name == name) => {
+                    info!(
+                        "Preferred microphone '{}' is available again; replacing fallback input {:?}",
+                        name, active_name
+                    );
+                    true
+                }
+                Ok(_) => false,
+                Err(err) => {
+                    debug!("Failed to check preferred microphone availability: {err}");
+                    false
+                }
+            }
+        })
     }
 
     /* ---------- microphone life-cycle -------------------------------------- */
@@ -494,6 +534,16 @@ impl AudioRecordingManager {
             );
             false
         } else {
+            // A preferred microphone may have reconnected between monitor ticks.
+            // Restore it before recording begins, while the lifecycle is idle.
+            if self.should_restore_preferred_microphone() {
+                self.stop_microphone_stream_locked();
+                if let Err(e) = self.start_microphone_stream_locked() {
+                    error!("Failed to restore preferred microphone stream: {e}");
+                    return false;
+                }
+            }
+
             // Ensure microphone is open in on-demand mode
             if matches!(*self.mode.lock().unwrap(), MicrophoneMode::OnDemand) {
                 if let Err(e) = self.start_microphone_stream_locked() {
@@ -811,6 +861,25 @@ impl AudioRecordingManager {
     }
 }
 
+fn preferred_microphone_needs_restore(
+    preferred_name: Option<&str>,
+    active_name: Option<&str>,
+    is_available: impl FnOnce(&str) -> bool,
+) -> bool {
+    let Some(preferred_name) = preferred_name else {
+        return false;
+    };
+    active_name.is_some() && active_name != Some(preferred_name) && is_available(preferred_name)
+}
+
+fn microphone_device_check_due(last_check: &mut Option<Instant>, now: Instant) -> bool {
+    if last_check.is_some_and(|last| now.duration_since(last) < MICROPHONE_DEVICE_CHECK_INTERVAL) {
+        return false;
+    }
+    *last_check = Some(now);
+    true
+}
+
 fn recover_idle_always_on_microphone(
     lifecycle: &Mutex<()>,
     recovery_enabled: &AtomicBool,
@@ -879,15 +948,117 @@ fn pad_short_recording_samples(samples: Vec<f32>) -> Vec<f32> {
 #[cfg(test)]
 mod tests {
     use super::{
-        monitor_microphone_recovery, pad_short_recording_samples,
-        recover_idle_always_on_microphone, update_microphone_mode, MicrophoneMode, RecordingState,
+        microphone_device_check_due, monitor_microphone_recovery, pad_short_recording_samples,
+        preferred_microphone_needs_restore, recover_idle_always_on_microphone,
+        update_microphone_mode, MicrophoneMode, RecordingState, MICROPHONE_DEVICE_CHECK_INTERVAL,
         WHISPER_SAMPLE_RATE,
     };
     use std::sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc, Mutex,
     };
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn preferred_microphone_restoration_only_checks_a_different_active_input() {
+        for (preferred, active) in [
+            (None, Some("MacBook Pro Microphone")),
+            (Some("DJI MIC MINI"), None),
+            (Some("DJI MIC MINI"), Some("DJI MIC MINI")),
+        ] {
+            assert!(!preferred_microphone_needs_restore(
+                preferred,
+                active,
+                |_| {
+                    panic!("default, closed, and matching inputs do not need device enumeration")
+                }
+            ));
+        }
+
+        for available in [false, true] {
+            assert_eq!(
+                preferred_microphone_needs_restore(
+                    Some("DJI MIC MINI"),
+                    Some("MacBook Pro Microphone"),
+                    |name| {
+                        assert_eq!(name, "DJI MIC MINI");
+                        available
+                    },
+                ),
+                available,
+                "keep the fallback until the selected microphone is available"
+            );
+        }
+    }
+
+    #[test]
+    fn background_monitor_restores_reconnected_microphone_after_recording_ends() {
+        let lifecycle = Mutex::new(());
+        let enabled = AtomicBool::new(true);
+        let mode = Mutex::new(MicrophoneMode::AlwaysOn);
+        let state = Mutex::new(RecordingState::Idle);
+        let active_name = Mutex::new("MacBook Pro Microphone".to_string());
+        let available = AtomicBool::new(false);
+        let mut reopens = 0;
+        let mut ticks = 0;
+
+        monitor_microphone_recovery(
+            || {
+                ticks += 1;
+                match ticks {
+                    2 => {
+                        available.store(true, Ordering::Release);
+                        *state.lock().unwrap() = RecordingState::Recording {
+                            binding_id: "transcribe".to_string(),
+                        };
+                    }
+                    3 => *state.lock().unwrap() = RecordingState::Idle,
+                    5 => return None,
+                    _ => {}
+                }
+                Some(recover_idle_always_on_microphone(
+                    &lifecycle,
+                    &enabled,
+                    &mode,
+                    &state,
+                    || {
+                        preferred_microphone_needs_restore(
+                            Some("DJI MIC MINI"),
+                            Some(active_name.lock().unwrap().as_str()),
+                            |_| available.load(Ordering::Acquire),
+                        )
+                    },
+                    || {
+                        assert_eq!(ticks, 3, "never replace an active recording");
+                        reopens += 1;
+                        *active_name.lock().unwrap() = "DJI MIC MINI".to_string();
+                        Ok(())
+                    },
+                ))
+            },
+            Duration::ZERO,
+            Duration::ZERO,
+        );
+
+        assert_eq!(reopens, 1, "the restored input must not reopen again");
+        assert_eq!(active_name.lock().unwrap().as_str(), "DJI MIC MINI");
+    }
+
+    #[test]
+    fn microphone_device_enumeration_is_throttled_independently_of_health_checks() {
+        let now = Instant::now();
+        let mut last_check = None;
+        assert!(microphone_device_check_due(&mut last_check, now));
+        assert!(!microphone_device_check_due(
+            &mut last_check,
+            now + MICROPHONE_DEVICE_CHECK_INTERVAL - Duration::from_millis(1),
+        ));
+        assert_eq!(last_check, Some(now));
+        assert!(microphone_device_check_due(
+            &mut last_check,
+            now + MICROPHONE_DEVICE_CHECK_INTERVAL,
+        ));
+    }
 
     #[test]
     fn background_monitor_recovers_and_retries_without_a_recording_action() {

@@ -152,6 +152,7 @@ fn resample_samples(
 
 pub struct AudioRecorder {
     device: Option<Device>,
+    input_device_name: Option<String>,
     cmd_tx: Option<mpsc::Sender<Cmd>>,
     worker_handle: Option<std::thread::JoinHandle<()>>,
     stream_failed: Arc<AtomicBool>,
@@ -163,6 +164,7 @@ impl AudioRecorder {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         Ok(AudioRecorder {
             device: None,
+            input_device_name: None,
             cmd_tx: None,
             worker_handle: None,
             stream_failed: Arc::new(AtomicBool::new(false)),
@@ -207,6 +209,7 @@ impl AudioRecorder {
                 .ok_or_else(|| Error::new(std::io::ErrorKind::NotFound, "No input device found"))?,
         };
 
+        let input_device_name = device.name().ok();
         let thread_device = device.clone();
         let vad = self.vad.clone();
         // Move the optional level callback into the worker thread
@@ -367,10 +370,17 @@ impl AudioRecorder {
         }
 
         self.device = Some(device);
+        self.input_device_name = input_device_name;
         self.cmd_tx = Some(cmd_tx);
         self.worker_handle = Some(worker);
 
         Ok(())
+    }
+
+    /// The device actually opened, which can differ from the saved selection
+    /// when that microphone was temporarily unavailable.
+    pub fn input_device_name(&self) -> Option<&str> {
+        self.input_device_name.as_deref()
     }
 
     pub fn has_stream_failed(&self) -> bool {
@@ -455,6 +465,7 @@ impl AudioRecorder {
             let _ = h.join();
         }
         self.device = None;
+        self.input_device_name = None;
         Ok(())
     }
 
