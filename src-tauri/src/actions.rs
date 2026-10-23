@@ -16,7 +16,9 @@ use crate::managers::full_system_audio::{
 };
 use crate::managers::history::HistoryManager;
 use crate::managers::model::is_cloud_model_id;
-use crate::managers::transcription::TranscriptionManager;
+use crate::managers::transcription::{
+    DictationRequestContext, DictationTranscription, TranscriptionManager,
+};
 use crate::settings::{
     get_settings, normalize_custom_vocabulary_terms, write_settings, AppSettings,
     CleaningPromptPreset, PostProcessProvider, APPLE_INTELLIGENCE_PROVIDER_ID,
@@ -484,6 +486,15 @@ impl Drop for CompletionGuard {
 // Shortcut Action Trait
 pub trait ShortcutAction: Send + Sync {
     fn start(&self, app: &AppHandle, binding_id: &str, shortcut_str: &str);
+    fn start_with_operation(
+        &self,
+        app: &AppHandle,
+        binding_id: &str,
+        shortcut_str: &str,
+        _operation_id: OperationId,
+    ) {
+        self.start(app, binding_id, shortcut_str);
+    }
     fn stop(
         &self,
         app: &AppHandle,
@@ -1146,8 +1157,19 @@ async fn transcribe_full_pass_with_timeout(
     samples: Vec<f32>,
     source: Option<&str>,
     timeout_duration: Duration,
-) -> Result<String, anyhow::Error> {
-    match timeout(timeout_duration, tm.transcribe_with_source(samples, source)).await {
+    dictation: Option<&DictationRequestContext>,
+) -> Result<DictationTranscription, anyhow::Error> {
+    let transcribe = async {
+        if let Some(context) = dictation {
+            tm.transcribe_dictation_with_source(samples, source, context)
+                .await
+        } else {
+            tm.transcribe_with_source(samples, source)
+                .await
+                .map(DictationTranscription::Text)
+        }
+    };
+    match timeout(timeout_duration, transcribe).await {
         Ok(result) => result,
         Err(_) => Err(anyhow::anyhow!(
             "Transcription timed out after {}s",
@@ -1414,9 +1436,11 @@ pub fn cancel_meeting_quick_dictation_recording(
         return;
     }
     if let Some(manager) = app.try_state::<Arc<AudioRecordingManager>>() {
+        manager.cancel_dictation_analysis(quick_binding_id, operation_id);
         let _ = manager.finish_borrowed_recording_and_restore(quick_binding_id, meeting_binding_id);
     }
     if let Some(manager) = app.try_state::<Arc<TranscriptionManager>>() {
+        manager.cancel_dictation_context(quick_binding_id, operation_id);
         manager.cancel_incremental_session();
     }
     clear_active_quick_dictation_ui_operation(operation_id);
@@ -1462,9 +1486,11 @@ pub fn cancel_standalone_dictation_recording_operation(
     }
     cancel_ask_selection_operation(app, operation_id);
     if let Some(manager) = app.try_state::<Arc<AudioRecordingManager>>() {
+        manager.cancel_dictation_analysis(binding_id, operation_id);
         manager.cancel_recording();
     }
     if let Some(manager) = app.try_state::<Arc<TranscriptionManager>>() {
+        manager.cancel_dictation_context(binding_id, operation_id);
         manager.cancel_incremental_session();
     }
     clear_active_quick_dictation_ui_operation(operation_id);
@@ -1483,6 +1509,13 @@ pub fn cancel_standalone_dictation_processing_operation(
         return;
     }
     cancel_ask_selection_operation(app, operation_id);
+    if let Some(manager) = app.try_state::<Arc<AudioRecordingManager>>() {
+        manager.cancel_dictation_analysis("transcribe", operation_id);
+    }
+    if let Some(manager) = app.try_state::<Arc<TranscriptionManager>>() {
+        manager.cancel_dictation_context("transcribe", operation_id);
+        manager.cancel_dictation_incremental_session("transcribe", operation_id);
+    }
     clear_active_quick_dictation_ui_operation(operation_id);
     shortcut::unregister_cancel_shortcut(app);
     utils::hide_recording_overlay(app);
@@ -1628,6 +1661,13 @@ pub fn cancel_meeting_quick_dictation_operation(app: &AppHandle, operation_id: O
         return;
     }
     MEETING_QUICK_DICTATION_CANCEL_GENERATION.fetch_add(1, Ordering::Relaxed);
+    if let Some(manager) = app.try_state::<Arc<AudioRecordingManager>>() {
+        manager.cancel_dictation_analysis("transcribe", operation_id);
+    }
+    if let Some(manager) = app.try_state::<Arc<TranscriptionManager>>() {
+        manager.cancel_dictation_context("transcribe", operation_id);
+        manager.cancel_dictation_incremental_session("transcribe", operation_id);
+    }
     clear_active_quick_dictation_ui_operation(operation_id);
     restore_meeting_after_quick_dictation_cancel(app);
 }
@@ -3910,6 +3950,19 @@ fn mixed_samples_from_source_samples(
     }
 }
 
+fn cancel_incremental_for_completion(
+    tm: &TranscriptionManager,
+    binding_id: &str,
+    operation_id: OperationId,
+    completion_mode: TranscriptionCompletionMode,
+) {
+    if completion_mode == TranscriptionCompletionMode::Standard {
+        tm.cancel_dictation_incremental_session(binding_id, operation_id);
+    } else {
+        tm.cancel_incremental_session();
+    }
+}
+
 fn handle_transcription_stop(
     app: &AppHandle,
     binding_id: &str,
@@ -3931,6 +3984,8 @@ fn handle_transcription_stop(
         recording_duration.unwrap_or_default().as_millis()
     );
 
+    let dictation_context = (completion_mode == TranscriptionCompletionMode::Standard)
+        .then(|| tm.dictation_context(binding_id, operation_id));
     let mut context_snapshot = take_active_context(
         binding_id,
         completion_mode == TranscriptionCompletionMode::EditMode,
@@ -4006,6 +4061,23 @@ fn handle_transcription_stop(
         );
         let transcription_timeout = transcription_timeout_for_samples(samples.len());
 
+        if dictation_context
+            .as_ref()
+            .is_some_and(|context| context.reject_whole_recording(samples.len()))
+        {
+            cancel_incremental_for_completion(
+                &tm_for_worker,
+                &binding_id,
+                operation_id,
+                completion_mode,
+            );
+            complete_transcription_ui_if_active(completion_mode, operation_id, || {
+                restore_ui_after_transcription(&ah, &completion_context);
+            });
+            ui_guard.suppress();
+            return;
+        }
+
         if samples.is_empty() {
             if completion_mode == TranscriptionCompletionMode::EditMode {
                 show_new_ask_selection_error_if_active(
@@ -4061,8 +4133,12 @@ fn handle_transcription_stop(
 
         let transcription_time = Instant::now();
         let samples_clone = samples.clone();
-        let has_incremental_progress =
-            use_incremental && tm_for_worker.has_incremental_progress(&binding_id);
+        let has_incremental_progress = use_incremental
+            && if completion_mode == TranscriptionCompletionMode::Standard {
+                tm_for_worker.has_dictation_incremental_progress(&binding_id, operation_id)
+            } else {
+                tm_for_worker.has_incremental_progress(&binding_id)
+            };
         if completion_mode == TranscriptionCompletionMode::FullSystemOverlay {
             emit_session_window_state(
                 &ah,
@@ -4097,35 +4173,52 @@ fn handle_transcription_stop(
             && has_incremental_progress
         {
             debug!("Finishing incremental transcription with manager-bounded finalization");
-            match tm_for_worker
-                .finish_incremental_session(&binding_id, &samples)
-                .await
-            {
+            let incremental_result = if completion_mode == TranscriptionCompletionMode::Standard {
+                tm_for_worker
+                    .finish_dictation_incremental_session(&binding_id, operation_id, &samples)
+                    .await
+            } else {
+                tm_for_worker
+                    .finish_incremental_session(&binding_id, &samples)
+                    .await
+            };
+            match incremental_result {
                 Ok(text) => {
                     debug!(
                         "Incremental transcription finalized in {:?}",
                         transcription_time.elapsed()
                     );
-                    Ok(text)
+                    Ok(DictationTranscription::Text(text))
                 }
                 Err(incremental_err) => {
                     warn!(
                         "Incremental path unavailable, falling back to full-pass transcription: {}",
                         incremental_err
                     );
-                    tm_for_worker.cancel_incremental_session();
+                    cancel_incremental_for_completion(
+                        &tm_for_worker,
+                        &binding_id,
+                        operation_id,
+                        completion_mode,
+                    );
                     transcribe_full_pass_with_timeout(
                         &tm_for_worker,
                         samples,
                         transcription_source_for_binding(&binding_id),
                         transcription_timeout,
+                        dictation_context.as_ref(),
                     )
                     .await
                 }
             }
         } else if samples.len() < SHORT_UTTERANCE_SAMPLES {
             if use_incremental {
-                tm_for_worker.cancel_incremental_session();
+                cancel_incremental_for_completion(
+                    &tm_for_worker,
+                    &binding_id,
+                    operation_id,
+                    completion_mode,
+                );
             }
             debug!(
                 "Using short-utterance fast path ({} samples)",
@@ -4136,6 +4229,7 @@ fn handle_transcription_stop(
                 samples,
                 transcription_source_for_binding(&binding_id),
                 transcription_timeout,
+                dictation_context.as_ref(),
             )
             .await
         } else {
@@ -4144,18 +4238,31 @@ fn handle_transcription_stop(
                     "Skipping incremental finalization because no chunk completed for binding '{}'",
                     binding_id
                 );
-                tm_for_worker.cancel_incremental_session();
+                cancel_incremental_for_completion(
+                    &tm_for_worker,
+                    &binding_id,
+                    operation_id,
+                    completion_mode,
+                );
             }
             transcribe_full_pass_with_timeout(
                 &tm_for_worker,
                 samples,
                 transcription_source_for_binding(&binding_id),
                 transcription_timeout,
+                dictation_context.as_ref(),
             )
             .await
         };
         match transcription_result {
-            Ok(transcription) => {
+            Ok(DictationTranscription::NoSpeech) => {
+                complete_transcription_ui_if_active(completion_mode, operation_id, || {
+                    restore_ui_after_transcription(&ah, &completion_context);
+                });
+                ui_guard.suppress();
+                return;
+            }
+            Ok(DictationTranscription::Text(transcription)) => {
                 if dictation_output_was_cancelled(
                     operation_id,
                     &completion_context,
@@ -4760,8 +4867,13 @@ fn handle_transcription_stop(
     }
 }
 
-impl ShortcutAction for TranscribeAction {
-    fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
+impl TranscribeAction {
+    fn start_recording(
+        &self,
+        app: &AppHandle,
+        binding_id: &str,
+        operation_id: Option<OperationId>,
+    ) {
         let start_time = Instant::now();
         utils::cancel_pending_overlay_transitions();
 
@@ -4812,6 +4924,18 @@ impl ShortcutAction for TranscribeAction {
 
         let binding_id = binding_id.to_string();
         let rm = app.state::<Arc<AudioRecordingManager>>();
+        let dictation_context = if self.completion_mode == TranscriptionCompletionMode::Standard {
+            let analysis = operation_id
+                .map(|operation_id| rm.begin_dictation_analysis(&binding_id, operation_id));
+            let context =
+                DictationRequestContext::new(&binding_id, operation_id.unwrap_or(0), analysis);
+            // Legacy direct starts have explicit dictation policy but no trusted
+            // operation evidence; replacing the context invalidates older analysis.
+            tm.begin_dictation_context(context.clone());
+            Some(context)
+        } else {
+            None
+        };
         let meeting_microphone_binding =
             meeting_microphone_binding_for_quick_dictation(app, &binding_id);
 
@@ -4943,6 +5067,12 @@ impl ShortcutAction for TranscribeAction {
             );
         }
 
+        if !recording_started {
+            if let Some(operation_id) = operation_id {
+                rm.cancel_dictation_analysis(&binding_id, operation_id);
+                tm.cancel_dictation_context(&binding_id, operation_id);
+            }
+        }
         tm.cancel_incremental_session();
         start_transcription_session(app, &binding_id, recording_started);
         let preload_model_id = if settings.selected_model.is_empty() {
@@ -4961,7 +5091,12 @@ impl ShortcutAction for TranscribeAction {
             );
         }
         if recording_started && use_incremental {
-            if let Err(e) = tm.start_incremental_session(&binding_id, Arc::clone(&rm)) {
+            let result = if let Some(context) = dictation_context {
+                tm.start_dictation_incremental_session(&binding_id, Arc::clone(&rm), context)
+            } else {
+                tm.start_incremental_session(&binding_id, Arc::clone(&rm))
+            };
+            if let Err(e) = result {
                 warn!("Failed to start incremental transcription session: {}", e);
             }
         }
@@ -4976,6 +5111,22 @@ impl ShortcutAction for TranscribeAction {
             recording_started,
             start_time.elapsed().as_millis()
         );
+    }
+}
+
+impl ShortcutAction for TranscribeAction {
+    fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
+        self.start_recording(app, binding_id, None);
+    }
+
+    fn start_with_operation(
+        &self,
+        app: &AppHandle,
+        binding_id: &str,
+        _shortcut_str: &str,
+        operation_id: OperationId,
+    ) {
+        self.start_recording(app, binding_id, Some(operation_id));
     }
 
     fn stop(
@@ -5025,7 +5176,11 @@ impl ShortcutAction for TranscribeAction {
             spawn_deferred_overlay_state(app, DeferredOverlayState::Transcribing);
         }
         if use_incremental {
-            tm.signal_incremental_stop(binding_id);
+            if self.completion_mode == TranscriptionCompletionMode::Standard {
+                tm.signal_dictation_incremental_stop(binding_id, operation_id);
+            } else {
+                tm.signal_incremental_stop(binding_id);
+            }
         }
         let recording_duration = rm.current_recording_duration(binding_id);
         let active_meeting_binding = active_meeting_binding_for_quick_dictation(app, binding_id);

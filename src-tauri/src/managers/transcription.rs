@@ -1,6 +1,7 @@
 use crate::access::{bootstrap_install_state, refresh_entitlement_state, request_claim_token};
 use crate::audio_toolkit::{
-    apply_custom_words, filter_transcription_output, trim_proxy_upload_audio,
+    apply_custom_words, filter_transcription_output, trim_proxy_upload_audio, DictationAnalysis,
+    SpeechEvidence,
 };
 use crate::diagnostics::{report_byok_transcription_failure, report_missing_byok_api_key};
 use crate::groq_client::{self, DirectTranscriptionProvider};
@@ -15,6 +16,7 @@ use crate::settings::{
 use anyhow::Result;
 use log::{debug, error, info, warn};
 use serde::Serialize;
+use std::ops::Range;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -79,6 +81,130 @@ const QUIET_AUDIO_MIN_GAIN: f32 = 1.15;
 const MIN_INCREMENTAL_FINALIZATION_CHUNKS: u64 = 2;
 const MIN_ONE_CHUNK_INCREMENTAL_FINALIZATION_SAMPLES: usize = SAMPLE_RATE * 15;
 
+// Calibrated and activated together with dictation phrase-filter retirement.
+// None collects content-free evidence without rejecting audio during calibration.
+const DICTATION_NO_SPEECH_CUTOFF: Option<f32> = None;
+
+pub(crate) enum DictationTranscription {
+    Text(String),
+    NoSpeech,
+}
+
+/// Explicit microphone-dictation identity, even when analysis is unavailable.
+#[derive(Clone)]
+pub(crate) struct DictationRequestContext {
+    binding_id: String,
+    operation_id: u64,
+    analysis: Option<DictationAnalysis>,
+    rejected: Arc<Mutex<Vec<Range<usize>>>>,
+}
+
+impl DictationRequestContext {
+    pub(crate) fn new(
+        binding_id: &str,
+        operation_id: u64,
+        analysis: Option<DictationAnalysis>,
+    ) -> Self {
+        Self {
+            binding_id: binding_id.to_string(),
+            operation_id,
+            analysis: analysis.filter(|analysis| analysis.matches(binding_id, operation_id)),
+            rejected: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn matches(&self, binding_id: &str, operation_id: u64) -> bool {
+        self.binding_id == binding_id && self.operation_id == operation_id
+    }
+
+    fn reject_evidence(
+        &self,
+        evidence: SpeechEvidence,
+        range: Range<usize>,
+        boundary: &str,
+    ) -> bool {
+        let max_score = match evidence {
+            SpeechEvidence::Complete { max_score } if max_score.is_finite() => Some(max_score),
+            _ => None,
+        };
+        let reject = DICTATION_NO_SPEECH_CUTOFF
+            .zip(max_score)
+            .is_some_and(|(cutoff, score)| score < cutoff);
+        info!(
+            "Dictation speech gate operation={} boundary={} start={} end={} max_score={:?} enabled={} rejected={}",
+            self.operation_id, boundary, range.start, range.end, max_score,
+            DICTATION_NO_SPEECH_CUTOFF.is_some(), reject
+        );
+        if reject {
+            let mut rejected = self.rejected.lock().unwrap();
+            rejected.push(range);
+            rejected.sort_unstable_by_key(|range| range.start);
+            let mut merged: Vec<Range<usize>> = Vec::with_capacity(rejected.len());
+            for range in rejected.drain(..) {
+                if let Some(last) = merged.last_mut().filter(|last| last.end >= range.start) {
+                    last.end = last.end.max(range.end);
+                } else {
+                    merged.push(range);
+                }
+            }
+            *rejected = merged;
+        }
+        reject
+    }
+
+    pub(crate) fn reject_whole_recording(&self, sample_count: usize) -> bool {
+        let evidence = self
+            .analysis
+            .as_ref()
+            .map(DictationAnalysis::whole_recording_evidence)
+            .unwrap_or(SpeechEvidence::Unknown);
+        self.reject_evidence(evidence, 0..sample_count, "whole")
+    }
+
+    /// Remove known-rejected ranges without mutating retained capture audio.
+    fn request_audio(&self, audio: Vec<f32>, range: Range<usize>) -> Option<Vec<f32>> {
+        if range.start > range.end || range.len() != audio.len() {
+            warn!("Dictation speech gate operation={} reason=range_mismatch start={} end={} samples={}",
+                self.operation_id, range.start, range.end, audio.len());
+            return Some(audio);
+        }
+        let evidence = self
+            .analysis
+            .as_ref()
+            .map(|analysis| analysis.evidence(range.clone()))
+            .unwrap_or(SpeechEvidence::Unknown);
+        if self.reject_evidence(evidence, range.clone(), "request") {
+            return None;
+        }
+        let rejected = self.rejected.lock().unwrap();
+        if rejected.is_empty() {
+            return Some(audio);
+        }
+        let mut cursor = range.start;
+        let mut kept = Vec::with_capacity(audio.len());
+        for skip in rejected
+            .iter()
+            .filter(|skip| skip.end > range.start && skip.start < range.end)
+        {
+            let end = skip.start.min(range.end).max(cursor);
+            kept.extend_from_slice(&audio[cursor - range.start..end - range.start]);
+            cursor = cursor.max(skip.end.min(range.end));
+        }
+        kept.extend_from_slice(&audio[cursor - range.start..]);
+        if kept.is_empty() {
+            None
+        } else {
+            Some(kept)
+        }
+    }
+
+    fn invalidate(&self) {
+        if let Some(analysis) = &self.analysis {
+            analysis.invalidate();
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CloudTranscriptionRoute {
     DirectGroq,
@@ -99,10 +225,11 @@ struct IncrementalRuntime {
     next_chunk_start: AtomicUsize,
     chunk_count: AtomicU64,
     assembled_raw: Mutex<String>,
+    dictation: Option<DictationRequestContext>,
 }
 
 impl IncrementalRuntime {
-    fn new() -> Self {
+    fn with_dictation(dictation: Option<DictationRequestContext>) -> Self {
         Self {
             stop_requested: AtomicBool::new(false),
             failed: AtomicBool::new(false),
@@ -110,6 +237,7 @@ impl IncrementalRuntime {
             next_chunk_start: AtomicUsize::new(0),
             chunk_count: AtomicU64::new(0),
             assembled_raw: Mutex::new(String::new()),
+            dictation,
         }
     }
 }
@@ -487,6 +615,7 @@ pub struct TranscriptionManager {
     is_loading: Arc<Mutex<bool>>,
     loading_condvar: Arc<Condvar>,
     incremental_session: Arc<Mutex<Option<IncrementalSession>>>,
+    dictation_context: Arc<Mutex<Option<DictationRequestContext>>>,
     cancel_requested: Arc<AtomicBool>,
     cancel_generation: Arc<AtomicU64>,
 }
@@ -509,6 +638,7 @@ impl TranscriptionManager {
             is_loading: Arc::new(Mutex::new(false)),
             loading_condvar: Arc::new(Condvar::new()),
             incremental_session: Arc::new(Mutex::new(None)),
+            dictation_context: Arc::new(Mutex::new(None)),
             cancel_requested: Arc::new(AtomicBool::new(false)),
             cancel_generation: Arc::new(AtomicU64::new(0)),
         };
@@ -1875,10 +2005,60 @@ impl TranscriptionManager {
         current_model.clone()
     }
 
+    pub(crate) fn begin_dictation_context(&self, context: DictationRequestContext) {
+        if let Some(previous) = self.dictation_context.lock().unwrap().replace(context) {
+            previous.invalidate();
+        }
+    }
+
+    pub(crate) fn dictation_context(
+        &self,
+        binding_id: &str,
+        operation_id: u64,
+    ) -> DictationRequestContext {
+        self.dictation_context
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|context| context.matches(binding_id, operation_id))
+            .cloned()
+            .unwrap_or_else(|| DictationRequestContext::new(binding_id, operation_id, None))
+    }
+
+    pub(crate) fn cancel_dictation_context(&self, binding_id: &str, operation_id: u64) {
+        let mut current = self.dictation_context.lock().unwrap();
+        if current
+            .as_ref()
+            .is_some_and(|context| context.matches(binding_id, operation_id))
+        {
+            if let Some(context) = current.take() {
+                context.invalidate();
+            }
+        }
+    }
+
+    pub(crate) fn start_dictation_incremental_session(
+        &self,
+        binding_id: &str,
+        audio_manager: Arc<AudioRecordingManager>,
+        context: DictationRequestContext,
+    ) -> Result<()> {
+        self.start_incremental_session_inner(binding_id, audio_manager, Some(context))
+    }
+
     pub fn start_incremental_session(
         &self,
         binding_id: &str,
         audio_manager: Arc<AudioRecordingManager>,
+    ) -> Result<()> {
+        self.start_incremental_session_inner(binding_id, audio_manager, None)
+    }
+
+    fn start_incremental_session_inner(
+        &self,
+        binding_id: &str,
+        audio_manager: Arc<AudioRecordingManager>,
+        dictation: Option<DictationRequestContext>,
     ) -> Result<()> {
         self.clear_cancel_request();
 
@@ -1908,7 +2088,7 @@ impl TranscriptionManager {
             return Ok(());
         }
 
-        let runtime = Arc::new(IncrementalRuntime::new());
+        let runtime = Arc::new(IncrementalRuntime::with_dictation(dictation));
         let binding = binding_id.to_string();
         let manager_clone = self.clone();
         let runtime_clone = runtime.clone();
@@ -1987,6 +2167,19 @@ impl TranscriptionManager {
                 let chunk_end = next_start + CHUNK_SAMPLES;
                 let chunk_start = next_start.saturating_sub(CHUNK_OVERLAP_SAMPLES);
                 let chunk_samples = speech_buffer[chunk_start..chunk_end].to_vec();
+                let chunk_samples = if let Some(context) = &runtime.dictation {
+                    let Some(samples) =
+                        context.request_audio(chunk_samples, chunk_start..chunk_end)
+                    else {
+                        runtime.next_chunk_start.store(chunk_end, Ordering::Relaxed);
+                        saw_pause = false;
+                        made_progress = true;
+                        continue 'chunking;
+                    };
+                    samples
+                } else {
+                    chunk_samples
+                };
 
                 runtime.in_flight.store(true, Ordering::Relaxed);
                 let chunk_st = Instant::now();
@@ -2090,16 +2283,44 @@ impl TranscriptionManager {
         binding_id: &str,
         full_samples: &[f32],
     ) -> Result<String> {
+        self.finish_incremental_session_inner(binding_id, full_samples, None)
+            .await
+    }
+
+    pub(crate) async fn finish_dictation_incremental_session(
+        &self,
+        binding_id: &str,
+        operation_id: u64,
+        full_samples: &[f32],
+    ) -> Result<String> {
+        self.finish_incremental_session_inner(binding_id, full_samples, Some(operation_id))
+            .await
+    }
+
+    async fn finish_incremental_session_inner(
+        &self,
+        binding_id: &str,
+        full_samples: &[f32],
+        operation_id: Option<u64>,
+    ) -> Result<String> {
         let session = {
             let mut guard = self.incremental_session.lock().unwrap();
             let Some(session) = guard.take() else {
                 return Err(anyhow::anyhow!("No active incremental session"));
             };
 
-            if session.binding_id != binding_id {
+            if session.binding_id != binding_id
+                || operation_id.is_some_and(|operation_id| {
+                    !session
+                        .runtime
+                        .dictation
+                        .as_ref()
+                        .is_some_and(|context| context.matches(binding_id, operation_id))
+                })
+            {
                 *guard = Some(session);
                 return Err(anyhow::anyhow!(
-                    "Active incremental session belongs to a different binding"
+                    "Active incremental session belongs to a different operation"
                 ));
             }
             session
@@ -2183,6 +2404,16 @@ impl TranscriptionManager {
             full_samples[tail_start..].to_vec()
         } else {
             Vec::new()
+        };
+        let tail_audio = if let Some(context) = &session.runtime.dictation {
+            context
+                .request_audio(
+                    tail_audio,
+                    tail_start.min(full_samples.len())..full_samples.len(),
+                )
+                .unwrap_or_default()
+        } else {
+            tail_audio
         };
         let tail_sample_count = tail_audio.len();
         info!(
@@ -2309,6 +2540,58 @@ impl TranscriptionManager {
         Ok(final_result)
     }
 
+    pub(crate) fn signal_dictation_incremental_stop(&self, binding_id: &str, operation_id: u64) {
+        let guard = self.incremental_session.lock().unwrap();
+        if let Some(session) = guard.as_ref().filter(|session| {
+            session
+                .runtime
+                .dictation
+                .as_ref()
+                .is_some_and(|context| context.matches(binding_id, operation_id))
+        }) {
+            session
+                .runtime
+                .stop_requested
+                .store(true, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn has_dictation_incremental_progress(
+        &self,
+        binding_id: &str,
+        operation_id: u64,
+    ) -> bool {
+        let guard = self.incremental_session.lock().unwrap();
+        guard.as_ref().is_some_and(|session| {
+            session
+                .runtime
+                .dictation
+                .as_ref()
+                .is_some_and(|context| context.matches(binding_id, operation_id))
+                && (session.runtime.chunk_count.load(Ordering::Relaxed) > 0
+                    || session.runtime.next_chunk_start.load(Ordering::Relaxed) > 0)
+        })
+    }
+
+    pub(crate) fn cancel_dictation_incremental_session(&self, binding_id: &str, operation_id: u64) {
+        let mut guard = self.incremental_session.lock().unwrap();
+        if guard.as_ref().is_some_and(|session| {
+            session
+                .runtime
+                .dictation
+                .as_ref()
+                .is_some_and(|context| context.matches(binding_id, operation_id))
+        }) {
+            if let Some(session) = guard.take() {
+                session
+                    .runtime
+                    .stop_requested
+                    .store(true, Ordering::Relaxed);
+                session.worker_handle.abort();
+            }
+        }
+    }
+
     pub fn signal_incremental_stop(&self, binding_id: &str) {
         let guard = self.incremental_session.lock().unwrap();
         if let Some(session) = guard.as_ref() {
@@ -2350,6 +2633,9 @@ impl TranscriptionManager {
     pub fn request_cancel(&self) {
         self.cancel_generation.fetch_add(1, Ordering::Relaxed);
         self.cancel_requested.store(true, Ordering::Relaxed);
+        if let Some(context) = self.dictation_context.lock().unwrap().take() {
+            context.invalidate();
+        }
         self.cancel_incremental_session();
     }
 
@@ -2369,6 +2655,34 @@ impl TranscriptionManager {
         &self,
         audio: Vec<f32>,
         source: Option<&str>,
+    ) -> Result<String> {
+        self.transcribe_with_source_policy(audio, source, false)
+            .await
+    }
+
+    pub(crate) async fn transcribe_dictation_with_source(
+        &self,
+        audio: Vec<f32>,
+        source: Option<&str>,
+        context: &DictationRequestContext,
+    ) -> Result<DictationTranscription> {
+        if context.reject_whole_recording(audio.len()) {
+            return Ok(DictationTranscription::NoSpeech);
+        }
+        let sample_count = audio.len();
+        let Some(audio) = context.request_audio(audio, 0..sample_count) else {
+            return Ok(DictationTranscription::NoSpeech);
+        };
+        self.transcribe_with_source_policy(audio, source, DICTATION_NO_SPEECH_CUTOFF.is_some())
+            .await
+            .map(DictationTranscription::Text)
+    }
+
+    async fn transcribe_with_source_policy(
+        &self,
+        audio: Vec<f32>,
+        source: Option<&str>,
+        retire_phrase_filter: bool,
     ) -> Result<String> {
         self.update_last_activity();
 
@@ -2401,11 +2715,14 @@ impl TranscriptionManager {
             )
             .await?;
         let mut filtered_result = self.apply_transcription_filters(raw_transcription, &settings);
-        if should_suppress_silence_hallucination(levels, &filtered_result) {
-            info!(
-                "Suppressing likely silence hallucination for near-silent audio: {}",
-                filtered_result
-            );
+        let suppress = if retire_phrase_filter {
+            is_punctuation_only_transcription(&filtered_result)
+                && levels.is_some_and(is_near_silent_punctuation_candidate)
+        } else {
+            should_suppress_silence_hallucination(levels, &filtered_result)
+        };
+        if suppress {
+            info!("Suppressing likely silence hallucination for near-silent audio");
             filtered_result.clear();
         }
 

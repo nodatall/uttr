@@ -990,7 +990,7 @@ fn start(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &s
         warn!("No action in ACTION_MAP for '{binding_id}'");
         return;
     };
-    action.start(app, binding_id, hotkey_string);
+    action.start_with_operation(app, binding_id, hotkey_string, operation.id);
     let audio_recording_active = app
         .try_state::<Arc<AudioRecordingManager>>()
         .map_or(false, |a| a.is_recording());
@@ -1054,7 +1054,7 @@ fn start_legacy_meeting_processing_dictation(
         warn!("No action in ACTION_MAP for '{binding_id}'");
         return;
     };
-    action.start(app, binding_id, hotkey_string);
+    action.start_with_operation(app, binding_id, hotkey_string, operation.id);
 
     let audio_recording_active = app
         .try_state::<Arc<AudioRecordingManager>>()
@@ -1217,7 +1217,7 @@ fn start_meeting_quick_dictation(
         return;
     };
     crate::actions::set_active_quick_dictation_ui_operation(operation.id);
-    action.start(app, binding_id, hotkey_string);
+    action.start_with_operation(app, binding_id, hotkey_string, operation.id);
 
     let audio_recording_active = app
         .try_state::<Arc<AudioRecordingManager>>()
@@ -1250,7 +1250,7 @@ fn start_stopping_meeting_dictation(
         warn!("No action in ACTION_MAP for '{binding_id}'");
         return;
     };
-    action.start(app, binding_id, hotkey_string);
+    action.start_with_operation(app, binding_id, hotkey_string, operation.id);
 
     let audio_recording_active = app
         .try_state::<Arc<AudioRecordingManager>>()
