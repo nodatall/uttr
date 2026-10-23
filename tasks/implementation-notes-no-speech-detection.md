@@ -80,3 +80,25 @@ The independent observer runs on a bounded worker queue, loads the existing mode
 Both baseline and candidate are run directly by Codex from repository-built app bundles, as requested. The unchanged baseline app signature verified and the user completed the requested quiet replies, leading silence, and silent taps on DJI MIC MINI. Baseline content-free timing is retained locally in `agent-scratch/no-speech-baseline-timing.log`; silent taps of 116, 127, and 140 ms still issued ASR requests. A candidate is running with content-free diagnostics in `agent-scratch/no-speech-candidate-calibration.log`. Human calibration, held-out acceptance, activation, and final review remain pending.
 
 Debug app bundling initially failed only at updater-archive signing after building and signing the app. Bundling with the command-only override `--config '{"bundle":{"createUpdaterArtifacts":false}}'` succeeded; no tracked signing or bundle configuration changed.
+
+### DJI calibration, 2026-10-23 16:47 Pacific
+
+The user confirmed the requested sequence worked except the last silent quick tap pasted “thank you.” Rejection was disabled throughout. The nine consecutive labeled operations are from the candidate launched at 16:46 Pacific; later unrelated dictation is excluded. Content-free diagnostics are saved locally in `agent-scratch/no-speech-dji-calibration.log`.
+
+| Operation | Intended control | Maximum raw score | Hold ms |
+| --- | --- | ---: | ---: |
+| 1 | Quiet yes, immediate release | 0.752774 | 932 |
+| 2 | Quiet no, immediate release | 0.091510 | 1066 |
+| 3 | Quiet bye, immediate release | 0.178816 | 1057 |
+| 4 | Quiet thank you, immediate release | 0.409982 | 1207 |
+| 5 | Whispered yes | 0.104455 | 1073 |
+| 6 | Silence then yes | 0.159173 | 2246 |
+| 7 | Silence then no | 0.386747 | 5218 |
+| 8 | Silent tap | 0.004686 | 131 |
+| 9 | Silent tap, hallucinated thank you | 0.011937 | 152 |
+
+All nine analyses completed. Whole-recording evidence was briefly unavailable at the first inspection for operations 4 and 5 and passed through; it was ready before their full-pass dispatch. Cold detector initialization took 30.812 ms on its separate worker. The whispered take's retained-request score was 0.077380, still above either silent tap. A prospective cutoff must preserve that lower retained-range value, not just the whole-session maximum. Built-in calibration is pending; no cutoff has been selected or enabled.
+
+The requested 3- and 5-second silence controls were not precisely timed: operation 6 lasted only 2.246 seconds in total. These takes prove speech after some silence, but do not establish both exact leading-silence durations. Repeat timed leading-silence controls during held-out acceptance.
+
+The original incident WAV is no longer present in normal history storage after subsequent recordings and the configured 20-entry retention. Its earlier raw/padded model measurements remain recorded above, but an exact replay through the newly implemented observer cannot now be performed from that file. The new labeled 152 ms silent tap reproduces a real hallucinated phrase through the production capture path and provides a fresh negative control. Do not claim a new-observer replay of the deleted incident.
