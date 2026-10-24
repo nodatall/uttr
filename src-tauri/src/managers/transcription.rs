@@ -83,8 +83,8 @@ const MIN_ONE_CHUNK_INCREMENTAL_FINALIZATION_SAMPLES: usize = SAMPLE_RATE * 15;
 
 // Calibrated and activated together with dictation phrase-filter retirement.
 // None collects content-free evidence without rejecting audio during calibration.
-// Frozen for DJI acceptance after calibrating the continuous 512-sample scorer.
-const DICTATION_NO_SPEECH_CUTOFF: Option<f32> = Some(0.08);
+// Disabled after longer silent recordings exceeded the acceptance cutoff.
+const DICTATION_NO_SPEECH_CUTOFF: Option<f32> = None;
 
 pub(crate) enum DictationTranscription {
     Text(String),

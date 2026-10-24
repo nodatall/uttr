@@ -4,6 +4,8 @@ Goal: Reject confidently speech-free dictation without losing quiet words, short
 
 Implementation notes: [implementation-notes-no-speech-detection.md](implementation-notes-no-speech-detection.md)
 
+Activation is blocked after longer silent recordings passed the detector. Rejection is disabled while calibration is extended to multi-second silence and handling noise.
+
 ## Behavior
 
 - Start loading the detector when Transcribe is pressed, alongside microphone capture, and reuse the loaded model. Capture starts immediately.
@@ -20,7 +22,7 @@ Build the observer and dispatch integration while human recordings are pending; 
 
 ### 1. Establish speech and silence controls
 
-- [ ] Obtain consented, labeled recordings on DJI MIC MINI: silent taps, handling noise, natural quiet “yes,” “no,” “bye,” and “thank you,” whispers, immediate release after a word, and quiet speech after 3 and 5 seconds of silence. Separate calibration recordings from held-out checks. The user limited microphone verification to DJI MIC MINI; other microphones remain unverified. Stop activation if suitable human recordings are unavailable.
+- [ ] Obtain consented, labeled recordings on DJI MIC MINI: silent taps, wholly silent recordings lasting 3, 5, and 15 seconds, handling noise, natural quiet “yes,” “no,” “bye,” and “thank you,” whispers, immediate release after a word, and quiet speech after 3 and 5 seconds of silence. Separate calibration recordings from held-out checks. Other microphones remain unverified. Stop activation if suitable human recordings are unavailable.
 - [x] Check the recordings with existing audio tools and exercise the production capture path manually. Keep private recordings local and out of commits; use existing local diagnostics to inspect retained audio without uploading private recordings.
 
 ### 2. Observe speech without changing capture
@@ -31,7 +33,7 @@ Build the observer and dispatch integration while human recordings are pending; 
 
 ### 3. Establish a conservative rejection rule
 
-- [ ] Use the highest raw speech score across the relevant audio. Calibrate a low rejection cutoff using the corrected scorer, then freeze it before a separate held-out run. Keep the original “Bye.” incident's historical measurements and expired-WAV replay gap explicit. Fresh held-out silent taps must be rejected with complete, ready evidence, and every labeled word must survive capture and reach the provider input. Stop before activation or capture redesign if either live requirement fails.
+- [ ] Use the highest raw speech score across the relevant audio. Evaluate the existing dependency's 0.35 silence boundary once against the extended calibration set, with rejection disabled. Enable that fixed candidate for a fresh held-out run only if every silent control falls below it and every spoken control stays above it. Do not adjust it to fit failed acceptance recordings. Preserve the original incident's expired-WAV replay gap. Stop activation if silent controls pass or words are lost; return to plan review if this fixed candidate fails.
 
 ### 4. Apply the rule to every dictation request
 
