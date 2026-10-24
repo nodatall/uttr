@@ -42,9 +42,11 @@ Use the existing DJI recordings and autonomous local verification. Request no ne
 
 ### 5. Verify and run the finished app
 
-- [ ] Run the unchanged relevant tests, full Rust suite, native build, and transcription preflight. Run available native smoke and saved-audio flows; distinguish actual UI/paste verification from logs and offline replay.
-- [ ] Measure cold/warm readiness, stop-to-decision timing, timeouts, and remaining ASR requests. Report native scheduling separately from offline inference costs and make no zero-latency claim.
-- [ ] Remove all diagnostic instrumentation, package and verify the current app, restore the original DJI/provider settings, and launch it from Codex. Keep other microphones and uncovered native flows explicitly unverified.
+- [x] Run the unchanged relevant tests, full Rust suite, native build, and transcription preflight. Run available native smoke and saved-audio flows; distinguish actual UI/paste verification from logs and offline replay.
+- [x] Measure cold/warm readiness, stop-to-decision timing, timeouts, and remaining ASR requests. Report native scheduling separately from offline inference costs and make no zero-latency claim.
+- [x] Remove all diagnostic instrumentation, package and verify the current app, restore the original DJI/provider settings, and launch it from Codex. Keep other microphones and uncovered native flows explicitly unverified.
+
+The app is running from Codex on DJI/Groq. Verification limits and the settings-restoration mistake are recorded in the notes: current dictation options were recovered exactly; other preferences came from an older backup or reset defaults and may differ from their pre-run values.
 
 Deliver implementation instruction:
 When asked to implement this doc, load the `$deliver` skill, use this file as the approved execution plan, scan every checkbox, and continue through final review, archive movement, commit, and finalization before the final handoff.
