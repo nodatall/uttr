@@ -9,11 +9,14 @@ use std::{
     time::Instant,
 };
 
-const FRAME_SAMPLES: usize = 480;
+const CAPTURE_FRAME_SAMPLES: usize = 480;
+// Silero v4's shortest trained window at 16 kHz.
+const MODEL_FRAME_SAMPLES: usize = 512;
 const QUEUED_FRAMES: usize = 256;
 // Bound bookkeeping as well as queued PCM. Longer sessions continue normally.
 const MAX_SAMPLES: usize = 16_000 * 60 * 60 * 2;
-const MAX_BLOCKS: usize = MAX_SAMPLES / FRAME_SAMPLES + 32;
+const MAX_RETAINED_BLOCKS: usize = MAX_SAMPLES / CAPTURE_FRAME_SAMPLES + 32;
+const MAX_SCORE_BLOCKS: usize = MAX_SAMPLES / MODEL_FRAME_SAMPLES + 32;
 
 #[derive(Clone, Copy, Debug)]
 pub enum SpeechEvidence {
@@ -86,7 +89,9 @@ impl DictationAnalysis {
         let Ok(state) = self.session.state.try_lock() else {
             return SpeechEvidence::Unknown;
         };
-        if retained_range.end > state.retained_samples {
+        if state.covered_samples < MODEL_FRAME_SAMPLES
+            || retained_range.end > state.retained_samples
+        {
             return SpeechEvidence::Unknown;
         }
         let mut cursor = retained_range.start;
@@ -154,7 +159,7 @@ impl DictationAnalysis {
         if self.session.invalid.load(Ordering::Acquire) {
             return;
         }
-        for chunk in samples[..valid_samples].chunks(FRAME_SAMPLES) {
+        for chunk in samples[..valid_samples].chunks(CAPTURE_FRAME_SAMPLES) {
             if chunk.iter().any(|sample| !sample.is_finite()) {
                 self.invalidate_as(4);
                 return;
@@ -221,7 +226,6 @@ impl SpeechObserver {
 struct WorkerSession {
     session: Arc<Session>,
     pending: Vec<f32>,
-    tail: Vec<f32>,
     raw_samples: usize,
     processed_samples: usize,
     chronological_max_score: Option<f32>,
@@ -259,8 +263,7 @@ fn run_worker(model_path: PathBuf, rx: mpsc::Receiver<Message>) {
                 }
                 active = Some(WorkerSession {
                     session,
-                    pending: Vec::with_capacity(FRAME_SAMPLES),
-                    tail: Vec::with_capacity(FRAME_SAMPLES),
+                    pending: Vec::with_capacity(MODEL_FRAME_SAMPLES),
                     raw_samples: 0,
                     processed_samples: 0,
                     chronological_max_score: None,
@@ -280,14 +283,11 @@ fn run_worker(model_path: PathBuf, rx: mpsc::Receiver<Message>) {
                     continue;
                 }
                 worker.raw_samples += samples.len();
-                worker.tail.extend_from_slice(&samples);
-                if worker.tail.len() > FRAME_SAMPLES {
-                    worker.tail.drain(..worker.tail.len() - FRAME_SAMPLES);
-                }
                 worker.pending.extend_from_slice(&samples);
-                while worker.pending.len() >= FRAME_SAMPLES {
-                    let frame: Vec<_> = worker.pending.drain(..FRAME_SAMPLES).collect();
-                    let source = worker.processed_samples..worker.processed_samples + FRAME_SAMPLES;
+                while worker.pending.len() >= MODEL_FRAME_SAMPLES {
+                    let frame: Vec<_> = worker.pending.drain(..MODEL_FRAME_SAMPLES).collect();
+                    let source =
+                        worker.processed_samples..worker.processed_samples + MODEL_FRAME_SAMPLES;
                     let Some(score) = score_frame(model.as_mut(), worker, &frame, source) else {
                         break;
                     };
@@ -296,7 +296,7 @@ fn run_worker(model_path: PathBuf, rx: mpsc::Receiver<Message>) {
                             .chronological_max_score
                             .map_or(score, |max| max.max(score)),
                     );
-                    worker.processed_samples += FRAME_SAMPLES;
+                    worker.processed_samples += MODEL_FRAME_SAMPLES;
                 }
             }
             Message::Finish(session) => {
@@ -310,11 +310,14 @@ fn run_worker(model_path: PathBuf, rx: mpsc::Receiver<Message>) {
                 let pending_real_samples = worker.pending.len();
                 let final_window_attempted = !session.invalid.load(Ordering::Acquire)
                     && !worker.pending.is_empty()
-                    && worker.tail.len() == FRAME_SAMPLES;
+                    && worker.raw_samples >= MODEL_FRAME_SAMPLES;
                 let final_window_score = if final_window_attempted {
-                    let tail = worker.tail.clone();
-                    let source = worker.raw_samples - FRAME_SAMPLES..worker.raw_samples;
-                    score_frame(model.as_mut(), &mut worker, &tail, source)
+                    // Pad only the model input. Coverage ends at the last genuine
+                    // sample, and already-scored audio is never presented again.
+                    let mut frame = [0.0; MODEL_FRAME_SAMPLES];
+                    frame[..pending_real_samples].copy_from_slice(&worker.pending);
+                    let source = worker.processed_samples..worker.raw_samples;
+                    score_frame(model.as_mut(), &mut worker, &frame, source)
                 } else {
                     None
                 };
@@ -327,14 +330,14 @@ fn run_worker(model_path: PathBuf, rx: mpsc::Receiver<Message>) {
                 state.raw_samples = worker.raw_samples;
                 state.complete = !session.invalid.load(Ordering::Acquire)
                     && state.covered_samples == worker.raw_samples
-                    && worker.raw_samples >= FRAME_SAMPLES;
+                    && worker.raw_samples >= MODEL_FRAME_SAMPLES;
                 let reason = match session.invalid_reason.load(Ordering::Acquire) {
                     1 => "queue-or-memory-limit",
                     2 => "cancelled-or-replaced",
                     3 => "invalid-audio-coverage",
                     4 => "invalid-pcm",
                     5 => "model-error",
-                    _ if worker.raw_samples < FRAME_SAMPLES => "insufficient-real-audio",
+                    _ if worker.raw_samples < MODEL_FRAME_SAMPLES => "insufficient-real-audio",
                     _ if !state.complete => "incomplete-analysis",
                     _ => "complete",
                 };
@@ -364,7 +367,7 @@ fn run_worker(model_path: PathBuf, rx: mpsc::Receiver<Message>) {
                     continue;
                 }
                 let mut state = session.state.lock().unwrap();
-                if state.retained.len() >= MAX_BLOCKS
+                if state.retained.len() >= MAX_RETAINED_BLOCKS
                     || state.retained_samples.saturating_add(retained_len) > MAX_SAMPLES
                 {
                     session.invalid_reason.store(1, Ordering::Release);
@@ -399,7 +402,7 @@ fn score_frame(
         return None;
     };
     let mut state = worker.session.state.lock().unwrap();
-    if state.scores.len() >= MAX_BLOCKS {
+    if state.scores.len() >= MAX_SCORE_BLOCKS {
         worker.session.invalid.store(true, Ordering::Release);
         worker.session.invalid_reason.store(1, Ordering::Release);
         return None;

@@ -26,11 +26,12 @@ Build the observer and dispatch integration while human recordings are pending; 
 ### 2. Observe speech without changing capture
 
 - [x] Add an independent detector observing original audio, including pre-roll, before filtering, gain, or padding. Map its evidence to the audio retained for transcription, including the last real samples in a partial frame.
+- [x] Correct the observer's final audio window so it never repeats already-examined samples. Use the model's supported frame size; calibrate it in step 3 before enabling rejection.
 - [ ] Implement the on-press loader and per-recording state. Verify immediate capture with delayed loading, plus isolation across cancellation, rapid restarts, and borrowed-microphone sessions.
 
 ### 3. Establish a conservative rejection rule
 
-- [ ] Use the highest raw speech score across the relevant audio. Calibrate a low rejection cutoff, then freeze it before the held-out run. The original “Bye.” incident's recorded raw score must fall below the cutoff; its WAV has expired from normal history, so exact replay remains a verification gap. Fresh held-out silent taps must be rejected with complete, ready evidence, and every labeled word must survive capture and reach the provider input. Stop before activation or capture redesign if either live requirement fails.
+- [ ] Use the highest raw speech score across the relevant audio. Calibrate a low rejection cutoff using the corrected scorer, then freeze it before a separate held-out run. Keep the original “Bye.” incident's historical measurements and expired-WAV replay gap explicit. Fresh held-out silent taps must be rejected with complete, ready evidence, and every labeled word must survive capture and reach the provider input. Stop before activation or capture redesign if either live requirement fails.
 
 ### 4. Apply the rule to every dictation request
 
