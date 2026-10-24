@@ -1,6 +1,6 @@
 # No-speech detection implementation notes
 
-Checked locally on 2026-10-23. These notes support the [execution plan](execution-plan-no-speech-detection.md); the plan controls scope. DJI acceptance failed. Rejection and dictation phrase-filter retirement have both been disabled in source, and Codex restored the verified baseline app on DJI MIC MINI. Do not activate the experiment for ordinary use or mark this plan complete.
+Checked locally on 2026-10-23. These notes support the [execution plan](execution-plan-no-speech-detection.md); the plan controls scope. DJI acceptance failed. Rejection and dictation phrase-filter retirement have both been disabled. Codex restored the verified baseline, then launched a diagnostic build on DJI MIC MINI with the same disabled policies. Do not activate the experiment for ordinary use or mark this plan complete.
 
 The user explicitly requested no new tests. Add or change no automated test code, test cases, test fixtures, spies, replay harnesses, or smoke scripts. Use existing tools and tests, source review, and manual native verification. Do not create disposable test scripts as a workaround. Record gaps honestly; the required speech-preservation and native acceptance checks still apply.
 
@@ -138,3 +138,11 @@ Pinned `vad-rs` exposes `new`, `compute`, and `reset`, without recurrent-state s
 The [upstream Silero v4 wrapper](https://github.com/snakers4/silero-vad/blob/v4.0/utils_vad.py) validates a minimum 512-sample input at 16 kHz, recommends trained sizes 512/1024/1536, and zero-pads only the final incomplete input window in its whole-audio scan. Uttr's existing capture wrapper uses 480 samples; this observer inherited that size and was calibrated with it. Neither source establishes arbitrary short-fragment support. A future frame-size or final-window policy change requires new calibration and held-out native verification; the old cutoff's separation cannot be assumed to survive it.
 
 At 19:40 Pacific, Codex closed the failed candidate and launched the signature-verified baseline from `agent-scratch/no-speech-baseline/Uttr.app`; startup and native UI confirm DJI MIC MINI, working shortcuts, and Ready to start. The source cutoff is now `None`. All 155 existing Rust tests, `bun run tauri:build:fast`, and the existing transcription preflight passed after rollback; no test code changed. The bundle under `src-tauri/target/debug/bundle/macos/Uttr.app` is still the failed enabled candidate until explicitly rebuilt; do not relaunch it as ordinary use. Acceptance, final review, and archive remain pending diagnosis and a validated repair.
+
+### Diagnostic follow-up, October 23 at 20:09 Pacific
+
+The observer now logs the chronological maximum before final-window inference, that final window's optional score and status, and its pending real-sample count. Scoring, capture, coverage, cutoff, and phrase policy are unchanged. All 155 existing Rust tests, the native fast build, and transcription preflight passed. No tests, fixtures, or harnesses were added or changed.
+
+The debug app bundle was explicitly rebuilt with updater artifacts disabled and passed `codesign --verify --deep --strict`. Its executable SHA-256 is `f70c61ea16edafce8f83f6a5fc199c055f873ed1659a16844c75d196a7484ad6`. Codex closed the idle baseline and launched this repository bundle directly. Startup confirms DJI MIC MINI, input permission, and initialized shortcuts; native UI shows Ready to start. Content-free output is in `agent-scratch/no-speech-tail-diagnostics.log`. Rejection and dictation phrase-filter retirement remain disabled.
+
+The native UI tool cannot synthesize Fn (`keyNotFound("fn")`), so it did not start a recording. Six silent quick taps, with background voices paused and the overlay allowed to finish between them, have been requested from the user. Their score diagnostics are the next required signal; no scoring repair or activation has been made from the current hypothesis.
