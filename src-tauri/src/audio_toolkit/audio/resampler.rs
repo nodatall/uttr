@@ -10,14 +10,6 @@ pub struct FrameResampler {
     in_buf: Vec<f32>,
     frame_samples: usize,
     pending: Vec<f32>,
-    pending_valid: Vec<bool>,
-    pending_uncertain: bool,
-    input_hz: usize,
-    output_hz: usize,
-    input_positions: usize,
-    output_positions: usize,
-    uncertain_output_until: usize,
-    finished_with_input_padding: bool,
     failed: bool,
 }
 
@@ -40,14 +32,6 @@ impl FrameResampler {
             in_buf: Vec::with_capacity(chunk_in),
             frame_samples,
             pending: Vec::with_capacity(frame_samples),
-            pending_valid: Vec::with_capacity(frame_samples),
-            pending_uncertain: false,
-            input_hz: in_hz,
-            output_hz: out_hz,
-            input_positions: 0,
-            output_positions: 0,
-            uncertain_output_until: 0,
-            finished_with_input_padding: false,
             failed: false,
         }
     }
@@ -56,17 +40,20 @@ impl FrameResampler {
         self.push_with_validity(src, |frame, _| emit(frame));
     }
 
+    /// `Some(valid)` excludes only zeros appended to complete an output frame.
+    /// All available resampler output is observed, including its filtered tail.
+    /// An empty frame with `None` reports failure without adding audio. A failure
+    /// leaves subsequent coverage unknown.
     pub fn push_with_validity(
         &mut self,
         mut src: &[f32],
         mut emit: impl FnMut(&[f32], Option<usize>),
     ) {
         if self.resampler.is_none() {
-            self.emit_frames(src, src.len(), &mut emit);
+            self.emit_frames(src, &mut emit);
             return;
         }
 
-        self.input_positions = self.input_positions.saturating_add(src.len());
         while !src.is_empty() {
             let space = self.chunk_in - self.in_buf.len();
             let take = space.min(src.len());
@@ -74,7 +61,6 @@ impl FrameResampler {
             src = &src[take..];
 
             if self.in_buf.len() == self.chunk_in {
-                self.mark_post_finish_output_uncertain();
                 // let start = std::time::Instant::now();
                 if let Ok(out) = self
                     .resampler
@@ -84,9 +70,10 @@ impl FrameResampler {
                 {
                     // let duration = start.elapsed();
                     // log::debug!("Resampler took: {:?}", duration);
-                    self.emit_frames(&out[0], out[0].len(), &mut emit);
+                    self.emit_frames(&out[0], &mut emit);
                 } else {
                     self.failed = true;
+                    emit(&[], None);
                 }
                 self.in_buf.clear();
             }
@@ -98,96 +85,44 @@ impl FrameResampler {
     }
 
     pub fn finish_with_validity(&mut self, mut emit: impl FnMut(&[f32], Option<usize>)) {
-        self.mark_post_finish_output_uncertain();
-        let real_output_end = self
-            .input_positions
-            .saturating_mul(self.output_hz)
-            .div_ceil(self.input_hz)
-            .saturating_add(self.resampler.as_ref().map_or(0, Resampler::output_delay));
         // Process any remaining input samples
         if let Some(ref mut resampler) = self.resampler {
             if !self.in_buf.is_empty() {
                 // Pad with zeros to reach chunk size
-                let padding = self.chunk_in - self.in_buf.len();
-                self.input_positions = self.input_positions.saturating_add(padding);
                 self.in_buf.resize(self.chunk_in, 0.0);
                 if let Ok(out) = resampler.process(&[&self.in_buf[..]], None) {
-                    let valid = real_output_end
-                        .saturating_sub(self.output_positions)
-                        .min(out[0].len());
-                    self.emit_frames(&out[0], valid, &mut emit);
+                    self.emit_frames(&out[0], &mut emit);
                 } else {
                     self.failed = true;
                 }
                 // Do not resubmit this input. Rubato retains its own delayed audio.
                 self.in_buf.clear();
-                self.finished_with_input_padding = true;
             }
+        }
+
+        if self.failed {
+            emit(&[], None);
         }
 
         // Emit any remaining pending frame (padded with zeros)
         if !self.pending.is_empty() {
-            let valid = self.valid_prefix();
+            let valid = (!self.failed).then_some(self.pending.len());
             self.pending.resize(self.frame_samples, 0.0);
             emit(&self.pending, valid);
             self.pending.clear();
-            self.pending_valid.clear();
-            self.pending_uncertain = false;
         }
     }
 
-    fn mark_post_finish_output_uncertain(&mut self) {
-        if self.finished_with_input_padding {
-            // Native input padding may still affect delayed output in Rubato.
-            // Preserve that filter state and keep its transition uncertain.
-            if let Some(resampler) = self.resampler.as_ref() {
-                self.uncertain_output_until = self
-                    .output_positions
-                    .saturating_add(resampler.output_frames_max())
-                    .saturating_add(resampler.output_delay().saturating_mul(2));
-            }
-            self.finished_with_input_padding = false;
-        }
-    }
-
-    fn valid_prefix(&self) -> Option<usize> {
-        if self.failed || self.pending_uncertain {
-            return None;
-        }
-        let valid = self
-            .pending_valid
-            .iter()
-            .take_while(|&&valid| valid)
-            .count();
-        self.pending_valid[valid..]
-            .iter()
-            .all(|valid| !valid)
-            .then_some(valid)
-    }
-
-    fn emit_frames(
-        &mut self,
-        mut data: &[f32],
-        mut valid: usize,
-        emit: &mut impl FnMut(&[f32], Option<usize>),
-    ) {
+    fn emit_frames(&mut self, mut data: &[f32], emit: &mut impl FnMut(&[f32], Option<usize>)) {
         while !data.is_empty() {
             let space = self.frame_samples - self.pending.len();
             let take = space.min(data.len());
             self.pending.extend_from_slice(&data[..take]);
-            self.pending_uncertain |= self.output_positions < self.uncertain_output_until;
-            self.pending_valid.extend((0..take).map(|index| {
-                index < valid && self.output_positions + index >= self.uncertain_output_until
-            }));
-            self.output_positions = self.output_positions.saturating_add(take);
-            valid = valid.saturating_sub(take);
             data = &data[take..];
 
             if self.pending.len() == self.frame_samples {
-                emit(&self.pending, self.valid_prefix());
+                emit(&self.pending, (!self.failed).then_some(self.pending.len()));
                 self.pending.clear();
-                self.pending_valid.clear();
-                self.pending_uncertain = false;
             }
         }
     }

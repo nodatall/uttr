@@ -606,6 +606,10 @@ impl PreRollBuffer {
     }
 
     fn push_frame_with_validity(&mut self, frame: &[f32], valid: Option<usize>) {
+        let valid = valid.filter(|&valid| valid <= frame.len());
+        // Output-frame padding belongs only to the completed recording. Keep
+        // every available filtered sample, but no appended zeros, in pre-roll.
+        let frame = valid.map_or(frame, |valid| &frame[..valid]);
         if self.max_samples == 0 || frame.is_empty() {
             return;
         }
@@ -911,6 +915,9 @@ fn run_consumer(
                     if let Some(observer) = observation.as_mut() {
                         observer.frame(frame, valid);
                     }
+                    if frame.is_empty() {
+                        return;
+                    }
                     let before = processed_samples.len();
                     // we still want to process the last few frames
                     let _ =
@@ -978,6 +985,9 @@ fn run_consumer(
             pre_roll_samples.push_frame_with_validity(frame, valid);
             if let Some(observer) = observation.as_mut() {
                 observer.frame(frame, valid);
+            }
+            if frame.is_empty() {
+                return;
             }
             let before = processed_samples.len();
             let saw_speech = handle_frame(

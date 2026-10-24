@@ -12,7 +12,7 @@ Finish and enable the fix using the saved DJI recordings and local verification.
 - Keep listening through initial silence until the user stops. Preserve the existing audio capture and the beginning of words.
 - Reject audio as speech-free only when the detector has examined it completely and confidently found no speech. Uncertain results, missing audio, loading delays, and errors proceed through transcription. Replace the old phrase filter when the new detector is enabled; add no minimum recording time.
 - Apply this to microphone dictation across every provider, including incremental requests and quick dictation while a meeting owns the microphone. Keep meeting transcription, file imports, and Ask Selection behavior outside this change.
-- A rejected recording returns the existing overlay to idle without a transcription request, paste, or history entry. Add no new UI or setting.
+- A wholly rejected recording returns the existing overlay to idle without paste or history. Rejection before the first dispatch makes no transcription request; evidence arriving later stops the remaining attempts. Add no new UI or setting.
 - Add no wait for model loading or fixed listening delay. Use evidence ready at each request boundary; incomplete analysis proceeds normally. Measure actual latency rather than promising zero overhead.
 - Add or change no automated tests or committed test fixtures. Use disposable local analysis of the saved recordings through production code, existing tests, code review, and available native automation. Keep private audio local and report verification limits.
 
@@ -30,7 +30,7 @@ Complete the implementation and autonomous checks using the evidence already col
 - [x] Add an independent detector observing resampler-produced capture audio, including pre-roll, before capture filtering, gain, or added output-frame/ASR padding. Map its evidence to retained audio, including the last available samples in a partial frame.
 - [x] Correct the observer's final audio window so it never repeats already-examined samples. Use the model's supported frame size; calibrate it in step 3 before enabling rejection.
 - [x] Clear resampler input after it has been consumed at stop, so a later recording cannot replay it. Preserve the resampler's filter state and conservative handling of uncertain audio; do not claim this removes every rapid-restart fallback.
-- [ ] Prevent known output-frame padding from invalidating the next recording. Analyze all available resampler output, preserve its filter state and genuine tail, and keep only explicitly appended zeros out of pre-roll. Actual processing failure must still pass through.
+- [x] Prevent known output-frame padding from invalidating the next recording. Analyze all available resampler output, preserve its filter state and genuine tail, and keep only explicitly appended zeros out of pre-roll. Actual processing failure still passes through.
 - [ ] Verify the on-press loader and per-recording state with saved-audio replay and source tracing, including session reset, cancellation, rapid restarts, and borrowed-microphone ownership. Repair demonstrated defects while preserving uncertainty pass-through.
 
 ### 3. Establish a conservative rejection rule
@@ -44,7 +44,7 @@ Complete the implementation and autonomous checks using the evidence already col
 - [x] Carry ready evidence into provider retries and local fallback. A late silence decision stops further requests without hiding an earlier completed request.
 - [x] Close the uncovered upload-limit splitting path: each actual cloud request must retain its original audio coordinates and receive its own speech check. Preserve cloud-to-local fallback and non-dictation behavior.
 - [ ] Retire phrase-based suppression for microphone dictation in the same activation as the new detector. Verify that genuine previously blocked phrases survive, including when detector evidence is uncertain. Preserve the separate punctuation-only rule and existing behavior for other transcription sources.
-- [ ] Complete rejected sessions through existing cleanup paths. Verify zero provider calls, paste actions, and history writes for wholly rejected sessions, plus restored microphone ownership after borrowed dictation.
+- [ ] Complete rejected sessions through existing cleanup paths. Verify no paste or history for wholly rejected sessions, no provider calls when rejected before first dispatch, stopped remaining attempts after late rejection, and restored microphone ownership after borrowed dictation.
 
 ### 5. Verify the rebuilt native app before activation
 
