@@ -83,8 +83,8 @@ const MIN_ONE_CHUNK_INCREMENTAL_FINALIZATION_SAMPLES: usize = SAMPLE_RATE * 15;
 
 // Calibrated and activated together with dictation phrase-filter retirement.
 // None collects content-free evidence without rejecting audio during calibration.
-// DJI MIC MINI controls: silence <= 0.011938; retained quiet speech >= 0.077380.
-const DICTATION_NO_SPEECH_CUTOFF: Option<f32> = Some(0.02);
+// The 0.02 candidate failed silent-tap acceptance; keep both policies inactive.
+const DICTATION_NO_SPEECH_CUTOFF: Option<f32> = None;
 
 pub(crate) enum DictationTranscription {
     Text(String),
