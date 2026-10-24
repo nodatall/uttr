@@ -5175,6 +5175,12 @@ impl ShortcutAction for TranscribeAction {
         } else {
             spawn_deferred_overlay_state(app, DeferredOverlayState::Transcribing);
         }
+        log::info!(
+            "[latency] transcribe stop checkpoint binding={} operation={} phase=ui-handled elapsed_ms={}",
+            binding_id,
+            operation_id,
+            stop_time.elapsed().as_millis()
+        );
         if use_incremental {
             if self.completion_mode == TranscriptionCompletionMode::Standard {
                 tm.signal_dictation_incremental_stop(binding_id, operation_id);
@@ -5182,15 +5188,33 @@ impl ShortcutAction for TranscribeAction {
                 tm.signal_incremental_stop(binding_id);
             }
         }
+        log::info!(
+            "[latency] transcribe stop checkpoint binding={} operation={} phase=incremental-stop-handled elapsed_ms={}",
+            binding_id,
+            operation_id,
+            stop_time.elapsed().as_millis()
+        );
         let recording_duration = rm.current_recording_duration(binding_id);
         let active_meeting_binding = active_meeting_binding_for_quick_dictation(app, binding_id);
         let meeting_restore_binding =
             meeting_microphone_binding_for_quick_dictation(app, binding_id);
+        log::info!(
+            "[latency] transcribe stop checkpoint binding={} operation={} phase=capture-stop-begin elapsed_ms={}",
+            binding_id,
+            operation_id,
+            stop_time.elapsed().as_millis()
+        );
         let samples = if let Some(meeting_binding_id) = meeting_restore_binding.as_deref() {
             rm.finish_borrowed_recording_and_restore(binding_id, meeting_binding_id)
         } else {
             rm.stop_recording(binding_id)
         };
+        log::info!(
+            "[latency] transcribe stop checkpoint binding={} operation={} phase=capture-stop-complete elapsed_ms={}",
+            binding_id,
+            operation_id,
+            stop_time.elapsed().as_millis()
+        );
         let completion_context =
             completion_context_for_active_meeting(active_meeting_binding, operation_id);
         log::info!(

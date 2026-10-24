@@ -1,6 +1,6 @@
 # No-speech detection implementation notes
 
-Checked locally on 2026-10-23. These notes support the [execution plan](execution-plan-no-speech-detection.md); the plan controls scope. DJI acceptance failed. Rejection and dictation phrase-filter retirement have both been disabled. Codex restored the verified baseline, then launched a diagnostic build on DJI MIC MINI with the same disabled policies. Do not activate the experiment for ordinary use or mark this plan complete.
+Checked locally on 2026-10-23. These notes support the [execution plan](execution-plan-no-speech-detection.md); the plan controls scope. The first DJI acceptance failed. The corrected scorer has now been calibrated, and a new 0.08 acceptance candidate is being prepared. The running DJI calibration app still has rejection and dictation phrase-filter retirement disabled. Do not activate the candidate for ordinary use or mark this plan complete before held-out and native verification pass.
 
 The user explicitly requested no new tests. Add or change no automated test code, test cases, test fixtures, spies, replay harnesses, or smoke scripts. Use existing tools and tests, source review, and manual native verification. Do not create disposable test scripts as a workaround. Record gaps honestly; the required speech-preservation and native acceptance checks still apply.
 
@@ -169,3 +169,29 @@ Keep raw offsets and evidence coverage limited to genuine samples; a final model
 The correction is implemented in `speech_observer.rs`: consecutive 512-sample full windows, one pending-only model input at finish, genuine-only final coverage, and separate retained/score bookkeeping limits. Both whole and retained-range evidence stay Unknown below 512 genuine session samples. Source review checked exact windows, partial remainder, invalid/incomplete analysis, short sessions, and ordered retained-range lookup. All 155 existing Rust tests, the native fast build, and transcription preflight passed after this change. No tests or harnesses changed. New native calibration, acceptance, and activation remain pending.
 
 Read-only host audio inventory confirms DJI MIC MINI is also the system default input. The unchanged full smoke harness's default-input setting therefore fits the current DJI-only scope; no global microphone setting was changed. This does not itself establish a smoke-test pass.
+
+### Corrected-scorer calibration, October 23 at 20:44 Pacific
+
+The corrected repository bundle passed signature verification and was launched by Codex at 20:43:57 Pacific on DJI MIC MINI. Executable SHA-256: `55dd0cc3fcec742ddc223c4a35b6189914d145474a5887d41ce1999d01b94beb`. The UI bridge initially timed out on the old idle diagnostic window; Codex stopped that terminal process, verified it exited, launched the new bundle, and verified its native Ready to start state, input permission, and shortcuts. The new content-free console log is `agent-scratch/no-speech-512-calibration.log`. Rejection and phrase retirement were disabled for all calibration takes.
+
+The user explicitly confirmed the first three requested spoken controls all transcribed correctly, and reported every silent tap produced “Thank you.” The nine completed operations below form this calibration partition; none is a held-out acceptance result. Individual handling-noise labels among the six silent takes were not confirmed separately.
+
+| Operation | Confirmed control | Whole/request maximum | Final remainder score | Hold ms |
+| --- | --- | ---: | ---: | ---: |
+| 1 | Quiet no, immediate release | 0.917809 / 0.917809 | 0.042105 | 1147 |
+| 2 | Whispered yes, immediate release | 0.990624 / 0.990624 | 0.023283 | 2798 |
+| 3 | Quiet thank you | 0.905976 / 0.905976 | 0.634558 | 945 |
+| 4 | Silent tap | 0.036247 / Unknown | 0.004737 | 114 |
+| 5 | Silent tap | 0.018439 / Unknown | 0.004853 | 114 |
+| 6 | Silent tap | 0.038906 / Unknown | 0.005388 | 116 |
+| 7 | Silent tap | 0.042123 / Unknown | 0.004620 | 113 |
+| 8 | Silent tap | 0.026389 / Unknown | 0.004116 | 119 |
+| 9 | Silent tap | 0.051017 / Unknown | 0.004381 | 126 |
+
+All whole-session analyses completed and were ready at dispatch; request-only Unknown on the short padded recordings does not invalidate the already-complete whole gate. None of the final remainder scores exceeded its full-window maximum. Cold initialization was 24.225 ms on the worker. All nine saved WAVs are preserved locally in `agent-scratch/no-speech-calibration/dji-512-calibration/`, excluded from commits and fixture creation.
+
+Freeze the new acceptance candidate at `Some(0.08)` using only this corrected-scorer calibration partition: maximum observed negative 0.051017, minimum spoken whole/request score 0.905976. The old 480-sample cutoff is not calibration evidence for this value. Activate dictation phrase-filter retirement in the same candidate through the existing shared constant; ordinary use remains gated on fresh held-out speech/silence, native lifecycle checks, and the unchanged full smoke. Do not tune against the held-out results.
+
+One calibration timing outlier needs continued inspection: operation 2 spent 2,593 ms before samples were retrieved and 2,702 ms in the stop handler, with no recorder stop timeout. Its detector was already loaded (`init_us=0`), and inference accumulated 535.587 ms. Existing stop logs cannot separate UI/manager work, capture stop, and scheduling; do not attribute the delay to model loading or claim no latency regression. Four content-free checkpoints have been added around existing UI handling, incremental-stop signaling, ownership lookup, and capture stop. They change no order, locks, or recording behavior and will localize any recurrence during enabled acceptance. No new test or harness was added.
+
+All 155 unchanged Rust tests, the native fast build, and transcription preflight passed after freezing the new candidate cutoff and adding those checkpoints. Existing test modules were untouched. Native held-out acceptance and the full existing smoke are still pending.
