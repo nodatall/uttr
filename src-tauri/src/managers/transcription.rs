@@ -105,7 +105,6 @@ pub(crate) struct DictationRequestContext {
     binding_id: String,
     operation_id: u64,
     analysis: Option<DictationAnalysis>,
-    rejected: Arc<Mutex<Vec<Range<usize>>>>,
     attempts: Arc<Mutex<DictationAttemptStats>>,
 }
 
@@ -119,7 +118,6 @@ impl DictationRequestContext {
             binding_id: binding_id.to_string(),
             operation_id,
             analysis: analysis.filter(|analysis| analysis.matches(binding_id, operation_id)),
-            rejected: Arc::new(Mutex::new(Vec::new())),
             attempts: Arc::new(Mutex::new(DictationAttemptStats::default())),
         }
     }
@@ -171,18 +169,6 @@ impl DictationRequestContext {
         );
         if reject {
             self.log_skip(boundary);
-            let mut rejected = self.rejected.lock().unwrap();
-            rejected.extend(ranges.iter().cloned());
-            rejected.sort_unstable_by_key(|range| range.start);
-            let mut merged: Vec<Range<usize>> = Vec::with_capacity(rejected.len());
-            for range in rejected.drain(..) {
-                if let Some(last) = merged.last_mut().filter(|last| last.end >= range.start) {
-                    last.end = last.end.max(range.end);
-                } else {
-                    merged.push(range);
-                }
-            }
-            *rejected = merged;
         }
         reject
     }
@@ -196,7 +182,7 @@ impl DictationRequestContext {
         self.reject_evidence(evidence, &[0..sample_count], "whole")
     }
 
-    /// Remove known-rejected ranges without mutating retained capture audio.
+    /// Gate this request while preserving all context in admitted audio.
     fn request_audio(
         &self,
         audio: Vec<f32>,
@@ -217,7 +203,7 @@ impl DictationRequestContext {
     }
 }
 
-/// Original retained coordinates for PCM after rejected intervals are removed.
+/// Original retained coordinates for the requested PCM.
 #[derive(Clone)]
 struct DictationRequestAudio {
     context: DictationRequestContext,
@@ -317,46 +303,7 @@ impl DictationRequestAudio {
         if self.context.reject_evidence(evidence, ranges, "request") {
             return None;
         }
-        let rejected = self.context.rejected.lock().unwrap();
-        if rejected.is_empty() {
-            drop(rejected);
-            return Some((audio, self));
-        }
-        let mut kept = Vec::with_capacity(audio.len());
-        let mut kept_ranges = Vec::new();
-        let mut offset = 0usize;
-        for source in ranges {
-            let mut cursor = source.start;
-            for skip in rejected
-                .iter()
-                .filter(|skip| skip.end > source.start && skip.start < source.end)
-            {
-                let end = skip.start.min(source.end).max(cursor);
-                if cursor < end {
-                    kept.extend_from_slice(
-                        &audio[offset + (cursor - source.start)..offset + (end - source.start)],
-                    );
-                    kept_ranges.push(cursor..end);
-                }
-                cursor = cursor.max(skip.end.min(source.end));
-            }
-            if cursor < source.end {
-                kept.extend_from_slice(
-                    &audio[offset + (cursor - source.start)..offset + source.len()],
-                );
-                kept_ranges.push(cursor..source.end);
-            }
-            // valid_ranges checked the total before any indexing.
-            offset += source.len();
-        }
-        drop(rejected);
-        if kept.is_empty() {
-            self.context.log_skip("rejected-ranges");
-            None
-        } else {
-            self.source_ranges = Some(kept_ranges);
-            Some((kept, self))
-        }
+        Some((audio, self))
     }
 }
 

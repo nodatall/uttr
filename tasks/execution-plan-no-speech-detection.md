@@ -40,7 +40,8 @@ Complete the implementation and autonomous checks using the evidence already col
 
 ### 4. Apply the rule to every dictation request
 
-- [ ] Apply the rule before every microphone-dictation request, including requests made during recording. Verify that skipping silence preserves later words and cannot resend skipped audio through a fallback request.
+- [ ] Apply and verify the rule before every microphone-dictation request, including requests made during recording and fallbacks. A wholly silent fallback must pass its own speech check.
+- [x] Remove the permanent rejected-sample ledger. Keep the full audio context of an admitted request, including the existing overlap, so an earlier silence decision cannot trim the start of a later word.
 - [x] Carry ready evidence into provider retries and local fallback. A late silence decision stops further requests without hiding an earlier completed request.
 - [x] Close the uncovered upload-limit splitting path: each actual cloud request must retain its original audio coordinates and receive its own speech check. Preserve cloud-to-local fallback and non-dictation behavior.
 - [ ] Retire phrase-based suppression for microphone dictation in the same activation as the new detector. Verify that genuine previously blocked phrases survive, including when detector evidence is uncertain. Preserve the separate punctuation-only rule and existing behavior for other transcription sources.
