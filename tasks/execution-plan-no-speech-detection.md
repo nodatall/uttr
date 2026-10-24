@@ -1,58 +1,50 @@
 # Prevent transcriptions from silent microphone recordings
 
-Goal: Reject confidently speech-free dictation without losing quiet words, short replies, or speech after initial silence.
+Goal: Reject confidently speech-free dictation while preserving quiet words, short replies, and speech after initial silence.
 
 Implementation notes: [implementation-notes-no-speech-detection.md](implementation-notes-no-speech-detection.md)
 
-Finish and enable the fix using the saved DJI recordings and local verification. Request no new recordings. Treat saved-audio replay as regression evidence, and state the microphone details it cannot reproduce.
+Use the existing DJI recordings and autonomous local verification. Request no new recordings. Add or change no automated tests or committed fixtures. Keep private audio local, preserve unrelated work, and run the finished app from Codex.
 
 ## Behavior
 
-- Start loading the detector when Transcribe is pressed, alongside microphone capture, and reuse the loaded model. Capture starts immediately.
-- Keep listening through initial silence until the user stops. Preserve the existing audio capture and the beginning of words.
-- Reject audio as speech-free only when the detector has examined it completely and confidently found no speech. Uncertain results, missing audio, loading delays, and errors proceed through transcription. Replace the old phrase filter when the new detector is enabled; add no minimum recording time.
-- Apply this to microphone dictation across every provider, including incremental requests and quick dictation while a meeting owns the microphone. Keep meeting transcription, file imports, and Ask Selection behavior outside this change.
-- A wholly rejected recording returns the existing overlay to idle without paste or history. Rejection before the first dispatch makes no transcription request; evidence arriving later stops the remaining attempts. Add no new UI or setting.
-- Add no wait for model loading or fixed listening delay. Use evidence ready at each request boundary; incomplete analysis proceeds normally. Measure actual latency rather than promising zero overhead.
-- Add or change no automated tests or committed test fixtures. Use disposable local analysis of the saved recordings through production code, existing tests, code review, and available native automation. Keep private audio local and report verification limits.
+- Load the detector when Transcribe is pressed, alongside immediate capture, and reuse it. Listen until release; add no minimum recording time or extra capture delay.
+- Observe original capture audio without changing retention, gain, or word onsets. Combine eight aligned model scores at the same moment, then keep the highest combined score. Initial or trailing silence cannot dilute earlier speech.
+- At release, compute the model's final context using synthetic zeros. These zeros never enter captured audio or count as examined real samples. A completed score below 0.16 rejects the whole session; incomplete, invalid, or failed analysis passes through.
+- Use the completed session decision at every dictation request and output boundary. Requests made before completion proceed with their full audio. A rejected session finishes idle with no paste or history; stop remaining attempts and report any earlier requests accurately.
+- At the final output boundary, allow already-loaded, healthy analysis to finish within one 100 ms deadline measured from release submission. Wake immediately on completion, recheck cancellation, and pass through on timeout. Never wait for model loading or hold recorder locks.
+- Retire word-based suppression for microphone dictation when enabling the detector. Preserve punctuation-only handling and non-dictation behavior. Include borrowed-microphone dictation; leave meetings, imports, and Ask Selection outside the policy.
+- Acceptance requires every confirmed saved speech/noise control, both possible reported-incident files, and corrected native replays to pass. Keep four known false admissions of one artificially repeated 60-second noise clip visible as a conservative limit; do not raise the cutoff to remove them at the expense of quiet speech. This fixes the reproduced incidents without claiming universal noise rejection.
 
 ## Steps
 
-Complete the implementation and autonomous checks using the evidence already collected. Keep prospective microphone verification gaps explicit.
+### 1. Establish the recorded evidence
 
-### 1. Establish speech and silence controls
+- [x] Preserve and label the recoverable DJI speech, silent taps, handling noise, longer silence, and leading-silence recordings. Keep uncertain incident identities explicit and require both possible incident files to reject.
+- [x] Correct the local playback helper and verify saved PCM reaches the native observer intact. Keep virtual replay distinct from fresh physical-microphone acceptance.
 
-- [x] Consolidate the already collected DJI recordings and labels for silent taps, longer silence, handling noise, quiet replies, whispers, and speech after initial silence. Distinguish confirmed outcomes, failed acceptance, and missing coverage. Request no new recordings. Other microphones remain unverified.
-- [x] Check the recordings with existing audio tools and exercise the production capture path manually. Keep private recordings local and out of commits; use existing local diagnostics to inspect retained audio without uploading private recordings.
+### 2. Observe complete audio safely
 
-### 2. Observe speech without changing capture
+- [x] Add the bounded observer, asynchronous on-press loading, session reset/cancellation, raw-audio coverage, and borrowed-microphone ownership.
+- [x] Repair final-frame duplication and resampler restart metadata. Preserve actual resampler output and report genuine errors as uncertain.
 
-- [x] Add an independent detector observing resampler-produced capture audio, including pre-roll, before capture filtering, gain, or added output-frame/ASR padding. Map its evidence to retained audio, including the last available samples in a partial frame.
-- [x] Correct the observer's final audio window so it never repeats already-examined samples. Use the model's supported frame size; calibrate it in step 3 before enabling rejection.
-- [x] Clear resampler input after it has been consumed at stop, so a later recording cannot replay it. Preserve the resampler's filter state and conservative handling of uncertain audio; do not claim this removes every rapid-restart fallback.
-- [x] Prevent known output-frame padding from invalidating the next recording. Analyze all available resampler output, preserve its filter state and genuine tail, and keep only explicitly appended zeros out of pre-roll. Actual processing failure still passes through.
-- [x] Verify the on-press loader and per-recording state with saved-audio replay and source tracing, including session reset, cancellation, rapid restarts, and borrowed-microphone ownership. Keep native timing and meeting-ownership gaps explicit; recheck replacement-model state during final replay.
+### 3. Implement the verified score
 
-### 3. Establish a conservative rejection rule
+- [ ] Replace independent peak averaging with the maximum simultaneous mean of eight 512-sample phases. Include the final partial frame and eight additional model-only zero frames; keep real coverage separate. Reuse one loaded model with independent phase states.
+- [ ] Match production inference and aggregation against the saved traces, including quiet replies, exact leading-silence variants, both incident files, native inputs, and the disclosed long-loop limitation. Confirm state reset, bounded memory, and unchanged ASR audio.
 
-- [x] Replay saved speech and silence through the production observer. Reject both the 0.35 and 0.20 candidates: older confirmed whispered speech overlaps the silence scores.
-- [ ] Resolve that overlap by checking the model's supported input windows and score sequences against every recoverable confirmed control. Select a rule only after it preserves spoken controls and rejects known silence across fixed audio alignments and leading-silence variants. Keep uncertainty pass-through and add no word lists, minimum speech duration, or volume floor. Report these as regression checks, not independent human acceptance.
+### 4. Complete rejection and preserve speech
 
-### 4. Apply the rule to every dictation request
+- [x] Preserve full admitted audio and existing overlap. Check actual provider invocations, retries, upload splits, and local fallback with accurate attempt counts.
+- [ ] Use finalized whole-session evidence consistently across request and output gates. Preserve earlier speech and pass unresolved partial requests without truncation.
+- [ ] Add the bounded asynchronous completion check before postprocessing/history/paste, including cancellation after the wait. Keep cleanup and borrowed ownership intact.
+- [ ] Enable the verified score and dictation phrase-filter retirement together. Confirm genuine previously blocked phrases survive and other transcription sources retain their behavior.
 
-- [ ] Apply and verify the rule before every microphone-dictation request, including requests made during recording and fallbacks. A wholly silent fallback must pass its own speech check.
-- [x] Remove the permanent rejected-sample ledger. Keep the full audio context of an admitted request, including the existing overlap, so an earlier silence decision cannot trim the start of a later word.
-- [x] Carry ready evidence into provider retries and local fallback. A late silence decision stops further requests without hiding an earlier completed request.
-- [x] Close the uncovered upload-limit splitting path: each actual cloud request must retain its original audio coordinates and receive its own speech check. Preserve cloud-to-local fallback and non-dictation behavior.
-- [ ] Retire phrase-based suppression for microphone dictation in the same activation as the new detector. Verify that genuine previously blocked phrases survive, including when detector evidence is uncertain. Preserve the separate punctuation-only rule and existing behavior for other transcription sources.
-- [ ] Recheck ready evidence before output, then complete rejected sessions through existing cleanup paths. Verify no paste or history for wholly rejected sessions, accurate counts for earlier provider calls, stopped remaining attempts after late rejection, and restored microphone ownership after borrowed dictation.
+### 5. Verify and run the finished app
 
-### 5. Verify the rebuilt native app before activation
-
-- [ ] Run the existing relevant tests, full Rust suite, native build, and transcription preflight. Verify saved-audio rejection and speech preservation through production code; use available native automation for cleanup and paste behavior without recording new microphone audio.
-- [x] Review existing native evidence for silent taps, quiet replies, leading silence, cancellation, borrowed dictation, and overlay recovery. Request no recordings and keep uncovered flows explicitly unverified.
-- [x] Compare existing cold and warm measurements with the baseline, separating ready-detector rejection from incomplete-analysis fallback. Report sample counts, latency limits, and unknown rejection rates rather than inferring them.
-- [ ] Enable the verified rule and phrase-filter retirement together, package the updated app, and run it from Codex. Confirm the running binary is current and report saved-audio results separately from native verification limits.
+- [ ] Run the unchanged relevant tests, full Rust suite, native build, and transcription preflight. Run available native smoke and saved-audio flows; distinguish actual UI/paste verification from logs and offline replay.
+- [ ] Measure cold/warm readiness, stop-to-decision timing, timeouts, and remaining ASR requests. Report native scheduling separately from offline inference costs and make no zero-latency claim.
+- [ ] Remove all diagnostic instrumentation, package and verify the current app, restore the original DJI/provider settings, and launch it from Codex. Keep other microphones and uncovered native flows explicitly unverified.
 
 Deliver implementation instruction:
 When asked to implement this doc, load the `$deliver` skill, use this file as the approved execution plan, scan every checkbox, and continue through final review, archive movement, commit, and finalization before the final handoff.
