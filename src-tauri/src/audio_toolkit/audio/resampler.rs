@@ -17,7 +17,7 @@ pub struct FrameResampler {
     input_positions: usize,
     output_positions: usize,
     uncertain_output_until: usize,
-    finished_input_buffer: bool,
+    finished_with_input_padding: bool,
     failed: bool,
 }
 
@@ -47,7 +47,7 @@ impl FrameResampler {
             input_positions: 0,
             output_positions: 0,
             uncertain_output_until: 0,
-            finished_input_buffer: false,
+            finished_with_input_padding: false,
             failed: false,
         }
     }
@@ -74,7 +74,7 @@ impl FrameResampler {
             src = &src[take..];
 
             if self.in_buf.len() == self.chunk_in {
-                self.account_repeated_finish_buffer();
+                self.mark_post_finish_output_uncertain();
                 // let start = std::time::Instant::now();
                 if let Ok(out) = self
                     .resampler
@@ -98,7 +98,7 @@ impl FrameResampler {
     }
 
     pub fn finish_with_validity(&mut self, mut emit: impl FnMut(&[f32], Option<usize>)) {
-        self.account_repeated_finish_buffer();
+        self.mark_post_finish_output_uncertain();
         let real_output_end = self
             .input_positions
             .saturating_mul(self.output_hz)
@@ -119,7 +119,9 @@ impl FrameResampler {
                 } else {
                     self.failed = true;
                 }
-                self.finished_input_buffer = true;
+                // Do not resubmit this input. Rubato retains its own delayed audio.
+                self.in_buf.clear();
+                self.finished_with_input_padding = true;
             }
         }
 
@@ -134,18 +136,17 @@ impl FrameResampler {
         }
     }
 
-    fn account_repeated_finish_buffer(&mut self) {
-        if self.finished_input_buffer {
-            // Preserve the capture resampler's existing retained input behavior.
-            // Its replayed finish buffer is uncertain for independent evidence.
-            self.input_positions = self.input_positions.saturating_add(self.in_buf.len());
+    fn mark_post_finish_output_uncertain(&mut self) {
+        if self.finished_with_input_padding {
+            // Native input padding may still affect delayed output in Rubato.
+            // Preserve that filter state and keep its transition uncertain.
             if let Some(resampler) = self.resampler.as_ref() {
                 self.uncertain_output_until = self
                     .output_positions
                     .saturating_add(resampler.output_frames_max())
                     .saturating_add(resampler.output_delay().saturating_mul(2));
             }
-            self.finished_input_buffer = false;
+            self.finished_with_input_padding = false;
         }
     }
 

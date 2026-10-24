@@ -1,6 +1,6 @@
 # No-speech detection implementation notes
 
-Checked locally on 2026-10-23. These notes support the [execution plan](execution-plan-no-speech-detection.md); the plan controls scope. Both DJI acceptance candidates failed. The corrected scorer with a frozen 0.08 cutoff allowed longer silent recordings to reach transcription. Rejection and dictation phrase-filter retirement are disabled together again. Codex restored the baseline, then launched the rebuilt diagnostic app on DJI MIC MINI for the bounded longer-silence calibration below. Activation is blocked pending calibration and independent acceptance; do not mark this plan complete.
+Checked locally on 2026-10-23. These notes support the [execution plan](execution-plan-no-speech-detection.md); the plan controls scope. Both DJI acceptance candidates failed. The corrected scorer with a frozen 0.08 cutoff allowed longer silent recordings to reach transcription. Rejection and dictation phrase-filter retirement are disabled together again. The user has stopped further recording requests; continue engineering and review using existing evidence, without requesting more takes. Ordinary-use activation remains unverified.
 
 The user explicitly requested no new tests. Add or change no automated test code, test cases, test fixtures, spies, replay harnesses, or smoke scripts. Use existing tools and tests, source review, and manual native verification. Do not create disposable test scripts as a workaround. Record gaps honestly; the required speech-preservation and native acceptance checks still apply.
 
@@ -231,3 +231,76 @@ Before collecting new calibration data, predeclare 0.35 as the only candidate fo
 Evaluate this fixed candidate once: all negative calibration maxima must be below 0.35 and every relevant whole/request positive score above it, with the observed separation reported. If that fails, stop this retry and revise the decision rule through plan review rather than adjusting the threshold again. If it passes, activate the unchanged 0.35 candidate with phrase-filter retirement and run fresh independent controls for all required quiet words, whispers, immediate release, silent taps, longer silence, handling, and speech after initial silence. Calibration success alone does not authorize ordinary-use activation. The latest acceptance's five user-confirmed quiet replies are recorded as preservation evidence for the failed 0.08 candidate, not used to select the new cutoff.
 
 Fresh plan refinement found no material issues in this bounded retry. The disabled diagnostic app was packaged with the existing command-only updater-artifact override and passed signature verification. Executable SHA-256: `bbb404bae54f78e85c5f9f9e717f68783ef8532d1141289eef262c767d596080`. Codex launched it at 21:15 Pacific; startup confirmed DJI MIC MINI at 48 kHz stereo and initialized shortcuts, and the native UI showed Ready to start. The baseline was idle and exited before launch. The diagnostic log is `agent-scratch/no-speech-long-calibration.log`; history metadata before the four new requested silent controls was 77 rows, latest ID 8541. These recordings are pending. Blocking is explicitly disabled, so pasted artifacts during calibration do not indicate an enabled rejection failure.
+
+### User stopped recording requests; autonomous investigation
+
+The user completed only the first requested silent take and reported “Thank you,” then explicitly instructed Codex to stop requesting recordings and do substantially more work independently. This supersedes the remaining calibration request and any plan step that depended on another requested human batch. Do not ask for a replacement batch or call missing checks passed. No new tests, fixtures, or harnesses are authorized.
+
+The new take held for 2,186 ms and produced 43,064 raw / 31,040 retained samples, with complete whole/request maximum 0.02621609. Cold initialization took 31.585 ms; the stop handler took 37 ms. All gate logs explicitly show `enabled=false rejected=false`. This take was allowed by the deliberately disabled diagnostic gate, not misclassified above either candidate cutoff. The local WAV was preserved under `agent-scratch/no-speech-calibration/dji-long-calibration/`. It is a confirmed silent negative; the abandoned remaining controls were not recorded.
+
+Independent source review verified that the bundled model Git blob `e6db48d6e2a0797a2ec173c008384f7710189344` matches the official [Silero v4 model](https://github.com/snakers4/silero-vad/blob/v4.0/files/silero_vad.onnx), with local SHA-256 `a35ebf52fd3ce5f1469b2a36158dba761bc47b973ea3382b3186ca15b1f5af28`. The corrected observer's 512-sample sequential inputs, per-session reset, and final-only padding agree with the reference contract. No new model/version mismatch or short-recording coverage defect explains the complete 0.100/0.131 failures.
+
+The fixed 0.35 candidate separates every existing corrected-scorer confirmed positive from the reported silent-failure maxima. That is retrospective consistency, not independent acceptance, and it does not establish every future voice/noise condition. Do not add minimum speech duration, consecutive-frame requirements, average-score dilution, an energy floor, or a model upgrade without evidence: these would change the short/quiet-speech contract or invalidate the existing measurements.
+
+The deeper audit found a concrete uncovered dispatch path: `transcribe_cloud_with_settings` splits large full-pass audio at upload limits and directly sends each subrequest without dictation context, after only a parent-level check. Speech in one part can therefore allow a silent subrequest. Repair this within the original every-request scope, preserving original retained coordinates even when prior rejected ranges were removed. This path is reached at approximately 13.1 minutes of retained audio for direct routes and 52.4 minutes for proxy; it is not the explanation for the latest short clips.
+
+Two other limits require explicit disposition. Rapid restart can include finish-padding or uncertain resampler output in the 500 ms pre-roll; the current code conservatively invalidates that entire analysis and passes through. Changing a cutoff cannot close that fallback window. The permanent rejection ledger also removes overlap from later requests, which creates a possible clipped-word boundary risk if speech becomes detectable only in a later chunk; no captured failure demonstrates that case. A timed hold alone does not prove incremental coverage because chunking uses retained samples after capture filtering.
+
+Tool discovery found no unchanged local CLI that reproduces the exact current observer: the scratch scorer uses 480-sample windows, vendor `vad-rs` WAV examples hardcode 1600 and append silence, file import bypasses the observer, and the existing native smoke injects audio at stop and invalidates evidence. Saved history WAVs are retained PCM16, not complete original raw observer inputs. These limits prevent claiming an exact replay, but they do not prevent source-level repairs, existing-suite validation, and numeric checks against already observed production scores. The installed local Whisper CLI is a different ASR model and is not a substitute for this verification.
+
+### Resampler restart defect and bounded repair
+
+Further source inspection proves an existing duplicate-input defect in `FrameResampler`: finish pads and processes the wrapper `in_buf` but leaves it full. The next push takes zero new samples on its first loop and processes that already-consumed input again. This is also present in baseline `090f787`; it can repeat old audio across a recording boundary. Clear the consumed wrapper buffer after the finish processing attempt, including errors, and remove accounting that assumes this duplicate input is deliberately replayed.
+
+Preserve Rubato's internal filter state and conservative uncertainty around output affected by input padding. At the DJI 48-to-16 kHz ratio, the existing 512-input configuration uses 513-sample FFT input / 171-sample output units with 85 output samples of delay. Internal unmatched input and convolution overlap survive each process call. Resetting those buffers could lose genuine tail audio; declaring their delayed output fully genuine would be unsafe. This bounded repair removes duplicated input only. Known wrapper-added zeros versus uncertain filtered output remain conservatively conflated in pre-roll metadata, so rapid-restart fallback remains a documented limit rather than a passed check.
+
+The current six recorder tests cover lifecycle, pre-roll draining, quiet-energy rescue, and a separate whole-file resampler. There is no existing dynamic test for `FrameResampler` finish/restart validity. Use unchanged tests, compilation, and an independent source trace; report that native verification gap without adding a harness or requesting recordings.
+
+### Existing corrected-scorer regression evidence
+
+| Evidence | Confirmed cases | Observed maximum-score range | Fixed 0.35 comparison |
+| --- | ---: | ---: | --- |
+| Quiet no, whispered yes, quiet thank-you calibration | 3 | 0.90597594–0.99062383 | All pass |
+| User-confirmed quiet yes/no/bye/thank-you and whisper during failed acceptance | 5 | 0.88422024–0.96543610 | All pass |
+| Corrected calibration silent taps | 6 | 0.018438965–0.051016808 | All reject at completed whole-recording gate |
+| Latest user-confirmed wholly silent take | 1 | 0.02621609 | Rejects with complete whole/request evidence |
+| Two final requests surrounding the reported longer-silence failure | Exact individual labels unresolved | 0.10048628 and 0.13067126 | Both reject; do not infer a two-case rejection rate |
+
+These are direct comparisons with the already logged production evidence, not a new audio replay, fresh held-out result, or population guarantee. Old 480-sample scores are excluded. A 0.35 comparison does not reject Unknown evidence, fix pre-roll uncertainty, or prove large-upload behavior. User-reported spoken output establishes capture/provider preservation for the previous candidate; it is not proof of a newly rebuilt candidate's behavior.
+
+### Autonomous repairs and remaining verification boundary
+
+The upload-limit repair now carries ordered original retained-audio spans alongside compacted PCM. Both single and split cloud dispatches recheck ready evidence; malformed mappings pass through. New rejected spans enter the shared ledger before later overlapping chunks, and proxy usage counts surviving unique samples. All-skipped dispatch returns `NoSpeech`, skipped incremental chunks advance the consumed position without increasing successful-chunk count, and late rejection preserves immediate model-unload cleanup. Public signatures, provider selection, and the disabled cutoff are unchanged. Ten unchanged transcription tests passed. Independent source review found no actionable mapping, overlap, accounting, cancellation, or cleanup regression. Those tests do not dynamically exercise the new mapping code.
+
+Provider-internal quiet-audio retries and cloud-to-local rescue continue to use already admitted PCM. Their retry points do not perform another evidence check after the first provider attempt; the upload repair does not establish that broader every-attempt contract. This remains explicit under the unfinished every-request verification item, rather than being hidden by the completed upload-splitting repair.
+
+The resampler repair clears the wrapper input after its finish processing attempt, including errors, and removes the obsolete duplicate-input accounting. An independent source trace covered partial finish followed by push, repeated finish, exact alignment, no-resampling, and processing failure. Six unchanged recorder tests passed. Rubato internal state and conservative transition uncertainty are preserved. No existing test exercises this precise finish/restart path, so the source-level correction is not a native acceptance result.
+
+| Required behavior | Existing evidence | Remaining gap |
+| --- | --- | --- |
+| Quiet/short words and whispers | Eight user-confirmed corrected-scorer spoken controls appeared; fixed 0.35 comparison preserves all eight | No enabled 0.35 native acceptance; repairs changed capture/dispatch afterward |
+| Silent taps and longer silence | Six confirmed short silent calibration takes and the latest confirmed longer silent take all score below 0.35; earlier enabled 0.08 longer-silence acceptance failed | No independent enabled 0.35 result or reliable aggregate rejection rate |
+| Handling noise | One older short clip explicitly confirmed as silence/handling noise; corrected silent-tap individual handling labels unresolved | No separately labeled corrected-scorer handling control |
+| Initial silence then speech | Baseline user check included three seconds then yes and was reported working | No confirmed corrected-scorer 3/5-second leading-silence control |
+| Rapid restart and cancellation | Source isolates operations and preserves uncertain-evidence fallback; consumed-input replay repaired | Native cancellation/restart isolation and the conditional pre-roll Unknown window remain unverified |
+| Incremental, large-upload, and borrowed dictation | Original-coordinate mappings and borrowed full-segment repair source-reviewed; existing tests compile/pass | No native proof for rejection boundaries, word overlap, or restored meeting ownership |
+| Paste/history/overlay cleanup and retired phrases | One complete rejection observed in the failed 0.08 batch; spoken thank-you and bye appeared | Full existing smoke stopped at TextEdit focus before transcription; quoted subtitle-credit preservation and full cleanup contract unverified |
+
+No further recordings are requested. The unchanged native smoke injects audio at stop and invalidates observer evidence, so even resolving its focus failure would not prove the missing acoustic acceptance. Existing saved WAVs cannot reproduce original raw observer samples. Keep ordinary-use rejection and phrase retirement disabled; no new tests or replay harnesses were added to bridge these gaps.
+
+### Current latency evidence
+
+Re-reading the corrected-scorer production logs gives these small-sample measurements. Median/p95 use nearest-rank p95; for these counts p95 is the maximum. Start/stop are handler measurements, and provider-stage timing excludes final paste and some scheduling.
+
+| Session | Takes | Start ms median/p95 | Stop ms median/p95 | Provider stage ms median/p95 |
+| --- | ---: | ---: | ---: | ---: |
+| Saved baseline | 10 | 35.5 / 47 | 37.5 / 103 | 308 / 333 |
+| Corrected 512 calibration, disabled | 9 | 40 / 49 | 37 / 2702 | 294 / 793 |
+| Corrected 0.08 failed acceptance | 9 | 35 / 82 | 44 / 76 | 295.5 / 721 (8 provider calls) |
+| Latest disabled silent take | 1 | 44 / 44 | 37 / 37 | 494 / 494 |
+
+The three corrected sessions initialized the detector in 24.225, 30.550, and 31.585 ms on its worker; subsequent operations reported zero initialization time. Capture does not await that worker, and request checks use ready evidence without waiting. These are source properties and observed timings, not a causal overhead estimate. The unexplained 2702 ms stop outlier remains a limitation; later checkpoints measured capture-stop work at 1–10 ms and the outlier did not recur. Exact stop-to-paste median/p95, cold-tap fallback frequency, and population rejection rates remain unknown. These measurements predate the two latest repairs.
+
+After both autonomous repairs, all 155 unchanged Rust tests passed, `bun run tauri:build:fast` passed (including the frontend build), and `bun run test:e2e:release-transcribe -- --preflight-only` passed. The preflight result is under `agent-scratch/release-transcribe-smoke/2026-10-24T04-40-51-775Z/`. Formatting and diff checks passed. No test, fixture, or smoke-script changes were made. The fast build updates `src-tauri/target/debug/uttr`; it does not update the running app bundle. No app was restarted and no microphone recording was initiated during this autonomous pass. The existing disabled diagnostic bundle remains the last launched version.
+
+Completion is blocked by missing acoustic/native acceptance, not by a failing build or unit suite. The unchanged automation cannot provide that evidence, and neither speculative activation nor more requested recordings is appropriate. The plan stays active and unarchived, with ordinary rejection disabled. The two focused repairs received independent source reviews; this is not a completed full-branch Deliver final review, which remains pending the unresolved verification requirements.

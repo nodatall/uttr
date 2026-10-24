@@ -121,7 +121,7 @@ impl DictationRequestContext {
     fn reject_evidence(
         &self,
         evidence: SpeechEvidence,
-        range: Range<usize>,
+        ranges: &[Range<usize>],
         boundary: &str,
     ) -> bool {
         let max_score = match evidence {
@@ -133,12 +133,14 @@ impl DictationRequestContext {
             .is_some_and(|(cutoff, score)| score < cutoff);
         info!(
             "Dictation speech gate operation={} boundary={} start={} end={} max_score={:?} enabled={} rejected={}",
-            self.operation_id, boundary, range.start, range.end, max_score,
+            self.operation_id, boundary,
+            ranges.first().map_or(0, |range| range.start),
+            ranges.last().map_or(0, |range| range.end), max_score,
             DICTATION_NO_SPEECH_CUTOFF.is_some(), reject
         );
         if reject {
             let mut rejected = self.rejected.lock().unwrap();
-            rejected.push(range);
+            rejected.extend(ranges.iter().cloned());
             rejected.sort_unstable_by_key(|range| range.start);
             let mut merged: Vec<Range<usize>> = Vec::with_capacity(rejected.len());
             for range in rejected.drain(..) {
@@ -159,50 +161,182 @@ impl DictationRequestContext {
             .as_ref()
             .map(DictationAnalysis::whole_recording_evidence)
             .unwrap_or(SpeechEvidence::Unknown);
-        self.reject_evidence(evidence, 0..sample_count, "whole")
+        self.reject_evidence(evidence, &[0..sample_count], "whole")
     }
 
     /// Remove known-rejected ranges without mutating retained capture audio.
-    fn request_audio(&self, audio: Vec<f32>, range: Range<usize>) -> Option<Vec<f32>> {
-        if range.start > range.end || range.len() != audio.len() {
-            warn!("Dictation speech gate operation={} reason=range_mismatch start={} end={} samples={}",
-                self.operation_id, range.start, range.end, audio.len());
-            return Some(audio);
+    fn request_audio(
+        &self,
+        audio: Vec<f32>,
+        range: Range<usize>,
+    ) -> Option<(Vec<f32>, DictationRequestAudio)> {
+        DictationRequestAudio {
+            context: self.clone(),
+            source_ranges: Some(vec![range]),
         }
-        let evidence = self
-            .analysis
-            .as_ref()
-            .map(|analysis| analysis.evidence(range.clone()))
-            .unwrap_or(SpeechEvidence::Unknown);
-        if self.reject_evidence(evidence, range.clone(), "request") {
-            return None;
-        }
-        let rejected = self.rejected.lock().unwrap();
-        if rejected.is_empty() {
-            return Some(audio);
-        }
-        let mut cursor = range.start;
-        let mut kept = Vec::with_capacity(audio.len());
-        for skip in rejected
-            .iter()
-            .filter(|skip| skip.end > range.start && skip.start < range.end)
-        {
-            let end = skip.start.min(range.end).max(cursor);
-            kept.extend_from_slice(&audio[cursor - range.start..end - range.start]);
-            cursor = cursor.max(skip.end.min(range.end));
-        }
-        kept.extend_from_slice(&audio[cursor - range.start..]);
-        if kept.is_empty() {
-            None
-        } else {
-            Some(kept)
-        }
+        .filter(audio)
     }
 
     fn invalidate(&self) {
         if let Some(analysis) = &self.analysis {
             analysis.invalidate();
         }
+    }
+}
+
+/// Original retained coordinates for PCM after rejected intervals are removed.
+#[derive(Clone)]
+struct DictationRequestAudio {
+    context: DictationRequestContext,
+    source_ranges: Option<Vec<Range<usize>>>,
+}
+
+impl DictationRequestAudio {
+    fn valid_ranges(&self, sample_count: usize) -> Option<&[Range<usize>]> {
+        let ranges = self.source_ranges.as_deref()?;
+        let mut total = 0usize;
+        let mut previous_end = 0usize;
+        for range in ranges {
+            if range.start < previous_end || range.start > range.end {
+                return None;
+            }
+            total = total.checked_add(range.end.checked_sub(range.start)?)?;
+            previous_end = range.end;
+        }
+        (total == sample_count).then_some(ranges)
+    }
+
+    fn slice(&self, range: Range<usize>, sample_count: usize) -> Self {
+        let source_ranges = self.valid_ranges(sample_count).and_then(|sources| {
+            if range.start > range.end || range.end > sample_count {
+                return None;
+            }
+            let mut mapped = Vec::new();
+            let mut offset = 0usize;
+            for source in sources {
+                let end = offset.checked_add(source.len())?;
+                let start_in_slice = range.start.max(offset);
+                let end_in_slice = range.end.min(end);
+                if start_in_slice < end_in_slice {
+                    mapped.push(
+                        source.start.checked_add(start_in_slice - offset)?
+                            ..source.start.checked_add(end_in_slice - offset)?,
+                    );
+                }
+                offset = end;
+            }
+            Some(mapped)
+        });
+        Self {
+            context: self.context.clone(),
+            source_ranges,
+        }
+    }
+
+    fn samples_overlapping(
+        &self,
+        sample_count: usize,
+        other: &Self,
+        other_sample_count: usize,
+    ) -> Option<usize> {
+        let ranges = self.valid_ranges(sample_count)?;
+        let other_ranges = other.valid_ranges(other_sample_count)?;
+        let mut total = 0usize;
+        for range in ranges {
+            let first = other_ranges.partition_point(|other| other.end <= range.start);
+            for other in &other_ranges[first..] {
+                if other.start >= range.end {
+                    break;
+                }
+                let start = range.start.max(other.start);
+                let end = range.end.min(other.end);
+                total = total.checked_add(end.saturating_sub(start))?;
+            }
+        }
+        Some(total)
+    }
+
+    fn filter(mut self, audio: Vec<f32>) -> Option<(Vec<f32>, Self)> {
+        let Some(ranges) = self.valid_ranges(audio.len()) else {
+            warn!(
+                "Dictation speech gate operation={} reason=range_mismatch samples={}",
+                self.context.operation_id,
+                audio.len()
+            );
+            self.source_ranges = None;
+            return Some((audio, self));
+        };
+        let evidence = self
+            .context
+            .analysis
+            .as_ref()
+            .and_then(|analysis| {
+                let mut max_score = 0.0f32;
+                for range in ranges {
+                    match analysis.evidence(range.clone()) {
+                        SpeechEvidence::Complete { max_score: score } => {
+                            max_score = max_score.max(score);
+                        }
+                        SpeechEvidence::Unknown => return None,
+                    }
+                }
+                (!ranges.is_empty()).then_some(SpeechEvidence::Complete { max_score })
+            })
+            .unwrap_or(SpeechEvidence::Unknown);
+        if self.context.reject_evidence(evidence, ranges, "request") {
+            return None;
+        }
+        let rejected = self.context.rejected.lock().unwrap();
+        if rejected.is_empty() {
+            drop(rejected);
+            return Some((audio, self));
+        }
+        let mut kept = Vec::with_capacity(audio.len());
+        let mut kept_ranges = Vec::new();
+        let mut offset = 0usize;
+        for source in ranges {
+            let mut cursor = source.start;
+            for skip in rejected
+                .iter()
+                .filter(|skip| skip.end > source.start && skip.start < source.end)
+            {
+                let end = skip.start.min(source.end).max(cursor);
+                if cursor < end {
+                    kept.extend_from_slice(
+                        &audio[offset + (cursor - source.start)..offset + (end - source.start)],
+                    );
+                    kept_ranges.push(cursor..end);
+                }
+                cursor = cursor.max(skip.end.min(source.end));
+            }
+            if cursor < source.end {
+                kept.extend_from_slice(
+                    &audio[offset + (cursor - source.start)..offset + source.len()],
+                );
+                kept_ranges.push(cursor..source.end);
+            }
+            // valid_ranges checked the total before any indexing.
+            offset += source.len();
+        }
+        drop(rejected);
+        if kept.is_empty() {
+            None
+        } else {
+            self.source_ranges = Some(kept_ranges);
+            Some((kept, self))
+        }
+    }
+}
+
+fn filter_dictation_request(
+    audio: Vec<f32>,
+    dictation: Option<DictationRequestAudio>,
+) -> Option<(Vec<f32>, Option<DictationRequestAudio>)> {
+    match dictation {
+        Some(request) => request
+            .filter(audio)
+            .map(|(audio, request)| (audio, Some(request))),
+        None => Some((audio, None)),
     }
 }
 
@@ -1554,11 +1688,15 @@ impl TranscriptionManager {
         allow_local_fallback_on_cloud_error: bool,
         proxy_metadata: groq_client::ProxyTranscriptionMetadata<'_>,
         route: CloudTranscriptionRoute,
-    ) -> Result<String> {
+        dictation: Option<DictationRequestAudio>,
+    ) -> Result<DictationTranscription> {
         let chunk_limit_bytes = safe_live_chunk_limit_bytes(route);
         let chunks = plan_live_chunk_ranges(audio.len(), chunk_limit_bytes)?;
 
         if chunks.len() <= 1 {
+            let Some((audio, _)) = filter_dictation_request(audio, dictation) else {
+                return Ok(DictationTranscription::NoSpeech);
+            };
             return match route {
                 CloudTranscriptionRoute::DirectGroq => {
                     self.transcribe_with_direct_groq(
@@ -1588,7 +1726,8 @@ impl TranscriptionManager {
                     )
                     .await
                 }
-            };
+            }
+            .map(DictationTranscription::Text);
         }
 
         debug!(
@@ -1599,6 +1738,7 @@ impl TranscriptionManager {
 
         let total_chunks = chunks.len() as u32;
         let mut assembled = String::new();
+        let mut dispatched = false;
 
         for (index, chunk) in chunks.iter().enumerate() {
             if self.cancel_requested.load(Ordering::Relaxed) {
@@ -1607,6 +1747,31 @@ impl TranscriptionManager {
 
             let current_chunk = index as u32 + 1;
             let chunk_audio = audio[chunk.start..chunk.end].to_vec();
+            let request = dictation
+                .as_ref()
+                .map(|request| request.slice(chunk.start..chunk.end, audio.len()));
+            let unique_start = if index == 0 {
+                0
+            } else {
+                LIVE_TRANSCRIPTION_OVERLAP_SAMPLES.min(chunk_audio.len())
+            };
+            let unique_sample_count = chunk_audio.len() - unique_start;
+            let unique_request = request
+                .as_ref()
+                .map(|request| request.slice(unique_start..chunk_audio.len(), chunk_audio.len()));
+            let Some((chunk_audio, admitted_request)) =
+                filter_dictation_request(chunk_audio, request)
+            else {
+                continue;
+            };
+            let unique_audio_seconds = admitted_request
+                .as_ref()
+                .zip(unique_request.as_ref())
+                .and_then(|(admitted, unique)| {
+                    admitted.samples_overlapping(chunk_audio.len(), unique, unique_sample_count)
+                })
+                .map(|samples| samples.div_ceil(SAMPLE_RATE) as u32)
+                .unwrap_or_else(|| live_chunk_unique_audio_seconds(*chunk, current_chunk));
             debug!(
                 "Transcribing chunk {} of {} (samples={}, source={:?}, route={:?})",
                 current_chunk,
@@ -1645,20 +1810,22 @@ impl TranscriptionManager {
                             source: proxy_metadata.source,
                             chunk_index: Some(current_chunk),
                             chunk_count: Some(total_chunks),
-                            audio_seconds: Some(live_chunk_unique_audio_seconds(
-                                *chunk,
-                                current_chunk,
-                            )),
+                            audio_seconds: Some(unique_audio_seconds),
                         },
                     )
                     .await?
                 }
             };
 
+            dispatched = true;
             append_stitched_text(&mut assembled, &chunk_text);
         }
 
-        Ok(assembled)
+        Ok(if dispatched {
+            DictationTranscription::Text(assembled)
+        } else {
+            DictationTranscription::NoSpeech
+        })
     }
 
     async fn transcribe_raw_with_settings(
@@ -1667,7 +1834,8 @@ impl TranscriptionManager {
         settings: &AppSettings,
         allow_local_fallback_on_cloud_error: bool,
         proxy_metadata: groq_client::ProxyTranscriptionMetadata<'_>,
-    ) -> Result<String> {
+        dictation: Option<DictationRequestAudio>,
+    ) -> Result<DictationTranscription> {
         self.update_last_activity();
 
         if self.cancel_requested.load(Ordering::Relaxed) {
@@ -1675,7 +1843,7 @@ impl TranscriptionManager {
         }
 
         if audio.is_empty() {
-            return Ok(String::new());
+            return Ok(DictationTranscription::Text(String::new()));
         }
 
         let audio = prepare_transcription_audio(audio);
@@ -1705,8 +1873,12 @@ impl TranscriptionManager {
             .unwrap_or(false);
 
         if !is_cloud_model {
+            let Some((audio, _)) = filter_dictation_request(audio, dictation) else {
+                return Ok(DictationTranscription::NoSpeech);
+            };
             self.transcribe_raw_local_with_settings_async(audio, settings)
                 .await
+                .map(DictationTranscription::Text)
         } else {
             let model_id = active_model_id
                 .as_deref()
@@ -1722,6 +1894,7 @@ impl TranscriptionManager {
                         allow_local_fallback_on_cloud_error,
                         proxy_metadata,
                         CloudTranscriptionRoute::DirectOpenAi,
+                        dictation,
                     )
                     .await;
             }
@@ -1738,6 +1911,7 @@ impl TranscriptionManager {
                         allow_local_fallback_on_cloud_error,
                         proxy_metadata,
                         CloudTranscriptionRoute::DirectGroq,
+                        dictation,
                     )
                     .await;
             }
@@ -1749,6 +1923,7 @@ impl TranscriptionManager {
                 allow_local_fallback_on_cloud_error,
                 proxy_metadata,
                 CloudTranscriptionRoute::BackendProxy,
+                dictation,
             )
             .await
         }
@@ -2168,8 +2343,8 @@ impl TranscriptionManager {
                 let chunk_end = next_start + CHUNK_SAMPLES;
                 let chunk_start = next_start.saturating_sub(CHUNK_OVERLAP_SAMPLES);
                 let chunk_samples = speech_buffer[chunk_start..chunk_end].to_vec();
-                let chunk_samples = if let Some(context) = &runtime.dictation {
-                    let Some(samples) =
+                let (chunk_samples, dictation_request) = if let Some(context) = &runtime.dictation {
+                    let Some((samples, request)) =
                         context.request_audio(chunk_samples, chunk_start..chunk_end)
                     else {
                         runtime.next_chunk_start.store(chunk_end, Ordering::Relaxed);
@@ -2177,9 +2352,9 @@ impl TranscriptionManager {
                         made_progress = true;
                         continue 'chunking;
                     };
-                    samples
+                    (samples, Some(request))
                 } else {
-                    chunk_samples
+                    (chunk_samples, None)
                 };
 
                 runtime.in_flight.store(true, Ordering::Relaxed);
@@ -2217,6 +2392,7 @@ impl TranscriptionManager {
                         &settings,
                         false,
                         groq_client::ProxyTranscriptionMetadata::default(),
+                        dictation_request,
                     )
                     .await
                 } else {
@@ -2228,7 +2404,7 @@ impl TranscriptionManager {
                     })
                     .await
                     {
-                        Ok(result) => result,
+                        Ok(result) => result.map(DictationTranscription::Text),
                         Err(join_err) => Err(anyhow::anyhow!(
                             "Incremental local chunk task failed to join: {}",
                             join_err
@@ -2238,7 +2414,12 @@ impl TranscriptionManager {
                 runtime.in_flight.store(false, Ordering::Relaxed);
 
                 match chunk_result {
-                    Ok(chunk_text) => {
+                    Ok(DictationTranscription::NoSpeech) => {
+                        runtime.next_chunk_start.store(chunk_end, Ordering::Relaxed);
+                        saw_pause = false;
+                        made_progress = true;
+                    }
+                    Ok(DictationTranscription::Text(chunk_text)) => {
                         if self.cancel_requested.load(Ordering::Relaxed) {
                             break 'chunking;
                         }
@@ -2406,15 +2587,16 @@ impl TranscriptionManager {
         } else {
             Vec::new()
         };
-        let tail_audio = if let Some(context) = &session.runtime.dictation {
+        let (tail_audio, tail_dictation) = if let Some(context) = &session.runtime.dictation {
             context
                 .request_audio(
                     tail_audio,
                     tail_start.min(full_samples.len())..full_samples.len(),
                 )
+                .map(|(audio, request)| (audio, Some(request)))
                 .unwrap_or_default()
         } else {
-            tail_audio
+            (tail_audio, None)
         };
         let tail_sample_count = tail_audio.len();
         info!(
@@ -2437,13 +2619,15 @@ impl TranscriptionManager {
                     &settings,
                     false,
                     groq_client::ProxyTranscriptionMetadata::default(),
+                    tail_dictation,
                 ),
             )
             .await;
             session.runtime.in_flight.store(false, Ordering::Relaxed);
 
             match tail_result {
-                Ok(Ok(tail_text)) => {
+                Ok(Ok(DictationTranscription::NoSpeech)) => {}
+                Ok(Ok(DictationTranscription::Text(tail_text))) => {
                     if self.cancel_requested.load(Ordering::Relaxed) {
                         return Err(anyhow::anyhow!("Transcription cancelled"));
                     }
@@ -2657,8 +2841,12 @@ impl TranscriptionManager {
         audio: Vec<f32>,
         source: Option<&str>,
     ) -> Result<String> {
-        self.transcribe_with_source_policy(audio, source, false)
+        self.transcribe_with_source_policy(audio, source, false, None)
             .await
+            .map(|result| match result {
+                DictationTranscription::Text(text) => text,
+                DictationTranscription::NoSpeech => String::new(),
+            })
     }
 
     pub(crate) async fn transcribe_dictation_with_source(
@@ -2671,12 +2859,16 @@ impl TranscriptionManager {
             return Ok(DictationTranscription::NoSpeech);
         }
         let sample_count = audio.len();
-        let Some(audio) = context.request_audio(audio, 0..sample_count) else {
+        let Some((audio, request)) = context.request_audio(audio, 0..sample_count) else {
             return Ok(DictationTranscription::NoSpeech);
         };
-        self.transcribe_with_source_policy(audio, source, DICTATION_NO_SPEECH_CUTOFF.is_some())
-            .await
-            .map(DictationTranscription::Text)
+        self.transcribe_with_source_policy(
+            audio,
+            source,
+            DICTATION_NO_SPEECH_CUTOFF.is_some(),
+            Some(request),
+        )
+        .await
     }
 
     async fn transcribe_with_source_policy(
@@ -2684,7 +2876,8 @@ impl TranscriptionManager {
         audio: Vec<f32>,
         source: Option<&str>,
         retire_phrase_filter: bool,
-    ) -> Result<String> {
+        dictation: Option<DictationRequestAudio>,
+    ) -> Result<DictationTranscription> {
         self.update_last_activity();
 
         let st = std::time::Instant::now();
@@ -2694,7 +2887,7 @@ impl TranscriptionManager {
         if audio.is_empty() {
             debug!("Empty audio vector");
             self.maybe_unload_immediately("empty audio");
-            return Ok(String::new());
+            return Ok(DictationTranscription::Text(String::new()));
         }
 
         let levels = audio_levels(&audio);
@@ -2713,8 +2906,13 @@ impl TranscriptionManager {
                     source,
                     ..Default::default()
                 },
+                dictation,
             )
             .await?;
+        let DictationTranscription::Text(raw_transcription) = raw_transcription else {
+            self.maybe_unload_immediately("speech-free transcription");
+            return Ok(DictationTranscription::NoSpeech);
+        };
         let mut filtered_result = self.apply_transcription_filters(raw_transcription, &settings);
         let suppress = if retire_phrase_filter {
             is_punctuation_only_transcription(&filtered_result)
@@ -2745,7 +2943,7 @@ impl TranscriptionManager {
 
         self.maybe_unload_immediately("transcription");
 
-        Ok(final_result)
+        Ok(DictationTranscription::Text(final_result))
     }
 }
 
