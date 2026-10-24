@@ -224,6 +224,7 @@ struct WorkerSession {
     tail: Vec<f32>,
     raw_samples: usize,
     processed_samples: usize,
+    chronological_max_score: Option<f32>,
     process_micros: u128,
 }
 
@@ -262,6 +263,7 @@ fn run_worker(model_path: PathBuf, rx: mpsc::Receiver<Message>) {
                     tail: Vec::with_capacity(FRAME_SAMPLES),
                     raw_samples: 0,
                     processed_samples: 0,
+                    chronological_max_score: None,
                     process_micros: 0,
                 });
             }
@@ -286,9 +288,14 @@ fn run_worker(model_path: PathBuf, rx: mpsc::Receiver<Message>) {
                 while worker.pending.len() >= FRAME_SAMPLES {
                     let frame: Vec<_> = worker.pending.drain(..FRAME_SAMPLES).collect();
                     let source = worker.processed_samples..worker.processed_samples + FRAME_SAMPLES;
-                    if !score_frame(model.as_mut(), worker, &frame, source) {
+                    let Some(score) = score_frame(model.as_mut(), worker, &frame, source) else {
                         break;
-                    }
+                    };
+                    worker.chronological_max_score = Some(
+                        worker
+                            .chronological_max_score
+                            .map_or(score, |max| max.max(score)),
+                    );
                     worker.processed_samples += FRAME_SAMPLES;
                 }
             }
@@ -300,14 +307,22 @@ fn run_worker(model_path: PathBuf, rx: mpsc::Receiver<Message>) {
                     active = Some(worker);
                     continue;
                 }
-                if !session.invalid.load(Ordering::Acquire)
+                let pending_real_samples = worker.pending.len();
+                let final_window_attempted = !session.invalid.load(Ordering::Acquire)
                     && !worker.pending.is_empty()
-                    && worker.tail.len() == FRAME_SAMPLES
-                {
+                    && worker.tail.len() == FRAME_SAMPLES;
+                let final_window_score = if final_window_attempted {
                     let tail = worker.tail.clone();
                     let source = worker.raw_samples - FRAME_SAMPLES..worker.raw_samples;
-                    score_frame(model.as_mut(), &mut worker, &tail, source);
-                }
+                    score_frame(model.as_mut(), &mut worker, &tail, source)
+                } else {
+                    None
+                };
+                let final_window_status = match (final_window_attempted, final_window_score) {
+                    (_, Some(_)) => "scored",
+                    (true, None) => "failed",
+                    (false, None) => "not-attempted",
+                };
                 let mut state = session.state.lock().unwrap();
                 state.raw_samples = worker.raw_samples;
                 state.complete = !session.invalid.load(Ordering::Acquire)
@@ -324,12 +339,16 @@ fn run_worker(model_path: PathBuf, rx: mpsc::Receiver<Message>) {
                     _ => "complete",
                 };
                 log::info!(
-                    "[speech-observer] binding={} operation={} raw_samples={} retained_samples={} max_score={:.6} complete={} reason={} init_us={} process_us={}",
+                    "[speech-observer] binding={} operation={} raw_samples={} retained_samples={} max_score={:.6} chronological_max_score={:?} final_window_score={:?} final_window_status={} pending_real_samples={} complete={} reason={} init_us={} process_us={}",
                     session.binding_id,
                     session.operation_id,
                     worker.raw_samples,
                     state.retained_samples,
                     state.scores.iter().map(|score| score.value).fold(0.0, f32::max),
+                    worker.chronological_max_score,
+                    final_window_score,
+                    final_window_status,
+                    pending_real_samples,
                     state.complete,
                     reason,
                     init_micros,
@@ -368,7 +387,7 @@ fn score_frame(
     worker: &mut WorkerSession,
     frame: &[f32],
     source: Range<usize>,
-) -> bool {
+) -> Option<f32> {
     let started = Instant::now();
     let score = model
         .and_then(|model| model.compute(frame).ok())
@@ -377,15 +396,15 @@ fn score_frame(
     let Some(value) = score.filter(|value| value.is_finite() && (0.0..=1.0).contains(value)) else {
         worker.session.invalid.store(true, Ordering::Release);
         worker.session.invalid_reason.store(5, Ordering::Release);
-        return false;
+        return None;
     };
     let mut state = worker.session.state.lock().unwrap();
     if state.scores.len() >= MAX_BLOCKS {
         worker.session.invalid.store(true, Ordering::Release);
         worker.session.invalid_reason.store(1, Ordering::Release);
-        return false;
+        return None;
     }
     state.covered_samples = state.covered_samples.max(source.end);
     state.scores.push(Score { source, value });
-    true
+    Some(value)
 }
