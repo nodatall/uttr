@@ -31,7 +31,7 @@ Complete the implementation and autonomous checks using the evidence already col
 - [x] Correct the observer's final audio window so it never repeats already-examined samples. Use the model's supported frame size; calibrate it in step 3 before enabling rejection.
 - [x] Clear resampler input after it has been consumed at stop, so a later recording cannot replay it. Preserve the resampler's filter state and conservative handling of uncertain audio; do not claim this removes every rapid-restart fallback.
 - [x] Prevent known output-frame padding from invalidating the next recording. Analyze all available resampler output, preserve its filter state and genuine tail, and keep only explicitly appended zeros out of pre-roll. Actual processing failure still passes through.
-- [ ] Verify the on-press loader and per-recording state with saved-audio replay and source tracing, including session reset, cancellation, rapid restarts, and borrowed-microphone ownership. Repair demonstrated defects while preserving uncertainty pass-through.
+- [x] Verify the on-press loader and per-recording state with saved-audio replay and source tracing, including session reset, cancellation, rapid restarts, and borrowed-microphone ownership. Keep native timing and meeting-ownership gaps explicit; recheck replacement-model state during final replay.
 
 ### 3. Establish a conservative rejection rule
 
@@ -45,7 +45,7 @@ Complete the implementation and autonomous checks using the evidence already col
 - [x] Carry ready evidence into provider retries and local fallback. A late silence decision stops further requests without hiding an earlier completed request.
 - [x] Close the uncovered upload-limit splitting path: each actual cloud request must retain its original audio coordinates and receive its own speech check. Preserve cloud-to-local fallback and non-dictation behavior.
 - [ ] Retire phrase-based suppression for microphone dictation in the same activation as the new detector. Verify that genuine previously blocked phrases survive, including when detector evidence is uncertain. Preserve the separate punctuation-only rule and existing behavior for other transcription sources.
-- [ ] Complete rejected sessions through existing cleanup paths. Verify no paste or history for wholly rejected sessions, no provider calls when rejected before first dispatch, stopped remaining attempts after late rejection, and restored microphone ownership after borrowed dictation.
+- [ ] Recheck ready evidence before output, then complete rejected sessions through existing cleanup paths. Verify no paste or history for wholly rejected sessions, accurate counts for earlier provider calls, stopped remaining attempts after late rejection, and restored microphone ownership after borrowed dictation.
 
 ### 5. Verify the rebuilt native app before activation
 

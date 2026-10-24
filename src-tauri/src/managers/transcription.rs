@@ -173,13 +173,13 @@ impl DictationRequestContext {
         reject
     }
 
-    pub(crate) fn reject_whole_recording(&self, sample_count: usize) -> bool {
+    pub(crate) fn reject_whole_recording(&self, sample_count: usize, boundary: &str) -> bool {
         let evidence = self
             .analysis
             .as_ref()
             .map(DictationAnalysis::whole_recording_evidence)
             .unwrap_or(SpeechEvidence::Unknown);
-        self.reject_evidence(evidence, &[0..sample_count], "whole")
+        self.reject_evidence(evidence, &[0..sample_count], boundary)
     }
 
     /// Gate this request while preserving all context in admitted audio.
@@ -2937,7 +2937,7 @@ impl TranscriptionManager {
         source: Option<&str>,
         context: &DictationRequestContext,
     ) -> Result<DictationTranscription> {
-        if context.reject_whole_recording(audio.len()) {
+        if context.reject_whole_recording(audio.len(), "whole") {
             return Ok(DictationTranscription::NoSpeech);
         }
         let sample_count = audio.len();

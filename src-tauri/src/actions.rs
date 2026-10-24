@@ -4063,7 +4063,7 @@ fn handle_transcription_stop(
 
         if dictation_context
             .as_ref()
-            .is_some_and(|context| context.reject_whole_recording(samples.len()))
+            .is_some_and(|context| context.reject_whole_recording(samples.len(), "whole"))
         {
             cancel_incremental_for_completion(
                 &tm_for_worker,
@@ -4272,6 +4272,21 @@ fn handle_transcription_stop(
                 ) {
                     debug!("Quick dictation was cancelled before output handling");
                     restore_ui_after_transcription(&ah, &completion_context);
+                    return;
+                }
+                if dictation_context.as_ref().is_some_and(|context| {
+                    context.reject_whole_recording(samples_clone.len(), "output")
+                }) {
+                    cancel_incremental_for_completion(
+                        &tm_for_worker,
+                        &binding_id,
+                        operation_id,
+                        completion_mode,
+                    );
+                    complete_transcription_ui_if_active(completion_mode, operation_id, || {
+                        restore_ui_after_transcription(&ah, &completion_context);
+                    });
+                    ui_guard.suppress();
                     return;
                 }
                 if suspected_no_input && transcription.trim().is_empty() {
