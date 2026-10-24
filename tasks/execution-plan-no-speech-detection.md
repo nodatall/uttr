@@ -20,17 +20,17 @@ Build the observer and dispatch integration while human recordings are pending; 
 
 ### 1. Establish speech and silence controls
 
-- [ ] Obtain consented, labeled recordings: silent taps, handling noise, natural quiet “yes,” “no,” “bye,” and “thank you,” whispers, immediate release after a word, and quiet speech after 3 and 5 seconds of silence. Cover the built-in microphone and one external microphone; separate calibration recordings from held-out checks. Stop activation if suitable human recordings are unavailable.
-- [ ] Check the recordings with existing audio tools and exercise the production capture path manually. Keep private recordings local and out of commits; use existing local diagnostics to inspect retained audio without uploading private recordings.
+- [ ] Obtain consented, labeled recordings on DJI MIC MINI: silent taps, handling noise, natural quiet “yes,” “no,” “bye,” and “thank you,” whispers, immediate release after a word, and quiet speech after 3 and 5 seconds of silence. Separate calibration recordings from held-out checks. The user limited microphone verification to DJI MIC MINI; other microphones remain unverified. Stop activation if suitable human recordings are unavailable.
+- [x] Check the recordings with existing audio tools and exercise the production capture path manually. Keep private recordings local and out of commits; use existing local diagnostics to inspect retained audio without uploading private recordings.
 
 ### 2. Observe speech without changing capture
 
-- [ ] Add an independent detector observing original audio, including pre-roll, before filtering, gain, or padding. Map its evidence to the audio retained for transcription, including the last real samples in a partial frame.
+- [x] Add an independent detector observing original audio, including pre-roll, before filtering, gain, or padding. Map its evidence to the audio retained for transcription, including the last real samples in a partial frame.
 - [ ] Implement the on-press loader and per-recording state. Verify immediate capture with delayed loading, plus isolation across cancellation, rapid restarts, and borrowed-microphone sessions.
 
 ### 3. Establish a conservative rejection rule
 
-- [ ] Use the highest raw speech score across the relevant audio. Calibrate a low rejection cutoff, then freeze it before the held-out run. With complete, ready evidence, the saved “Bye.” incident and held-out silent taps must be rejected. Every labeled word must survive capture and reach the provider input. Stop before activation or capture redesign if either requirement fails.
+- [ ] Use the highest raw speech score across the relevant audio. Calibrate a low rejection cutoff, then freeze it before the held-out run. The original “Bye.” incident's recorded raw score must fall below the cutoff; its WAV has expired from normal history, so exact replay remains a verification gap. Fresh held-out silent taps must be rejected with complete, ready evidence, and every labeled word must survive capture and reach the provider input. Stop before activation or capture redesign if either live requirement fails.
 
 ### 4. Apply the rule to every dictation request
 

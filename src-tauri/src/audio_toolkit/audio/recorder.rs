@@ -645,6 +645,7 @@ impl PreRollBuffer {
 struct RecordingObservation {
     analysis: DictationAnalysis,
     raw_samples: usize,
+    borrowed_retained_start: Option<usize>,
 }
 
 impl RecordingObservation {
@@ -843,6 +844,7 @@ fn run_consumer(
                     *observation = Some(RecordingObservation {
                         analysis,
                         raw_samples: pre_roll.len(),
+                        borrowed_retained_start: None,
                     });
                 }
                 handle_start(
@@ -862,13 +864,19 @@ fn run_consumer(
                 false
             }
             Cmd::ObservationBoundary(next, reply_tx) => {
-                let delta = drain_recording(
+                let mut delta = drain_recording(
                     *recording,
                     processed_samples,
                     drain_cursor,
                     saw_pause_since_last_drain,
                 );
                 if let Some(previous) = observation.take() {
+                    if let Some(start) = previous.borrowed_retained_start {
+                        // Incremental drains move the cursor; finalization needs
+                        // the entire borrowed segment in observer coordinates.
+                        // Start/Stop remove observation before clearing this PCM.
+                        delta.samples = processed_samples[start..].to_vec();
+                    }
                     previous.analysis.finish();
                 }
                 if let Some(analysis) = next {
@@ -876,6 +884,7 @@ fn run_consumer(
                         *observation = Some(RecordingObservation {
                             analysis,
                             raw_samples: 0,
+                            borrowed_retained_start: Some(processed_samples.len()),
                         });
                     } else {
                         analysis.invalidate();
