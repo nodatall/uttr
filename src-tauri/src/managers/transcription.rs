@@ -88,7 +88,15 @@ const DICTATION_NO_SPEECH_CUTOFF: Option<f32> = None;
 
 pub(crate) enum DictationTranscription {
     Text(String),
+    /// Terminal speech-gate suppression, possibly after earlier ASR invocations.
     NoSpeech,
+}
+
+#[derive(Default)]
+struct DictationAttemptStats {
+    // Client/engine invocations, not proof that an HTTP request was sent.
+    attempted: u64,
+    completed: u64,
 }
 
 /// Explicit microphone-dictation identity, even when analysis is unavailable.
@@ -98,6 +106,7 @@ pub(crate) struct DictationRequestContext {
     operation_id: u64,
     analysis: Option<DictationAnalysis>,
     rejected: Arc<Mutex<Vec<Range<usize>>>>,
+    attempts: Arc<Mutex<DictationAttemptStats>>,
 }
 
 impl DictationRequestContext {
@@ -111,11 +120,33 @@ impl DictationRequestContext {
             operation_id,
             analysis: analysis.filter(|analysis| analysis.matches(binding_id, operation_id)),
             rejected: Arc::new(Mutex::new(Vec::new())),
+            attempts: Arc::new(Mutex::new(DictationAttemptStats::default())),
         }
     }
 
     fn matches(&self, binding_id: &str, operation_id: u64) -> bool {
         self.binding_id == binding_id && self.operation_id == operation_id
+    }
+
+    fn log_attempt(&self, boundary: &str, samples: usize, completed: bool) {
+        let mut stats = self.attempts.lock().unwrap();
+        if completed {
+            stats.completed += 1;
+        } else {
+            stats.attempted += 1;
+        }
+        info!(
+            "Dictation ASR invocation operation={} boundary={} samples={} completed={} attempted_total={} completed_total={}",
+            self.operation_id, boundary, samples, completed, stats.attempted, stats.completed
+        );
+    }
+
+    fn log_skip(&self, boundary: &str) {
+        let stats = self.attempts.lock().unwrap();
+        info!(
+            "Dictation speech gate suppressed operation={} boundary={} attempted_total={} completed_total={}",
+            self.operation_id, boundary, stats.attempted, stats.completed
+        );
     }
 
     fn reject_evidence(
@@ -139,6 +170,7 @@ impl DictationRequestContext {
             DICTATION_NO_SPEECH_CUTOFF.is_some(), reject
         );
         if reject {
+            self.log_skip(boundary);
             let mut rejected = self.rejected.lock().unwrap();
             rejected.extend(ranges.iter().cloned());
             rejected.sort_unstable_by_key(|range| range.start);
@@ -173,6 +205,7 @@ impl DictationRequestContext {
         DictationRequestAudio {
             context: self.clone(),
             source_ranges: Some(vec![range]),
+            unique_source_ranges: None,
         }
         .filter(audio)
     }
@@ -189,6 +222,8 @@ impl DictationRequestContext {
 struct DictationRequestAudio {
     context: DictationRequestContext,
     source_ranges: Option<Vec<Range<usize>>>,
+    // Original coordinates of this upload chunk's non-overlap portion.
+    unique_source_ranges: Option<Vec<Range<usize>>>,
 }
 
 impl DictationRequestAudio {
@@ -230,17 +265,13 @@ impl DictationRequestAudio {
         Self {
             context: self.context.clone(),
             source_ranges,
+            unique_source_ranges: self.unique_source_ranges.clone(),
         }
     }
 
-    fn samples_overlapping(
-        &self,
-        sample_count: usize,
-        other: &Self,
-        other_sample_count: usize,
-    ) -> Option<usize> {
+    fn surviving_unique_samples(&self, sample_count: usize) -> Option<usize> {
         let ranges = self.valid_ranges(sample_count)?;
-        let other_ranges = other.valid_ranges(other_sample_count)?;
+        let other_ranges = self.unique_source_ranges.as_deref()?;
         let mut total = 0usize;
         for range in ranges {
             let first = other_ranges.partition_point(|other| other.end <= range.start);
@@ -320,11 +351,23 @@ impl DictationRequestAudio {
         }
         drop(rejected);
         if kept.is_empty() {
+            self.context.log_skip("rejected-ranges");
             None
         } else {
             self.source_ranges = Some(kept_ranges);
             Some((kept, self))
         }
+    }
+}
+
+fn log_dictation_attempt(
+    dictation: &Option<DictationRequestAudio>,
+    boundary: &str,
+    samples: usize,
+    completed: bool,
+) {
+    if let Some(request) = dictation {
+        request.context.log_attempt(boundary, samples, completed);
     }
 }
 
@@ -1224,7 +1267,8 @@ impl TranscriptionManager {
         &self,
         audio: Vec<f32>,
         settings: &AppSettings,
-    ) -> Result<String> {
+        dictation: Option<DictationRequestAudio>,
+    ) -> Result<DictationTranscription> {
         self.update_last_activity();
 
         if self.cancel_requested.load(Ordering::Relaxed) {
@@ -1232,7 +1276,7 @@ impl TranscriptionManager {
         }
 
         if audio.is_empty() {
-            return Ok(String::new());
+            return Ok(DictationTranscription::Text(String::new()));
         }
 
         let audio = prepare_transcription_audio(audio);
@@ -1244,18 +1288,28 @@ impl TranscriptionManager {
         }
         drop(engine_guard);
 
-        self.transcribe_with_local_engine(audio, settings)
+        let Some((audio, dictation)) = filter_dictation_request(audio, dictation) else {
+            return Ok(DictationTranscription::NoSpeech);
+        };
+        let sample_count = audio.len();
+        log_dictation_attempt(&dictation, "local", sample_count, false);
+        let result = self.transcribe_with_local_engine(audio, settings);
+        if result.is_ok() {
+            log_dictation_attempt(&dictation, "local", sample_count, true);
+        }
+        result.map(DictationTranscription::Text)
     }
 
     async fn transcribe_raw_local_with_settings_async(
         &self,
         audio: Vec<f32>,
         settings: &AppSettings,
-    ) -> Result<String> {
+        dictation: Option<DictationRequestAudio>,
+    ) -> Result<DictationTranscription> {
         let manager = self.clone();
         let settings_owned = settings.clone();
         match tauri::async_runtime::spawn_blocking(move || {
-            manager.transcribe_raw_local_with_settings(audio, &settings_owned)
+            manager.transcribe_raw_local_with_settings(audio, &settings_owned, dictation)
         })
         .await
         {
@@ -1273,7 +1327,8 @@ impl TranscriptionManager {
         audio: Vec<f32>,
         settings: &AppSettings,
         allow_local_fallback_on_cloud_error: bool,
-    ) -> Result<String> {
+        dictation: Option<DictationRequestAudio>,
+    ) -> Result<DictationTranscription> {
         let groq_model = groq_api_model_name(model_id)
             .ok_or_else(|| anyhow::anyhow!("Unknown Groq model id: {}", model_id))?;
         let api_key = match self.resolve_byok_groq_api_key() {
@@ -1290,6 +1345,10 @@ impl TranscriptionManager {
             }
         };
 
+        let Some((audio, dictation)) = filter_dictation_request(audio, dictation) else {
+            return Ok(DictationTranscription::NoSpeech);
+        };
+        log_dictation_attempt(&dictation, "groq", audio.len(), false);
         let request_started = Instant::now();
         match groq_client::transcribe_samples_direct(
             &api_key,
@@ -1300,7 +1359,10 @@ impl TranscriptionManager {
         )
         .await
         {
-            Ok(text) => Ok(text),
+            Ok(text) => {
+                log_dictation_attempt(&dictation, "groq", audio.len(), true);
+                Ok(DictationTranscription::Text(text))
+            }
             Err(groq_error) => {
                 report_byok_transcription_failure(
                     settings,
@@ -1317,6 +1379,9 @@ impl TranscriptionManager {
                     ));
                 }
 
+                let Some((audio, dictation)) = filter_dictation_request(audio, dictation) else {
+                    return Ok(DictationTranscription::NoSpeech);
+                };
                 let fallback_local_model_id = self
                     .select_local_fallback_model_id(
                         self.get_current_model()
@@ -1359,7 +1424,7 @@ impl TranscriptionManager {
                     })?;
                 }
 
-                self.transcribe_raw_local_with_settings_async(audio, settings)
+                self.transcribe_raw_local_with_settings_async(audio, settings, dictation)
                     .await
             }
         }
@@ -1371,7 +1436,8 @@ impl TranscriptionManager {
         audio: Vec<f32>,
         settings: &AppSettings,
         allow_local_fallback_on_cloud_error: bool,
-    ) -> Result<String> {
+        dictation: Option<DictationRequestAudio>,
+    ) -> Result<DictationTranscription> {
         let openai_model = openai_api_model_name(model_id)
             .ok_or_else(|| anyhow::anyhow!("Unknown OpenAI model id: {}", model_id))?;
         let api_key = match self.resolve_byok_openai_api_key() {
@@ -1388,6 +1454,10 @@ impl TranscriptionManager {
             }
         };
 
+        let Some((audio, dictation)) = filter_dictation_request(audio, dictation) else {
+            return Ok(DictationTranscription::NoSpeech);
+        };
+        log_dictation_attempt(&dictation, "openai", audio.len(), false);
         let request_started = Instant::now();
         match groq_client::transcribe_samples_direct_openai(
             &api_key,
@@ -1399,12 +1469,16 @@ impl TranscriptionManager {
         .await
         {
             Ok(text) => {
+                log_dictation_attempt(&dictation, "openai", audio.len(), true);
                 if !text.trim().is_empty() {
-                    return Ok(text);
+                    return Ok(DictationTranscription::Text(text));
                 }
 
+                let Some((audio, dictation)) = filter_dictation_request(audio, dictation) else {
+                    return Ok(DictationTranscription::NoSpeech);
+                };
                 let Some(levels) = non_silent_empty_transcription_levels(&audio, &text) else {
-                    return Ok(text);
+                    return Ok(DictationTranscription::Text(text));
                 };
 
                 warn!(
@@ -1421,6 +1495,12 @@ impl TranscriptionManager {
                         );
                     }
 
+                    log_dictation_attempt(
+                        &dictation,
+                        "openai-quiet-retry",
+                        boosted_audio.len(),
+                        false,
+                    );
                     match groq_client::transcribe_samples_direct_openai(
                         &api_key,
                         openai_model,
@@ -1431,9 +1511,21 @@ impl TranscriptionManager {
                     .await
                     {
                         Ok(retry_text) if !retry_text.trim().is_empty() => {
-                            return Ok(retry_text);
+                            log_dictation_attempt(
+                                &dictation,
+                                "openai-quiet-retry",
+                                boosted_audio.len(),
+                                true,
+                            );
+                            return Ok(DictationTranscription::Text(retry_text));
                         }
                         Ok(_) => {
+                            log_dictation_attempt(
+                                &dictation,
+                                "openai-quiet-retry",
+                                boosted_audio.len(),
+                                true,
+                            );
                             warn!(
                                 "OpenAI quiet audio rescue still returned an empty transcription"
                             );
@@ -1462,6 +1554,7 @@ impl TranscriptionManager {
                             audio,
                             settings,
                             allow_local_fallback_on_cloud_error,
+                            dictation,
                         )
                         .await;
                 }
@@ -1477,6 +1570,7 @@ impl TranscriptionManager {
                     "returned an empty transcription for non-silent audio",
                     audio,
                     settings,
+                    dictation,
                 )
                 .await
             }
@@ -1498,7 +1592,7 @@ impl TranscriptionManager {
 
                 let issue = format!("transcription failed: {}", openai_error);
                 self.transcribe_with_local_fallback_after_cloud_issue(
-                    "OpenAI", &issue, audio, settings,
+                    "OpenAI", &issue, audio, settings, dictation,
                 )
                 .await
             }
@@ -1511,7 +1605,11 @@ impl TranscriptionManager {
         issue: &str,
         audio: Vec<f32>,
         settings: &AppSettings,
-    ) -> Result<String> {
+        dictation: Option<DictationRequestAudio>,
+    ) -> Result<DictationTranscription> {
+        let Some((audio, dictation)) = filter_dictation_request(audio, dictation) else {
+            return Ok(DictationTranscription::NoSpeech);
+        };
         let fallback_local_model_id = self
             .select_local_fallback_model_id(
                 self.get_current_model()
@@ -1557,7 +1655,7 @@ impl TranscriptionManager {
                 })?;
         }
 
-        self.transcribe_raw_local_with_settings_async(audio, settings)
+        self.transcribe_raw_local_with_settings_async(audio, settings, dictation)
             .await
     }
 
@@ -1567,16 +1665,23 @@ impl TranscriptionManager {
         audio: Vec<f32>,
         settings: &AppSettings,
         allow_local_fallback_on_cloud_error: bool,
-        metadata: groq_client::ProxyTranscriptionMetadata<'_>,
-    ) -> Result<String> {
+        mut metadata: groq_client::ProxyTranscriptionMetadata<'_>,
+        dictation: Option<DictationRequestAudio>,
+    ) -> Result<DictationTranscription> {
         let access = self.ensure_backend_access_state().await?;
 
         if access.access_state == AccessState::Blocked
             && access.anonymous_trial_state != TrialState::New
         {
-            return self.open_claim_flow().await;
+            return self
+                .open_claim_flow()
+                .await
+                .map(DictationTranscription::Text);
         }
 
+        let Some((audio, dictation)) = filter_dictation_request(audio, dictation) else {
+            return Ok(DictationTranscription::NoSpeech);
+        };
         let groq_model = groq_api_model_name(model_id)
             .ok_or_else(|| anyhow::anyhow!("Unknown Groq model id: {}", model_id))?;
         let trimmed_audio = trim_proxy_upload_audio(&audio);
@@ -1587,7 +1692,7 @@ impl TranscriptionManager {
                 audio.len()
             );
             self.maybe_unload_immediately("trimmed proxy audio");
-            return Ok(String::new());
+            return Ok(DictationTranscription::Text(String::new()));
         }
 
         if trimmed_audio.len() != audio.len() {
@@ -1598,6 +1703,21 @@ impl TranscriptionManager {
             );
         }
 
+        let upload_dictation = dictation
+            .as_ref()
+            .map(|request| request.slice(0..trimmed_audio.len(), audio.len()));
+        let Some((trimmed_audio, upload_dictation)) =
+            filter_dictation_request(trimmed_audio, upload_dictation)
+        else {
+            return Ok(DictationTranscription::NoSpeech);
+        };
+        if let Some(unique_samples) = upload_dictation
+            .as_ref()
+            .and_then(|request| request.surviving_unique_samples(trimmed_audio.len()))
+        {
+            metadata.audio_seconds = Some(unique_samples.div_ceil(SAMPLE_RATE) as u32);
+        }
+        log_dictation_attempt(&upload_dictation, "proxy", trimmed_audio.len(), false);
         match groq_client::transcribe_samples_with_metadata(
             access.install_token.trim(),
             groq_model,
@@ -1609,16 +1729,20 @@ impl TranscriptionManager {
         .await
         {
             Ok(result) => {
+                log_dictation_attempt(&upload_dictation, "proxy", trimmed_audio.len(), true);
                 self.sync_cloud_access_state(
                     result.trial_state,
                     result.access_state,
                     result.entitlement_state,
                 );
-                Ok(result.text)
+                Ok(DictationTranscription::Text(result.text))
             }
             Err(error) => {
                 if error.is_blocked() && access.anonymous_trial_state != TrialState::New {
-                    return self.open_claim_flow().await;
+                    return self
+                        .open_claim_flow()
+                        .await
+                        .map(DictationTranscription::Text);
                 }
 
                 if error.is_retryable()
@@ -1628,6 +1752,10 @@ impl TranscriptionManager {
                         AccessState::Trialing | AccessState::Subscribed
                     )
                 {
+                    let Some((audio, dictation)) = filter_dictation_request(audio, dictation)
+                    else {
+                        return Ok(DictationTranscription::NoSpeech);
+                    };
                     let fallback_local_model_id = self
                         .select_local_fallback_model_id(
                             self.get_current_model()
@@ -1671,7 +1799,7 @@ impl TranscriptionManager {
                     }
 
                     return self
-                        .transcribe_raw_local_with_settings_async(audio, settings)
+                        .transcribe_raw_local_with_settings_async(audio, settings, dictation)
                         .await;
                 }
 
@@ -1694,7 +1822,7 @@ impl TranscriptionManager {
         let chunks = plan_live_chunk_ranges(audio.len(), chunk_limit_bytes)?;
 
         if chunks.len() <= 1 {
-            let Some((audio, _)) = filter_dictation_request(audio, dictation) else {
+            let Some((audio, dictation)) = filter_dictation_request(audio, dictation) else {
                 return Ok(DictationTranscription::NoSpeech);
             };
             return match route {
@@ -1704,6 +1832,7 @@ impl TranscriptionManager {
                         audio,
                         settings,
                         allow_local_fallback_on_cloud_error,
+                        dictation,
                     )
                     .await
                 }
@@ -1713,6 +1842,7 @@ impl TranscriptionManager {
                         audio,
                         settings,
                         allow_local_fallback_on_cloud_error,
+                        dictation,
                     )
                     .await
                 }
@@ -1723,11 +1853,11 @@ impl TranscriptionManager {
                         settings,
                         allow_local_fallback_on_cloud_error,
                         proxy_metadata,
+                        dictation,
                     )
                     .await
                 }
-            }
-            .map(DictationTranscription::Text);
+            };
         }
 
         debug!(
@@ -1738,7 +1868,7 @@ impl TranscriptionManager {
 
         let total_chunks = chunks.len() as u32;
         let mut assembled = String::new();
-        let mut dispatched = false;
+        let mut completed = false;
 
         for (index, chunk) in chunks.iter().enumerate() {
             if self.cancel_requested.load(Ordering::Relaxed) {
@@ -1747,7 +1877,7 @@ impl TranscriptionManager {
 
             let current_chunk = index as u32 + 1;
             let chunk_audio = audio[chunk.start..chunk.end].to_vec();
-            let request = dictation
+            let mut request = dictation
                 .as_ref()
                 .map(|request| request.slice(chunk.start..chunk.end, audio.len()));
             let unique_start = if index == 0 {
@@ -1755,10 +1885,11 @@ impl TranscriptionManager {
             } else {
                 LIVE_TRANSCRIPTION_OVERLAP_SAMPLES.min(chunk_audio.len())
             };
-            let unique_sample_count = chunk_audio.len() - unique_start;
-            let unique_request = request
-                .as_ref()
-                .map(|request| request.slice(unique_start..chunk_audio.len(), chunk_audio.len()));
+            if let Some(request) = request.as_mut() {
+                request.unique_source_ranges = request
+                    .slice(unique_start..chunk_audio.len(), chunk_audio.len())
+                    .source_ranges;
+            }
             let Some((chunk_audio, admitted_request)) =
                 filter_dictation_request(chunk_audio, request)
             else {
@@ -1766,10 +1897,7 @@ impl TranscriptionManager {
             };
             let unique_audio_seconds = admitted_request
                 .as_ref()
-                .zip(unique_request.as_ref())
-                .and_then(|(admitted, unique)| {
-                    admitted.samples_overlapping(chunk_audio.len(), unique, unique_sample_count)
-                })
+                .and_then(|admitted| admitted.surviving_unique_samples(chunk_audio.len()))
                 .map(|samples| samples.div_ceil(SAMPLE_RATE) as u32)
                 .unwrap_or_else(|| live_chunk_unique_audio_seconds(*chunk, current_chunk));
             debug!(
@@ -1781,13 +1909,14 @@ impl TranscriptionManager {
                 route
             );
 
-            let chunk_text = match route {
+            let chunk_result = match route {
                 CloudTranscriptionRoute::DirectGroq => {
                     self.transcribe_with_direct_groq(
                         model_id,
                         chunk_audio,
                         settings,
                         allow_local_fallback_on_cloud_error,
+                        admitted_request,
                     )
                     .await?
                 }
@@ -1797,6 +1926,7 @@ impl TranscriptionManager {
                         chunk_audio,
                         settings,
                         allow_local_fallback_on_cloud_error,
+                        admitted_request,
                     )
                     .await?
                 }
@@ -1812,16 +1942,19 @@ impl TranscriptionManager {
                             chunk_count: Some(total_chunks),
                             audio_seconds: Some(unique_audio_seconds),
                         },
+                        admitted_request,
                     )
                     .await?
                 }
             };
 
-            dispatched = true;
-            append_stitched_text(&mut assembled, &chunk_text);
+            if let DictationTranscription::Text(chunk_text) = chunk_result {
+                completed = true;
+                append_stitched_text(&mut assembled, &chunk_text);
+            }
         }
 
-        Ok(if dispatched {
+        Ok(if completed {
             DictationTranscription::Text(assembled)
         } else {
             DictationTranscription::NoSpeech
@@ -1873,12 +2006,11 @@ impl TranscriptionManager {
             .unwrap_or(false);
 
         if !is_cloud_model {
-            let Some((audio, _)) = filter_dictation_request(audio, dictation) else {
+            let Some((audio, dictation)) = filter_dictation_request(audio, dictation) else {
                 return Ok(DictationTranscription::NoSpeech);
             };
-            self.transcribe_raw_local_with_settings_async(audio, settings)
+            self.transcribe_raw_local_with_settings_async(audio, settings, dictation)
                 .await
-                .map(DictationTranscription::Text)
         } else {
             let model_id = active_model_id
                 .as_deref()
@@ -2399,12 +2531,15 @@ impl TranscriptionManager {
                     let manager = self.clone();
                     let settings_for_chunk = settings.clone();
                     match tauri::async_runtime::spawn_blocking(move || {
-                        manager
-                            .transcribe_raw_local_with_settings(chunk_samples, &settings_for_chunk)
+                        manager.transcribe_raw_local_with_settings(
+                            chunk_samples,
+                            &settings_for_chunk,
+                            dictation_request,
+                        )
                     })
                     .await
                     {
-                        Ok(result) => result.map(DictationTranscription::Text),
+                        Ok(result) => result,
                         Err(join_err) => Err(anyhow::anyhow!(
                             "Incremental local chunk task failed to join: {}",
                             join_err
