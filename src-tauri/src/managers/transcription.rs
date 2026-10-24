@@ -83,8 +83,8 @@ const MIN_ONE_CHUNK_INCREMENTAL_FINALIZATION_SAMPLES: usize = SAMPLE_RATE * 15;
 
 // Calibrated and activated together with dictation phrase-filter retirement.
 // None collects content-free evidence without rejecting audio during calibration.
-// Disabled after longer silent recordings exceeded the acceptance cutoff.
-const DICTATION_NO_SPEECH_CUTOFF: Option<f32> = None;
+// Synchronized eight-phase evidence, including model-only terminal context.
+const DICTATION_NO_SPEECH_CUTOFF: Option<f32> = Some(0.16);
 
 pub(crate) enum DictationTranscription {
     Text(String),
@@ -182,6 +182,17 @@ impl DictationRequestContext {
         self.reject_evidence(evidence, &[0..sample_count], boundary)
     }
 
+    pub(crate) async fn output_evidence(&self) -> SpeechEvidence {
+        match &self.analysis {
+            Some(analysis) => analysis.output_evidence().await,
+            None => SpeechEvidence::Unknown,
+        }
+    }
+
+    pub(crate) fn reject_output(&self, evidence: SpeechEvidence, sample_count: usize) -> bool {
+        self.reject_evidence(evidence, &[0..sample_count], "output")
+    }
+
     /// Gate this request while preserving all context in admitted audio.
     fn request_audio(
         &self,
@@ -274,34 +285,19 @@ impl DictationRequestAudio {
     }
 
     fn filter(mut self, audio: Vec<f32>) -> Option<(Vec<f32>, Self)> {
-        let Some(ranges) = self.valid_ranges(audio.len()) else {
+        // Whole-session evidence is independent of request slicing and ASR padding.
+        // Unfinished sessions remain Unknown; completed silence cannot bypass the
+        // gate through unavailable or mismatched request coordinates.
+        if self.context.reject_whole_recording(audio.len(), "request") {
+            return None;
+        }
+        if self.valid_ranges(audio.len()).is_none() {
             warn!(
                 "Dictation speech gate operation={} reason=range_mismatch samples={}",
                 self.context.operation_id,
                 audio.len()
             );
             self.source_ranges = None;
-            return Some((audio, self));
-        };
-        let evidence = self
-            .context
-            .analysis
-            .as_ref()
-            .and_then(|analysis| {
-                let mut max_score = 0.0f32;
-                for range in ranges {
-                    match analysis.evidence(range.clone()) {
-                        SpeechEvidence::Complete { max_score: score } => {
-                            max_score = max_score.max(score);
-                        }
-                        SpeechEvidence::Unknown => return None,
-                    }
-                }
-                (!ranges.is_empty()).then_some(SpeechEvidence::Complete { max_score })
-            })
-            .unwrap_or(SpeechEvidence::Unknown);
-        if self.context.reject_evidence(evidence, ranges, "request") {
-            return None;
         }
         Some((audio, self))
     }

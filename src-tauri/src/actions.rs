@@ -4274,9 +4274,24 @@ fn handle_transcription_stop(
                     restore_ui_after_transcription(&ah, &completion_context);
                     return;
                 }
-                if dictation_context.as_ref().is_some_and(|context| {
-                    context.reject_whole_recording(samples_clone.len(), "output")
-                }) {
+                let output_evidence = match &dictation_context {
+                    Some(context) => Some(context.output_evidence().await),
+                    None => None,
+                };
+                if dictation_output_was_cancelled(
+                    operation_id,
+                    &completion_context,
+                    quick_cancel_generation_at_start,
+                    &tm_for_worker,
+                    cancel_generation_at_start,
+                ) {
+                    debug!("Quick dictation was cancelled while awaiting speech evidence");
+                    restore_ui_after_transcription(&ah, &completion_context);
+                    return;
+                }
+                if dictation_context.as_ref().zip(output_evidence).is_some_and(
+                    |(context, evidence)| context.reject_output(evidence, samples_clone.len()),
+                ) {
                     cancel_incremental_for_completion(
                         &tm_for_worker,
                         &binding_id,

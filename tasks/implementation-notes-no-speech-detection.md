@@ -16,6 +16,14 @@ Acceptance: the synchronized rule passes all552 spoken comparisons, all16 incide
 
 Superseded historical instructions include per-range rejection before Finish, the permanent rejected-sample ledger, one-phase scoring, zero-window score removal, and fresh human calibration. Preserve the repairs already made to resampler output, borrowed full audio, actual attempt boundaries, and output cleanup. Later historical evidence explains why those repairs remain necessary.
 
+## Production integration verification, October 24
+
+The synchronized observer is implemented and enabled at0.16. The direct shared-session wrapper matches pinned vad-rs bit for bit on11,607 frames across all26 originals. Actual production observer replay matches all783 frozen reference decisions with zeroUnknown results and maximum score difference3.002e-8 from f32 publication/trace rounding:552 spoken comparisons pass,16 incident comparisons reject,46 corrected native-input captures classify as expected, and211/215 noise variants reject. The same four disclosed artificial60-second noise false admissions remain. Reports and immutable input/source hashes are under `agent-scratch/no-speech-synchronized-production/`.
+
+Actual-source lifecycle/request diagnostics cover whole-session decisions before range checks, unchanged admitted PCM, retries, reset/replacement, invalid coverage/PCM, queue/MAX bounds, loading failure, short inputs, early speech followed by5seconds silence, retained completion notification, cancellation, and the release-based timeout. Warm output completion took about10ms in the diagnostic; a waiter starting60ms after release used only the remaining approximately38ms. These are local diagnostics, not native latency evidence.
+
+No automated tests or committed fixtures changed. The existing42 actions and10 transcription tests pass; the full existing Rust suite passes155 tests. Cargo formatting/diff checks, fast native build, frontend build, debug app bundling, and strict deep signature verification pass. The packaged candidate contains no raw-audio dump or paste-suppression instrumentation. Enabled native replay and actual paste verification are in progress under `agent-scratch/no-speech-enabled-native/`; those results will be recorded separately.
+
 ## Incident and baseline
 
 The October 23 event at approximately 13:08:43–44 Pacific recorded a 119 ms hold, sent 20,000 samples at 16 kHz (1.25 seconds after padding) to Groq `whisper-large-v3`, received four characters in approximately 290 ms, and pasted “Bye.” History item 8455 has raw text “Bye.” and no postprocessing result. Cleanup was disabled and there were no custom words. The artifact originated in transcription, rather than text cleanup.

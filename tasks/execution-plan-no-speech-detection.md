@@ -30,15 +30,15 @@ Use the existing DJI recordings and autonomous local verification. Request no ne
 
 ### 3. Implement the verified score
 
-- [ ] Replace independent peak averaging with the maximum simultaneous mean of eight 512-sample phases. Include the final partial frame and eight additional model-only zero frames; keep real coverage separate. Reuse one loaded model with independent phase states.
-- [ ] Match production inference and aggregation against the saved traces, including quiet replies, exact leading-silence variants, both incident files, native inputs, and the disclosed long-loop limitation. Confirm state reset, bounded memory, and unchanged ASR audio.
+- [x] Replace independent peak averaging with the maximum simultaneous mean of eight 512-sample phases. Include the final partial frame and eight additional model-only zero frames; keep real coverage separate. Reuse one loaded model with independent phase states.
+- [x] Match production inference and aggregation against the saved traces, including quiet replies, exact leading-silence variants, both incident files, native inputs, and the disclosed long-loop limitation. Confirm state reset, bounded memory, and unchanged ASR audio.
 
 ### 4. Complete rejection and preserve speech
 
 - [x] Preserve full admitted audio and existing overlap. Check actual provider invocations, retries, upload splits, and local fallback with accurate attempt counts.
-- [ ] Use finalized whole-session evidence consistently across request and output gates. Preserve earlier speech and pass unresolved partial requests without truncation.
-- [ ] Add the bounded asynchronous completion check before postprocessing/history/paste, including cancellation after the wait. Keep cleanup and borrowed ownership intact.
-- [ ] Enable the verified score and dictation phrase-filter retirement together. Confirm genuine previously blocked phrases survive and other transcription sources retain their behavior.
+- [x] Use finalized whole-session evidence consistently across request and output gates. Preserve earlier speech and pass unresolved partial requests without truncation.
+- [x] Add the bounded asynchronous completion check before postprocessing/history/paste, including cancellation after the wait. Keep cleanup and borrowed ownership intact.
+- [x] Enable the verified score and dictation phrase-filter retirement together. Confirm genuine previously blocked phrases survive and other transcription sources retain their behavior.
 
 ### 5. Verify and run the finished app
 
