@@ -1,0 +1,3859 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Uttr · Scribe v3 Live model preview</title>
+    <!-- Models and API Keys markup captured from Uttr's components with sample data.
+     App styles are inlined and unused Tailwind utilities removed. -->
+    <style>
+      @import url("https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&family=Space+Grotesk:wght@400;500;600;700&display=swap");
+      /*! tailwindcss v4.1.16 | MIT License | https://tailwindcss.com */
+      @layer properties;
+      @layer theme, base, components, utilities;
+      @layer theme {
+        :root,
+        :host {
+          --font-sans:
+            ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji",
+            "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+          --font-mono:
+            ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+            "Liberation Mono", "Courier New", monospace;
+          --color-red-300: oklch(80.8% 0.114 19.571);
+          --color-red-400: oklch(70.4% 0.191 22.216);
+          --color-red-500: oklch(63.7% 0.237 25.331);
+          --color-red-600: oklch(57.7% 0.245 27.325);
+          --color-red-700: oklch(50.5% 0.213 27.518);
+          --color-amber-100: oklch(96.2% 0.059 95.617);
+          --color-amber-300: oklch(87.9% 0.169 91.605);
+          --color-amber-400: oklch(82.8% 0.189 84.429);
+          --color-yellow-400: oklch(85.2% 0.199 91.936);
+          --color-yellow-500: oklch(79.5% 0.184 86.047);
+          --color-green-300: oklch(87.1% 0.15 154.449);
+          --color-green-400: oklch(79.2% 0.209 151.711);
+          --color-green-500: oklch(72.3% 0.219 149.579);
+          --color-emerald-400: oklch(76.5% 0.177 163.223);
+          --color-emerald-500: oklch(69.6% 0.17 162.48);
+          --color-blue-400: oklch(70.7% 0.165 254.624);
+          --color-blue-500: oklch(62.3% 0.214 259.815);
+          --color-rose-200: oklch(89.2% 0.058 10.001);
+          --color-gray-100: oklch(96.7% 0.003 264.542);
+          --color-gray-200: oklch(92.8% 0.006 264.531);
+          --color-gray-800: oklch(27.8% 0.033 256.848);
+          --color-black: #000;
+          --color-white: #fff;
+          --spacing: 0.25rem;
+          --container-sm: 24rem;
+          --container-md: 28rem;
+          --container-lg: 32rem;
+          --container-xl: 36rem;
+          --container-2xl: 42rem;
+          --container-3xl: 48rem;
+          --container-4xl: 56rem;
+          --container-5xl: 64rem;
+          --container-6xl: 72rem;
+          --container-7xl: 80rem;
+          --text-xs: 0.75rem;
+          --text-xs--line-height: calc(1 / 0.75);
+          --text-sm: 0.875rem;
+          --text-sm--line-height: calc(1.25 / 0.875);
+          --text-base: 1rem;
+          --text-base--line-height: calc(1.5 / 1);
+          --text-lg: 1.125rem;
+          --text-lg--line-height: calc(1.75 / 1.125);
+          --text-xl: 1.25rem;
+          --text-xl--line-height: calc(1.75 / 1.25);
+          --text-2xl: 1.5rem;
+          --text-2xl--line-height: calc(2 / 1.5);
+          --text-3xl: 1.875rem;
+          --text-3xl--line-height: calc(2.25 / 1.875);
+          --text-4xl: 2.25rem;
+          --text-4xl--line-height: calc(2.5 / 2.25);
+          --text-5xl: 3rem;
+          --text-5xl--line-height: 1;
+          --text-6xl: 3.75rem;
+          --text-6xl--line-height: 1;
+          --text-7xl: 4.5rem;
+          --text-7xl--line-height: 1;
+          --text-8xl: 6rem;
+          --text-8xl--line-height: 1;
+          --font-weight-normal: 400;
+          --font-weight-medium: 500;
+          --font-weight-semibold: 600;
+          --tracking-tight: -0.025em;
+          --leading-tight: 1.25;
+          --leading-relaxed: 1.625;
+          --radius-md: 0.375rem;
+          --radius-lg: 0.5rem;
+          --radius-xl: 0.75rem;
+          --radius-2xl: 1rem;
+          --radius-3xl: 1.5rem;
+          --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+          --animate-spin: spin 1s linear infinite;
+          --animate-pulse: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+          --blur-sm: 8px;
+          --blur-xl: 24px;
+          --blur-3xl: 64px;
+          --default-transition-duration: 150ms;
+          --default-transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+          --default-font-family: var(--font-sans);
+          --default-mono-font-family: var(--font-mono);
+          --color-text: #e6edf3;
+          --color-background: #0d1117;
+          --color-background-ui: #1d9b64;
+          --color-logo-primary: #67d7a3;
+          --color-logo-stroke: #0d1117;
+          --color-text-stroke: #0d1117;
+          --color-mid-gray: #93a0b3;
+        }
+      }
+      @layer base {
+        *,
+        ::after,
+        ::before,
+        ::backdrop,
+        ::file-selector-button {
+          box-sizing: border-box;
+          margin: 0;
+          padding: 0;
+          border: 0 solid;
+        }
+        html,
+        :host {
+          line-height: 1.5;
+          -webkit-text-size-adjust: 100%;
+          tab-size: 4;
+          font-family: var(
+            --default-font-family,
+            ui-sans-serif,
+            system-ui,
+            sans-serif,
+            "Apple Color Emoji",
+            "Segoe UI Emoji",
+            "Segoe UI Symbol",
+            "Noto Color Emoji"
+          );
+          font-feature-settings: var(--default-font-feature-settings, normal);
+          font-variation-settings: var(
+            --default-font-variation-settings,
+            normal
+          );
+          -webkit-tap-highlight-color: transparent;
+        }
+        hr {
+          height: 0;
+          color: inherit;
+          border-top-width: 1px;
+        }
+        abbr:where([title]) {
+          -webkit-text-decoration: underline dotted;
+          text-decoration: underline dotted;
+        }
+        h1,
+        h2,
+        h3,
+        h4,
+        h5,
+        h6 {
+          font-size: inherit;
+          font-weight: inherit;
+        }
+        a {
+          color: inherit;
+          -webkit-text-decoration: inherit;
+          text-decoration: inherit;
+        }
+        b,
+        strong {
+          font-weight: bolder;
+        }
+        code,
+        kbd,
+        samp,
+        pre {
+          font-family: var(
+            --default-mono-font-family,
+            ui-monospace,
+            SFMono-Regular,
+            Menlo,
+            Monaco,
+            Consolas,
+            "Liberation Mono",
+            "Courier New",
+            monospace
+          );
+          font-feature-settings: var(
+            --default-mono-font-feature-settings,
+            normal
+          );
+          font-variation-settings: var(
+            --default-mono-font-variation-settings,
+            normal
+          );
+          font-size: 1em;
+        }
+        small {
+          font-size: 80%;
+        }
+        sub,
+        sup {
+          font-size: 75%;
+          line-height: 0;
+          position: relative;
+          vertical-align: baseline;
+        }
+        sub {
+          bottom: -0.25em;
+        }
+        sup {
+          top: -0.5em;
+        }
+        table {
+          text-indent: 0;
+          border-color: inherit;
+          border-collapse: collapse;
+        }
+        :-moz-focusring {
+          outline: auto;
+        }
+        progress {
+          vertical-align: baseline;
+        }
+        summary {
+          display: list-item;
+        }
+        ol,
+        ul,
+        menu {
+          list-style: none;
+        }
+        img,
+        svg,
+        video,
+        canvas,
+        audio,
+        iframe,
+        embed,
+        object {
+          display: block;
+          vertical-align: middle;
+        }
+        img,
+        video {
+          max-width: 100%;
+          height: auto;
+        }
+        button,
+        input,
+        select,
+        optgroup,
+        textarea,
+        ::file-selector-button {
+          font: inherit;
+          font-feature-settings: inherit;
+          font-variation-settings: inherit;
+          letter-spacing: inherit;
+          color: inherit;
+          border-radius: 0;
+          background-color: transparent;
+          opacity: 1;
+        }
+        :where(select:is([multiple], [size])) optgroup {
+          font-weight: bolder;
+        }
+        :where(select:is([multiple], [size])) optgroup option {
+          padding-inline-start: 20px;
+        }
+        ::file-selector-button {
+          margin-inline-end: 4px;
+        }
+        ::placeholder {
+          opacity: 1;
+        }
+        @supports (not (-webkit-appearance: -apple-pay-button)) or
+          (contain-intrinsic-size: 1px) {
+          ::placeholder {
+            color: currentcolor;
+            @supports (color: color-mix(in lab, red, red)) {
+              color: color-mix(in oklab, currentcolor 50%, transparent);
+            }
+          }
+        }
+        textarea {
+          resize: vertical;
+        }
+        ::-webkit-search-decoration {
+          -webkit-appearance: none;
+        }
+        ::-webkit-date-and-time-value {
+          min-height: 1lh;
+          text-align: inherit;
+        }
+        ::-webkit-datetime-edit {
+          display: inline-flex;
+        }
+        ::-webkit-datetime-edit-fields-wrapper {
+          padding: 0;
+        }
+        ::-webkit-datetime-edit,
+        ::-webkit-datetime-edit-year-field,
+        ::-webkit-datetime-edit-month-field,
+        ::-webkit-datetime-edit-day-field,
+        ::-webkit-datetime-edit-hour-field,
+        ::-webkit-datetime-edit-minute-field,
+        ::-webkit-datetime-edit-second-field,
+        ::-webkit-datetime-edit-millisecond-field,
+        ::-webkit-datetime-edit-meridiem-field {
+          padding-block: 0;
+        }
+        ::-webkit-calendar-picker-indicator {
+          line-height: 1;
+        }
+        :-moz-ui-invalid {
+          box-shadow: none;
+        }
+        button,
+        input:where([type="button"], [type="reset"], [type="submit"]),
+        ::file-selector-button {
+          appearance: button;
+        }
+        ::-webkit-inner-spin-button,
+        ::-webkit-outer-spin-button {
+          height: auto;
+        }
+        [hidden]:where(:not([hidden="until-found"])) {
+          display: none !important;
+        }
+      }
+      @layer utilities {
+        .relative {
+          position: relative;
+        }
+        .mx-auto {
+          margin-inline: auto;
+        }
+        .mt-1 {
+          margin-top: calc(var(--spacing) * 1);
+        }
+        .mt-4 {
+          margin-top: calc(var(--spacing) * 4);
+        }
+        .mt-5 {
+          margin-top: calc(var(--spacing) * 5);
+        }
+        .mt-10 {
+          margin-top: calc(var(--spacing) * 10);
+        }
+        .mt-14 {
+          margin-top: calc(var(--spacing) * 14);
+        }
+        .mr-1 {
+          margin-right: calc(var(--spacing) * 1);
+        }
+        .mr-2 {
+          margin-right: calc(var(--spacing) * 2);
+        }
+        .mb-4 {
+          margin-bottom: calc(var(--spacing) * 4);
+        }
+        .ml-auto {
+          margin-left: auto;
+        }
+        .flex {
+          display: flex;
+        }
+        .hidden {
+          display: none;
+        }
+        .inline-flex {
+          display: inline-flex;
+        }
+        .h-1\.5 {
+          height: calc(var(--spacing) * 1.5);
+        }
+        .h-3 {
+          height: calc(var(--spacing) * 3);
+        }
+        .h-3\.5 {
+          height: calc(var(--spacing) * 3.5);
+        }
+        .h-full {
+          height: 100%;
+        }
+        .h-px {
+          height: 1px;
+        }
+        .h-screen {
+          height: 100vh;
+        }
+        .min-h-0 {
+          min-height: calc(var(--spacing) * 0);
+        }
+        .min-h-5 {
+          min-height: calc(var(--spacing) * 5);
+        }
+        .w-1\.5 {
+          width: calc(var(--spacing) * 1.5);
+        }
+        .w-3 {
+          width: calc(var(--spacing) * 3);
+        }
+        .w-3\.5 {
+          width: calc(var(--spacing) * 3.5);
+        }
+        .w-fit {
+          width: fit-content;
+        }
+        .w-full {
+          width: 100%;
+        }
+        .max-w-2xl {
+          max-width: var(--container-2xl);
+        }
+        .max-w-3xl {
+          max-width: var(--container-3xl);
+        }
+        .max-w-\[120px\] {
+          max-width: 120px;
+        }
+        .min-w-0 {
+          min-width: calc(var(--spacing) * 0);
+        }
+        .flex-1 {
+          flex: 1;
+        }
+        .flex-shrink {
+          flex-shrink: 1;
+        }
+        .shrink-0 {
+          flex-shrink: 0;
+        }
+        .flex-grow {
+          flex-grow: 1;
+        }
+        .cursor-default {
+          cursor: default;
+        }
+        .cursor-pointer {
+          cursor: pointer;
+        }
+        .flex-col {
+          flex-direction: column;
+        }
+        .flex-wrap {
+          flex-wrap: wrap;
+        }
+        .items-center {
+          align-items: center;
+        }
+        .items-end {
+          align-items: flex-end;
+        }
+        .items-start {
+          align-items: flex-start;
+        }
+        .justify-between {
+          justify-content: space-between;
+        }
+        .gap-1 {
+          gap: calc(var(--spacing) * 1);
+        }
+        .gap-1\.5 {
+          gap: calc(var(--spacing) * 1.5);
+        }
+        .gap-2 {
+          gap: calc(var(--spacing) * 2);
+        }
+        .gap-2\.5 {
+          gap: calc(var(--spacing) * 2.5);
+        }
+        .gap-3 {
+          gap: calc(var(--spacing) * 3);
+        }
+        .gap-4 {
+          gap: calc(var(--spacing) * 4);
+        }
+        .gap-5 {
+          gap: calc(var(--spacing) * 5);
+        }
+        .gap-12 {
+          gap: calc(var(--spacing) * 12);
+        }
+        .space-y-2 {
+          :where(& > :not(:last-child)) {
+            --tw-space-y-reverse: 0;
+            margin-block-start: calc(
+              calc(var(--spacing) * 2) * var(--tw-space-y-reverse)
+            );
+            margin-block-end: calc(
+              calc(var(--spacing) * 2) * calc(1 - var(--tw-space-y-reverse))
+            );
+          }
+        }
+        .space-y-2\.5 {
+          :where(& > :not(:last-child)) {
+            --tw-space-y-reverse: 0;
+            margin-block-start: calc(
+              calc(var(--spacing) * 2.5) * var(--tw-space-y-reverse)
+            );
+            margin-block-end: calc(
+              calc(var(--spacing) * 2.5) * calc(1 - var(--tw-space-y-reverse))
+            );
+          }
+        }
+        .space-y-3 {
+          :where(& > :not(:last-child)) {
+            --tw-space-y-reverse: 0;
+            margin-block-start: calc(
+              calc(var(--spacing) * 3) * var(--tw-space-y-reverse)
+            );
+            margin-block-end: calc(
+              calc(var(--spacing) * 3) * calc(1 - var(--tw-space-y-reverse))
+            );
+          }
+        }
+        .space-y-4 {
+          :where(& > :not(:last-child)) {
+            --tw-space-y-reverse: 0;
+            margin-block-start: calc(
+              calc(var(--spacing) * 4) * var(--tw-space-y-reverse)
+            );
+            margin-block-end: calc(
+              calc(var(--spacing) * 4) * calc(1 - var(--tw-space-y-reverse))
+            );
+          }
+        }
+        .space-y-6 {
+          :where(& > :not(:last-child)) {
+            --tw-space-y-reverse: 0;
+            margin-block-start: calc(
+              calc(var(--spacing) * 6) * var(--tw-space-y-reverse)
+            );
+            margin-block-end: calc(
+              calc(var(--spacing) * 6) * calc(1 - var(--tw-space-y-reverse))
+            );
+          }
+        }
+        .space-y-7 {
+          :where(& > :not(:last-child)) {
+            --tw-space-y-reverse: 0;
+            margin-block-start: calc(
+              calc(var(--spacing) * 7) * var(--tw-space-y-reverse)
+            );
+            margin-block-end: calc(
+              calc(var(--spacing) * 7) * calc(1 - var(--tw-space-y-reverse))
+            );
+          }
+        }
+        .truncate {
+          overflow: hidden;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .overflow-hidden {
+          overflow: hidden;
+        }
+        .overflow-x-auto {
+          overflow-x: auto;
+        }
+        .overflow-x-hidden {
+          overflow-x: hidden;
+        }
+        .overflow-y-auto {
+          overflow-y: auto;
+        }
+        .rounded-\[18px\] {
+          border-radius: 18px;
+        }
+        .rounded-\[20px\] {
+          border-radius: 20px;
+        }
+        .rounded-full {
+          border-radius: calc(infinity * 1px);
+        }
+        .rounded-md {
+          border-radius: var(--radius-md);
+        }
+        .rounded-xl {
+          border-radius: var(--radius-xl);
+        }
+        .border {
+          border-style: var(--tw-border-style);
+          border-width: 1px;
+        }
+        .border-2 {
+          border-style: var(--tw-border-style);
+          border-width: 2px;
+        }
+        .border-t {
+          border-top-style: var(--tw-border-style);
+          border-top-width: 1px;
+        }
+        .border-b {
+          border-bottom-style: var(--tw-border-style);
+          border-bottom-width: 1px;
+        }
+        .border-amber-400\/20 {
+          border-color: color-mix(
+            in srgb,
+            oklch(82.8% 0.189 84.429) 20%,
+            transparent
+          );
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-amber-400) 20%,
+              transparent
+            );
+          }
+        }
+        .border-background-ui\/70 {
+          border-color: color-mix(in srgb, #1d9b64 70%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-background-ui) 70%,
+              transparent
+            );
+          }
+        }
+        .border-blue-400\/15 {
+          border-color: color-mix(
+            in srgb,
+            oklch(70.7% 0.165 254.624) 15%,
+            transparent
+          );
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-blue-400) 15%,
+              transparent
+            );
+          }
+        }
+        .border-green-400\/12 {
+          border-color: color-mix(
+            in srgb,
+            oklch(79.2% 0.209 151.711) 12%,
+            transparent
+          );
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-green-400) 12%,
+              transparent
+            );
+          }
+        }
+        .border-logo-primary {
+          border-color: var(--color-logo-primary);
+        }
+        .border-logo-primary\/12 {
+          border-color: color-mix(in srgb, #67d7a3 12%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-logo-primary) 12%,
+              transparent
+            );
+          }
+        }
+        .border-logo-primary\/18 {
+          border-color: color-mix(in srgb, #67d7a3 18%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-logo-primary) 18%,
+              transparent
+            );
+          }
+        }
+        .border-logo-primary\/20 {
+          border-color: color-mix(in srgb, #67d7a3 20%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-logo-primary) 20%,
+              transparent
+            );
+          }
+        }
+        .border-logo-primary\/25 {
+          border-color: color-mix(in srgb, #67d7a3 25%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-logo-primary) 25%,
+              transparent
+            );
+          }
+        }
+        .border-logo-primary\/30 {
+          border-color: color-mix(in srgb, #67d7a3 30%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-logo-primary) 30%,
+              transparent
+            );
+          }
+        }
+        .border-logo-primary\/34 {
+          border-color: color-mix(in srgb, #67d7a3 34%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-logo-primary) 34%,
+              transparent
+            );
+          }
+        }
+        .border-logo-primary\/35 {
+          border-color: color-mix(in srgb, #67d7a3 35%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-logo-primary) 35%,
+              transparent
+            );
+          }
+        }
+        .border-logo-primary\/45 {
+          border-color: color-mix(in srgb, #67d7a3 45%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-logo-primary) 45%,
+              transparent
+            );
+          }
+        }
+        .border-logo-primary\/60 {
+          border-color: color-mix(in srgb, #67d7a3 60%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-logo-primary) 60%,
+              transparent
+            );
+          }
+        }
+        .border-logo-primary\/70 {
+          border-color: color-mix(in srgb, #67d7a3 70%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-logo-primary) 70%,
+              transparent
+            );
+          }
+        }
+        .border-mid-gray {
+          border-color: var(--color-mid-gray);
+        }
+        .border-mid-gray\/20 {
+          border-color: color-mix(in srgb, #93a0b3 20%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-mid-gray) 20%,
+              transparent
+            );
+          }
+        }
+        .border-mid-gray\/30 {
+          border-color: color-mix(in srgb, #93a0b3 30%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-mid-gray) 30%,
+              transparent
+            );
+          }
+        }
+        .border-mid-gray\/40 {
+          border-color: color-mix(in srgb, #93a0b3 40%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-mid-gray) 40%,
+              transparent
+            );
+          }
+        }
+        .border-mid-gray\/80 {
+          border-color: color-mix(in srgb, #93a0b3 80%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-mid-gray) 80%,
+              transparent
+            );
+          }
+        }
+        .border-transparent {
+          border-color: transparent;
+        }
+        .border-white\/6 {
+          border-color: color-mix(in srgb, #fff 6%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-white) 6%,
+              transparent
+            );
+          }
+        }
+        .border-white\/7 {
+          border-color: color-mix(in srgb, #fff 7%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-white) 7%,
+              transparent
+            );
+          }
+        }
+        .border-white\/8 {
+          border-color: color-mix(in srgb, #fff 8%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-white) 8%,
+              transparent
+            );
+          }
+        }
+        .border-white\/10 {
+          border-color: color-mix(in srgb, #fff 10%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-white) 10%,
+              transparent
+            );
+          }
+        }
+        .border-white\/12 {
+          border-color: color-mix(in srgb, #fff 12%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-white) 12%,
+              transparent
+            );
+          }
+        }
+        .border-white\/14 {
+          border-color: color-mix(in srgb, #fff 14%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-white) 14%,
+              transparent
+            );
+          }
+        }
+        .border-white\/15 {
+          border-color: color-mix(in srgb, #fff 15%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-white) 15%,
+              transparent
+            );
+          }
+        }
+        .border-white\/20 {
+          border-color: color-mix(in srgb, #fff 20%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-white) 20%,
+              transparent
+            );
+          }
+        }
+        .border-white\/25 {
+          border-color: color-mix(in srgb, #fff 25%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-white) 25%,
+              transparent
+            );
+          }
+        }
+        .border-white\/28 {
+          border-color: color-mix(in srgb, #fff 28%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-white) 28%,
+              transparent
+            );
+          }
+        }
+        .border-white\/30 {
+          border-color: color-mix(in srgb, #fff 30%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            border-color: color-mix(
+              in oklab,
+              var(--color-white) 30%,
+              transparent
+            );
+          }
+        }
+        .border-t-transparent {
+          border-top-color: transparent;
+        }
+        .bg-\[rgba\(4\,9\,15\,0\.45\)\] {
+          background-color: rgba(4, 9, 15, 0.45);
+        }
+        .bg-\[rgba\(5\,10\,18\,0\.56\)\] {
+          background-color: rgba(5, 10, 18, 0.56);
+        }
+        .bg-\[rgba\(255\,255\,255\,0\.026\)\] {
+          background-color: rgba(255, 255, 255, 0.026);
+        }
+        .bg-logo-primary {
+          background-color: var(--color-logo-primary);
+        }
+        .bg-logo-primary\/4 {
+          background-color: color-mix(in srgb, #67d7a3 4%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            background-color: color-mix(
+              in oklab,
+              var(--color-logo-primary) 4%,
+              transparent
+            );
+          }
+        }
+        .bg-logo-primary\/8 {
+          background-color: color-mix(in srgb, #67d7a3 8%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            background-color: color-mix(
+              in oklab,
+              var(--color-logo-primary) 8%,
+              transparent
+            );
+          }
+        }
+        .bg-logo-primary\/10 {
+          background-color: color-mix(in srgb, #67d7a3 10%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            background-color: color-mix(
+              in oklab,
+              var(--color-logo-primary) 10%,
+              transparent
+            );
+          }
+        }
+        .bg-logo-primary\/12 {
+          background-color: color-mix(in srgb, #67d7a3 12%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            background-color: color-mix(
+              in oklab,
+              var(--color-logo-primary) 12%,
+              transparent
+            );
+          }
+        }
+        .bg-logo-primary\/14 {
+          background-color: color-mix(in srgb, #67d7a3 14%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            background-color: color-mix(
+              in oklab,
+              var(--color-logo-primary) 14%,
+              transparent
+            );
+          }
+        }
+        .bg-logo-primary\/16 {
+          background-color: color-mix(in srgb, #67d7a3 16%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            background-color: color-mix(
+              in oklab,
+              var(--color-logo-primary) 16%,
+              transparent
+            );
+          }
+        }
+        .bg-logo-primary\/18 {
+          background-color: color-mix(in srgb, #67d7a3 18%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            background-color: color-mix(
+              in oklab,
+              var(--color-logo-primary) 18%,
+              transparent
+            );
+          }
+        }
+        .bg-logo-primary\/20 {
+          background-color: color-mix(in srgb, #67d7a3 20%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            background-color: color-mix(
+              in oklab,
+              var(--color-logo-primary) 20%,
+              transparent
+            );
+          }
+        }
+        .bg-logo-primary\/30 {
+          background-color: color-mix(in srgb, #67d7a3 30%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            background-color: color-mix(
+              in oklab,
+              var(--color-logo-primary) 30%,
+              transparent
+            );
+          }
+        }
+        .bg-logo-primary\/70 {
+          background-color: color-mix(in srgb, #67d7a3 70%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            background-color: color-mix(
+              in oklab,
+              var(--color-logo-primary) 70%,
+              transparent
+            );
+          }
+        }
+        .bg-transparent {
+          background-color: transparent;
+        }
+        .bg-white\/7 {
+          background-color: color-mix(in srgb, #fff 7%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            background-color: color-mix(
+              in oklab,
+              var(--color-white) 7%,
+              transparent
+            );
+          }
+        }
+        .bg-white\/\[0\.03\] {
+          background-color: color-mix(in srgb, #fff 3%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            background-color: color-mix(
+              in oklab,
+              var(--color-white) 3%,
+              transparent
+            );
+          }
+        }
+        .bg-white\/\[0\.04\] {
+          background-color: color-mix(in srgb, #fff 4%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            background-color: color-mix(
+              in oklab,
+              var(--color-white) 4%,
+              transparent
+            );
+          }
+        }
+        .bg-white\/\[0\.05\] {
+          background-color: color-mix(in srgb, #fff 5%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            background-color: color-mix(
+              in oklab,
+              var(--color-white) 5%,
+              transparent
+            );
+          }
+        }
+        .bg-white\/\[0\.025\] {
+          background-color: color-mix(in srgb, #fff 2.5%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            background-color: color-mix(
+              in oklab,
+              var(--color-white) 2.5%,
+              transparent
+            );
+          }
+        }
+        .bg-\[linear-gradient\(90deg\,rgba\(29\,155\,100\,0\.2\)\,rgba\(29\,155\,100\,0\.08\)\)\] {
+          background-image: linear-gradient(
+            90deg,
+            rgba(29, 155, 100, 0.2),
+            rgba(29, 155, 100, 0.08)
+          );
+        }
+        .bg-\[linear-gradient\(180deg\,rgba\(10\,15\,25\,0\.985\)\,rgba\(6\,10\,18\,0\.96\)\)\] {
+          background-image: linear-gradient(
+            180deg,
+            rgba(10, 15, 25, 0.985),
+            rgba(6, 10, 18, 0.96)
+          );
+        }
+        .bg-\[linear-gradient\(180deg\,rgba\(103\,215\,163\,0\.11\)\,rgba\(103\,215\,163\,0\.04\)\)\] {
+          background-image: linear-gradient(
+            180deg,
+            rgba(103, 215, 163, 0.11),
+            rgba(103, 215, 163, 0.04)
+          );
+        }
+        .p-3 {
+          padding: calc(var(--spacing) * 3);
+        }
+        .p-5 {
+          padding: calc(var(--spacing) * 5);
+        }
+        .px-1 {
+          padding-inline: calc(var(--spacing) * 1);
+        }
+        .px-2 {
+          padding-inline: calc(var(--spacing) * 2);
+        }
+        .px-2\.5 {
+          padding-inline: calc(var(--spacing) * 2.5);
+        }
+        .px-3 {
+          padding-inline: calc(var(--spacing) * 3);
+        }
+        .px-3\.5 {
+          padding-inline: calc(var(--spacing) * 3.5);
+        }
+        .px-4 {
+          padding-inline: calc(var(--spacing) * 4);
+        }
+        .py-0\.5 {
+          padding-block: calc(var(--spacing) * 0.5);
+        }
+        .py-1 {
+          padding-block: calc(var(--spacing) * 1);
+        }
+        .py-1\.5 {
+          padding-block: calc(var(--spacing) * 1.5);
+        }
+        .py-2 {
+          padding-block: calc(var(--spacing) * 2);
+        }
+        .py-2\.5 {
+          padding-block: calc(var(--spacing) * 2.5);
+        }
+        .py-4 {
+          padding-block: calc(var(--spacing) * 4);
+        }
+        .py-5 {
+          padding-block: calc(var(--spacing) * 5);
+        }
+        .py-12 {
+          padding-block: calc(var(--spacing) * 12);
+        }
+        .py-16 {
+          padding-block: calc(var(--spacing) * 16);
+        }
+        .py-28 {
+          padding-block: calc(var(--spacing) * 28);
+        }
+        .pt-1 {
+          padding-top: calc(var(--spacing) * 1);
+        }
+        .pt-4 {
+          padding-top: calc(var(--spacing) * 4);
+        }
+        .pb-1 {
+          padding-bottom: calc(var(--spacing) * 1);
+        }
+        .pb-10 {
+          padding-bottom: calc(var(--spacing) * 10);
+        }
+        .text-left {
+          text-align: left;
+        }
+        .text-start {
+          text-align: start;
+        }
+        .text-sm {
+          font-size: var(--text-sm);
+          line-height: var(--tw-leading, var(--text-sm--line-height));
+        }
+        .text-xl {
+          font-size: var(--text-xl);
+          line-height: var(--tw-leading, var(--text-xl--line-height));
+        }
+        .text-xs {
+          font-size: var(--text-xs);
+          line-height: var(--tw-leading, var(--text-xs--line-height));
+        }
+        .text-\[11px\] {
+          font-size: 11px;
+        }
+        .text-\[17px\] {
+          font-size: 17px;
+        }
+        .text-\[28px\] {
+          font-size: 28px;
+        }
+        .leading-relaxed {
+          --tw-leading: var(--leading-relaxed);
+          line-height: var(--leading-relaxed);
+        }
+        .font-medium {
+          --tw-font-weight: var(--font-weight-medium);
+          font-weight: var(--font-weight-medium);
+        }
+        .font-semibold {
+          --tw-font-weight: var(--font-weight-semibold);
+          font-weight: var(--font-weight-semibold);
+        }
+        .tracking-\[0\.18em\] {
+          --tw-tracking: 0.18em;
+          letter-spacing: 0.18em;
+        }
+        .tracking-tight {
+          --tw-tracking: var(--tracking-tight);
+          letter-spacing: var(--tracking-tight);
+        }
+        .text-current {
+          color: currentcolor;
+        }
+        .text-logo-primary {
+          color: var(--color-logo-primary);
+        }
+        .text-logo-primary\/70 {
+          color: color-mix(in srgb, #67d7a3 70%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(
+              in oklab,
+              var(--color-logo-primary) 70%,
+              transparent
+            );
+          }
+        }
+        .text-text {
+          color: var(--color-text);
+        }
+        .text-text\/28 {
+          color: color-mix(in srgb, #e6edf3 28%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 28%, transparent);
+          }
+        }
+        .text-text\/34 {
+          color: color-mix(in srgb, #e6edf3 34%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 34%, transparent);
+          }
+        }
+        .text-text\/35 {
+          color: color-mix(in srgb, #e6edf3 35%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 35%, transparent);
+          }
+        }
+        .text-text\/36 {
+          color: color-mix(in srgb, #e6edf3 36%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 36%, transparent);
+          }
+        }
+        .text-text\/40 {
+          color: color-mix(in srgb, #e6edf3 40%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 40%, transparent);
+          }
+        }
+        .text-text\/42 {
+          color: color-mix(in srgb, #e6edf3 42%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 42%, transparent);
+          }
+        }
+        .text-text\/44 {
+          color: color-mix(in srgb, #e6edf3 44%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 44%, transparent);
+          }
+        }
+        .text-text\/45 {
+          color: color-mix(in srgb, #e6edf3 45%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 45%, transparent);
+          }
+        }
+        .text-text\/46 {
+          color: color-mix(in srgb, #e6edf3 46%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 46%, transparent);
+          }
+        }
+        .text-text\/48 {
+          color: color-mix(in srgb, #e6edf3 48%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 48%, transparent);
+          }
+        }
+        .text-text\/50 {
+          color: color-mix(in srgb, #e6edf3 50%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 50%, transparent);
+          }
+        }
+        .text-text\/52 {
+          color: color-mix(in srgb, #e6edf3 52%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 52%, transparent);
+          }
+        }
+        .text-text\/55 {
+          color: color-mix(in srgb, #e6edf3 55%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 55%, transparent);
+          }
+        }
+        .text-text\/56 {
+          color: color-mix(in srgb, #e6edf3 56%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 56%, transparent);
+          }
+        }
+        .text-text\/58 {
+          color: color-mix(in srgb, #e6edf3 58%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 58%, transparent);
+          }
+        }
+        .text-text\/60 {
+          color: color-mix(in srgb, #e6edf3 60%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 60%, transparent);
+          }
+        }
+        .text-text\/62 {
+          color: color-mix(in srgb, #e6edf3 62%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 62%, transparent);
+          }
+        }
+        .text-text\/65 {
+          color: color-mix(in srgb, #e6edf3 65%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 65%, transparent);
+          }
+        }
+        .text-text\/68 {
+          color: color-mix(in srgb, #e6edf3 68%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 68%, transparent);
+          }
+        }
+        .text-text\/70 {
+          color: color-mix(in srgb, #e6edf3 70%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 70%, transparent);
+          }
+        }
+        .text-text\/72 {
+          color: color-mix(in srgb, #e6edf3 72%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 72%, transparent);
+          }
+        }
+        .text-text\/74 {
+          color: color-mix(in srgb, #e6edf3 74%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 74%, transparent);
+          }
+        }
+        .text-text\/76 {
+          color: color-mix(in srgb, #e6edf3 76%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 76%, transparent);
+          }
+        }
+        .text-text\/80 {
+          color: color-mix(in srgb, #e6edf3 80%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 80%, transparent);
+          }
+        }
+        .text-text\/82 {
+          color: color-mix(in srgb, #e6edf3 82%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 82%, transparent);
+          }
+        }
+        .text-text\/86 {
+          color: color-mix(in srgb, #e6edf3 86%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 86%, transparent);
+          }
+        }
+        .text-text\/88 {
+          color: color-mix(in srgb, #e6edf3 88%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 88%, transparent);
+          }
+        }
+        .text-text\/90 {
+          color: color-mix(in srgb, #e6edf3 90%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 90%, transparent);
+          }
+        }
+        .text-text\/92 {
+          color: color-mix(in srgb, #e6edf3 92%, transparent);
+          @supports (color: color-mix(in lab, red, red)) {
+            color: color-mix(in oklab, var(--color-text) 92%, transparent);
+          }
+        }
+        .uppercase {
+          text-transform: uppercase;
+        }
+        .tabular-nums {
+          --tw-numeric-spacing: tabular-nums;
+          font-variant-numeric: var(--tw-ordinal,) var(--tw-slashed-zero,)
+            var(--tw-numeric-figure,) var(--tw-numeric-spacing,)
+            var(--tw-numeric-fraction,);
+        }
+        .shadow-\[0_0_10px_rgba\(103\,215\,163\,0\.55\)\] {
+          --tw-shadow: 0 0 10px
+            var(--tw-shadow-color, rgba(103, 215, 163, 0.55));
+          box-shadow:
+            var(--tw-inset-shadow), var(--tw-inset-ring-shadow),
+            var(--tw-ring-offset-shadow), var(--tw-ring-shadow),
+            var(--tw-shadow);
+        }
+        .shadow-\[0_12px_28px_rgba\(16\,185\,129\,0\.08\)\] {
+          --tw-shadow: 0 12px 28px
+            var(--tw-shadow-color, rgba(16, 185, 129, 0.08));
+          box-shadow:
+            var(--tw-inset-shadow), var(--tw-inset-ring-shadow),
+            var(--tw-ring-offset-shadow), var(--tw-ring-shadow),
+            var(--tw-shadow);
+        }
+        .shadow-\[inset_0_0_0_1px_rgba\(103\,215\,163\,0\.32\)\] {
+          --tw-shadow: inset 0 0 0 1px
+            var(--tw-shadow-color, rgba(103, 215, 163, 0.32));
+          box-shadow:
+            var(--tw-inset-shadow), var(--tw-inset-ring-shadow),
+            var(--tw-ring-offset-shadow), var(--tw-ring-shadow),
+            var(--tw-shadow);
+        }
+        .shadow-\[inset_0_1px_0_rgba\(255\,255\,255\,0\.02\)\] {
+          --tw-shadow: inset 0 1px 0
+            var(--tw-shadow-color, rgba(255, 255, 255, 0.02));
+          box-shadow:
+            var(--tw-inset-shadow), var(--tw-inset-ring-shadow),
+            var(--tw-ring-offset-shadow), var(--tw-ring-shadow),
+            var(--tw-shadow);
+        }
+        .shadow-\[inset_0_1px_0_rgba\(255\,255\,255\,0\.03\)\] {
+          --tw-shadow: inset 0 1px 0
+            var(--tw-shadow-color, rgba(255, 255, 255, 0.03));
+          box-shadow:
+            var(--tw-inset-shadow), var(--tw-inset-ring-shadow),
+            var(--tw-ring-offset-shadow), var(--tw-ring-shadow),
+            var(--tw-shadow);
+        }
+        .backdrop-blur-xl {
+          --tw-backdrop-blur: blur(var(--blur-xl));
+          -webkit-backdrop-filter: var(--tw-backdrop-blur,)
+            var(--tw-backdrop-brightness,) var(--tw-backdrop-contrast,)
+            var(--tw-backdrop-grayscale,) var(--tw-backdrop-hue-rotate,)
+            var(--tw-backdrop-invert,) var(--tw-backdrop-opacity,)
+            var(--tw-backdrop-saturate,) var(--tw-backdrop-sepia,);
+          backdrop-filter: var(--tw-backdrop-blur,)
+            var(--tw-backdrop-brightness,) var(--tw-backdrop-contrast,)
+            var(--tw-backdrop-grayscale,) var(--tw-backdrop-hue-rotate,)
+            var(--tw-backdrop-invert,) var(--tw-backdrop-opacity,)
+            var(--tw-backdrop-saturate,) var(--tw-backdrop-sepia,);
+        }
+        .transition {
+          transition-property:
+            color,
+            background-color,
+            border-color,
+            outline-color,
+            text-decoration-color,
+            fill,
+            stroke,
+            --tw-gradient-from,
+            --tw-gradient-via,
+            --tw-gradient-to,
+            opacity,
+            box-shadow,
+            transform,
+            translate,
+            scale,
+            rotate,
+            filter,
+            -webkit-backdrop-filter,
+            backdrop-filter,
+            display,
+            content-visibility,
+            overlay,
+            pointer-events;
+          transition-timing-function: var(
+            --tw-ease,
+            var(--default-transition-timing-function)
+          );
+          transition-duration: var(
+            --tw-duration,
+            var(--default-transition-duration)
+          );
+        }
+        .transition-\[background-color\,border-color\] {
+          transition-property: background-color, border-color;
+          transition-timing-function: var(
+            --tw-ease,
+            var(--default-transition-timing-function)
+          );
+          transition-duration: var(
+            --tw-duration,
+            var(--default-transition-duration)
+          );
+        }
+        .transition-all {
+          transition-property: all;
+          transition-timing-function: var(
+            --tw-ease,
+            var(--default-transition-timing-function)
+          );
+          transition-duration: var(
+            --tw-duration,
+            var(--default-transition-duration)
+          );
+        }
+        .transition-colors {
+          transition-property:
+            color, background-color, border-color, outline-color,
+            text-decoration-color, fill, stroke, --tw-gradient-from,
+            --tw-gradient-via, --tw-gradient-to;
+          transition-timing-function: var(
+            --tw-ease,
+            var(--default-transition-timing-function)
+          );
+          transition-duration: var(
+            --tw-duration,
+            var(--default-transition-duration)
+          );
+        }
+        .transition-opacity {
+          transition-property: opacity;
+          transition-timing-function: var(
+            --tw-ease,
+            var(--default-transition-timing-function)
+          );
+          transition-duration: var(
+            --tw-duration,
+            var(--default-transition-duration)
+          );
+        }
+        .transition-transform {
+          transition-property: transform, translate, scale, rotate;
+          transition-timing-function: var(
+            --tw-ease,
+            var(--default-transition-timing-function)
+          );
+          transition-duration: var(
+            --tw-duration,
+            var(--default-transition-duration)
+          );
+        }
+        .duration-150 {
+          --tw-duration: 150ms;
+          transition-duration: 150ms;
+        }
+        .duration-200 {
+          --tw-duration: 200ms;
+          transition-duration: 200ms;
+        }
+        .select-none {
+          -webkit-user-select: none;
+          user-select: none;
+        }
+        .group-focus-within\:opacity-100 {
+          &:is(:where(.group):focus-within *) {
+            opacity: 100%;
+          }
+        }
+        .group-hover\:w-28 {
+          &:is(:where(.group):hover *) {
+            @media (hover: hover) {
+              width: calc(var(--spacing) * 28);
+            }
+          }
+        }
+        .group-hover\:scale-110 {
+          &:is(:where(.group):hover *) {
+            @media (hover: hover) {
+              --tw-scale-x: 110%;
+              --tw-scale-y: 110%;
+              --tw-scale-z: 110%;
+              scale: var(--tw-scale-x) var(--tw-scale-y);
+            }
+          }
+        }
+        .group-hover\:text-white {
+          &:is(:where(.group):hover *) {
+            @media (hover: hover) {
+              color: var(--color-white);
+            }
+          }
+        }
+        .group-hover\:opacity-100 {
+          &:is(:where(.group):hover *) {
+            @media (hover: hover) {
+              opacity: 100%;
+            }
+          }
+        }
+        .hover\:-translate-y-0\.5 {
+          &:hover {
+            @media (hover: hover) {
+              --tw-translate-y: calc(var(--spacing) * -0.5);
+              translate: var(--tw-translate-x) var(--tw-translate-y);
+            }
+          }
+        }
+        .hover\:border-logo-primary\/25 {
+          &:hover {
+            @media (hover: hover) {
+              border-color: color-mix(in srgb, #67d7a3 25%, transparent);
+              @supports (color: color-mix(in lab, red, red)) {
+                border-color: color-mix(
+                  in oklab,
+                  var(--color-logo-primary) 25%,
+                  transparent
+                );
+              }
+            }
+          }
+        }
+        .hover\:border-white\/10 {
+          &:hover {
+            @media (hover: hover) {
+              border-color: color-mix(in srgb, #fff 10%, transparent);
+              @supports (color: color-mix(in lab, red, red)) {
+                border-color: color-mix(
+                  in oklab,
+                  var(--color-white) 10%,
+                  transparent
+                );
+              }
+            }
+          }
+        }
+        .hover\:border-white\/14 {
+          &:hover {
+            @media (hover: hover) {
+              border-color: color-mix(in srgb, #fff 14%, transparent);
+              @supports (color: color-mix(in lab, red, red)) {
+                border-color: color-mix(
+                  in oklab,
+                  var(--color-white) 14%,
+                  transparent
+                );
+              }
+            }
+          }
+        }
+        .hover\:border-white\/16 {
+          &:hover {
+            @media (hover: hover) {
+              border-color: color-mix(in srgb, #fff 16%, transparent);
+              @supports (color: color-mix(in lab, red, red)) {
+                border-color: color-mix(
+                  in oklab,
+                  var(--color-white) 16%,
+                  transparent
+                );
+              }
+            }
+          }
+        }
+        .hover\:bg-logo-primary\/18 {
+          &:hover {
+            @media (hover: hover) {
+              background-color: color-mix(in srgb, #67d7a3 18%, transparent);
+              @supports (color: color-mix(in lab, red, red)) {
+                background-color: color-mix(
+                  in oklab,
+                  var(--color-logo-primary) 18%,
+                  transparent
+                );
+              }
+            }
+          }
+        }
+        .hover\:bg-white\/\[0\.04\] {
+          &:hover {
+            @media (hover: hover) {
+              background-color: color-mix(in srgb, #fff 4%, transparent);
+              @supports (color: color-mix(in lab, red, red)) {
+                background-color: color-mix(
+                  in oklab,
+                  var(--color-white) 4%,
+                  transparent
+                );
+              }
+            }
+          }
+        }
+        .hover\:bg-white\/\[0\.05\] {
+          &:hover {
+            @media (hover: hover) {
+              background-color: color-mix(in srgb, #fff 5%, transparent);
+              @supports (color: color-mix(in lab, red, red)) {
+                background-color: color-mix(
+                  in oklab,
+                  var(--color-white) 5%,
+                  transparent
+                );
+              }
+            }
+          }
+        }
+        .hover\:bg-white\/\[0\.06\] {
+          &:hover {
+            @media (hover: hover) {
+              background-color: color-mix(in srgb, #fff 6%, transparent);
+              @supports (color: color-mix(in lab, red, red)) {
+                background-color: color-mix(
+                  in oklab,
+                  var(--color-white) 6%,
+                  transparent
+                );
+              }
+            }
+          }
+        }
+        .hover\:bg-white\/\[0\.045\] {
+          &:hover {
+            @media (hover: hover) {
+              background-color: color-mix(in srgb, #fff 4.5%, transparent);
+              @supports (color: color-mix(in lab, red, red)) {
+                background-color: color-mix(
+                  in oklab,
+                  var(--color-white) 4.5%,
+                  transparent
+                );
+              }
+            }
+          }
+        }
+        .hover\:text-text {
+          &:hover {
+            @media (hover: hover) {
+              color: var(--color-text);
+            }
+          }
+        }
+        .hover\:text-text\/42 {
+          &:hover {
+            @media (hover: hover) {
+              color: color-mix(in srgb, #e6edf3 42%, transparent);
+              @supports (color: color-mix(in lab, red, red)) {
+                color: color-mix(in oklab, var(--color-text) 42%, transparent);
+              }
+            }
+          }
+        }
+        .hover\:text-text\/72 {
+          &:hover {
+            @media (hover: hover) {
+              color: color-mix(in srgb, #e6edf3 72%, transparent);
+              @supports (color: color-mix(in lab, red, red)) {
+                color: color-mix(in oklab, var(--color-text) 72%, transparent);
+              }
+            }
+          }
+        }
+        .hover\:text-text\/80 {
+          &:hover {
+            @media (hover: hover) {
+              color: color-mix(in srgb, #e6edf3 80%, transparent);
+              @supports (color: color-mix(in lab, red, red)) {
+                color: color-mix(in oklab, var(--color-text) 80%, transparent);
+              }
+            }
+          }
+        }
+        .hover\:shadow-\[0_14px_32px_rgba\(2\,6\,23\,0\.24\)\] {
+          &:hover {
+            @media (hover: hover) {
+              --tw-shadow: 0 14px 32px
+                var(--tw-shadow-color, rgba(2, 6, 23, 0.24));
+              box-shadow:
+                var(--tw-inset-shadow), var(--tw-inset-ring-shadow),
+                var(--tw-ring-offset-shadow), var(--tw-ring-shadow),
+                var(--tw-shadow);
+            }
+          }
+        }
+        .focus\:border-logo-primary\/40 {
+          &:focus {
+            border-color: color-mix(in srgb, #67d7a3 40%, transparent);
+            @supports (color: color-mix(in lab, red, red)) {
+              border-color: color-mix(
+                in oklab,
+                var(--color-logo-primary) 40%,
+                transparent
+              );
+            }
+          }
+        }
+        .focus\:bg-white\/\[0\.06\] {
+          &:focus {
+            background-color: color-mix(in srgb, #fff 6%, transparent);
+            @supports (color: color-mix(in lab, red, red)) {
+              background-color: color-mix(
+                in oklab,
+                var(--color-white) 6%,
+                transparent
+              );
+            }
+          }
+        }
+        .focus\:bg-white\/\[0\.07\] {
+          &:focus {
+            background-color: color-mix(
+              in srgb,
+              #fff 7.000000000000001%,
+              transparent
+            );
+            @supports (color: color-mix(in lab, red, red)) {
+              background-color: color-mix(
+                in oklab,
+                var(--color-white) 7.000000000000001%,
+                transparent
+              );
+            }
+          }
+        }
+        .focus\:ring-1 {
+          &:focus {
+            --tw-ring-shadow: var(--tw-ring-inset,) 0 0 0
+              calc(1px + var(--tw-ring-offset-width))
+              var(--tw-ring-color, currentcolor);
+            box-shadow:
+              var(--tw-inset-shadow), var(--tw-inset-ring-shadow),
+              var(--tw-ring-offset-shadow), var(--tw-ring-shadow),
+              var(--tw-shadow);
+          }
+        }
+        .focus\:ring-logo-primary\/30 {
+          &:focus {
+            --tw-ring-color: color-mix(in srgb, #67d7a3 30%, transparent);
+            @supports (color: color-mix(in lab, red, red)) {
+              --tw-ring-color: color-mix(
+                in oklab,
+                var(--color-logo-primary) 30%,
+                transparent
+              );
+            }
+          }
+        }
+        .focus\:ring-logo-primary\/40 {
+          &:focus {
+            --tw-ring-color: color-mix(in srgb, #67d7a3 40%, transparent);
+            @supports (color: color-mix(in lab, red, red)) {
+              --tw-ring-color: color-mix(
+                in oklab,
+                var(--color-logo-primary) 40%,
+                transparent
+              );
+            }
+          }
+        }
+        .focus\:outline-none {
+          &:focus {
+            --tw-outline-style: none;
+            outline-style: none;
+          }
+        }
+        .active\:translate-y-0 {
+          &:active {
+            --tw-translate-y: calc(var(--spacing) * 0);
+            translate: var(--tw-translate-x) var(--tw-translate-y);
+          }
+        }
+        .disabled\:cursor-not-allowed {
+          &:disabled {
+            cursor: not-allowed;
+          }
+        }
+        .disabled\:opacity-50 {
+          &:disabled {
+            opacity: 50%;
+          }
+        }
+        .sm\:flex {
+          @media (width >= 40rem) {
+            display: flex;
+          }
+        }
+        .sm\:flex-row {
+          @media (width >= 40rem) {
+            flex-direction: row;
+          }
+        }
+        .sm\:p-4 {
+          @media (width >= 40rem) {
+            padding: calc(var(--spacing) * 4);
+          }
+        }
+        .sm\:px-5 {
+          @media (width >= 40rem) {
+            padding-inline: calc(var(--spacing) * 5);
+          }
+        }
+        .sm\:py-6 {
+          @media (width >= 40rem) {
+            padding-block: calc(var(--spacing) * 6);
+          }
+        }
+        .sm\:pt-1 {
+          @media (width >= 40rem) {
+            padding-top: calc(var(--spacing) * 1);
+          }
+        }
+        .md\:h-full {
+          @media (width >= 48rem) {
+            height: 100%;
+          }
+        }
+        .md\:w-\[214px\] {
+          @media (width >= 48rem) {
+            width: 214px;
+          }
+        }
+        .md\:w-full {
+          @media (width >= 48rem) {
+            width: 100%;
+          }
+        }
+        .md\:min-w-\[214px\] {
+          @media (width >= 48rem) {
+            min-width: 214px;
+          }
+        }
+        .md\:flex-col {
+          @media (width >= 48rem) {
+            flex-direction: column;
+          }
+        }
+        .md\:flex-row {
+          @media (width >= 48rem) {
+            flex-direction: row;
+          }
+        }
+        .md\:gap-4 {
+          @media (width >= 48rem) {
+            gap: calc(var(--spacing) * 4);
+          }
+        }
+        .md\:gap-6 {
+          @media (width >= 48rem) {
+            gap: calc(var(--spacing) * 6);
+          }
+        }
+        .md\:overflow-x-hidden {
+          @media (width >= 48rem) {
+            overflow-x: hidden;
+          }
+        }
+        .md\:overflow-y-auto {
+          @media (width >= 48rem) {
+            overflow-y: auto;
+          }
+        }
+        .md\:p-5 {
+          @media (width >= 48rem) {
+            padding: calc(var(--spacing) * 5);
+          }
+        }
+        .md\:px-6 {
+          @media (width >= 48rem) {
+            padding-inline: calc(var(--spacing) * 6);
+          }
+        }
+        .md\:py-7 {
+          @media (width >= 48rem) {
+            padding-block: calc(var(--spacing) * 7);
+          }
+        }
+        .md\:pt-1 {
+          @media (width >= 48rem) {
+            padding-top: calc(var(--spacing) * 1);
+          }
+        }
+        .md\:pb-0 {
+          @media (width >= 48rem) {
+            padding-bottom: calc(var(--spacing) * 0);
+          }
+        }
+      }
+      :root {
+        font-size: 15px;
+        line-height: 24px;
+        font-weight: 400;
+        font-family: "Space Grotesk", "Avenir Next", "Segoe UI", sans-serif;
+        font-synthesis: none;
+        text-rendering: optimizeLegibility;
+        -webkit-font-smoothing: antialiased;
+        -moz-osx-font-smoothing: grayscale;
+        -webkit-text-size-adjust: 100%;
+        color: var(--color-text);
+        background: var(--color-background);
+        color-scheme: dark;
+      }
+      html,
+      body {
+        margin: 0;
+        width: 100%;
+        height: 100%;
+        overflow: hidden;
+        min-height: 100vh;
+        background:
+          radial-gradient(
+            1200px 520px at 90% -10%,
+            rgba(59, 130, 246, 0.13),
+            transparent 55%
+          ),
+          radial-gradient(
+            900px 420px at -10% 100%,
+            rgba(34, 197, 94, 0.09),
+            transparent 60%
+          ),
+          var(--color-background);
+        color: var(--color-text);
+      }
+      #root {
+        width: 100%;
+        height: 100%;
+        min-height: 100vh;
+        overflow: hidden;
+      }
+      code,
+      pre {
+        font-family: "JetBrains Mono", "Fira Code", "SFMono-Regular", monospace;
+      }
+      @layer utilities {
+      }
+      .logo-primary {
+        fill: var(--color-logo-primary);
+      }
+      .logo-stroke {
+        fill: var(--color-logo-stroke);
+        stroke: var(--color-logo-stroke);
+        stroke-width: 1;
+      }
+      .uttr-scrollbar {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(139, 152, 173, 0.45) transparent;
+      }
+      .uttr-scrollbar::-webkit-scrollbar {
+        width: 10px;
+        height: 10px;
+      }
+      .uttr-scrollbar::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      .uttr-scrollbar::-webkit-scrollbar-thumb {
+        background-color: rgba(139, 152, 173, 0.45);
+        border: 2px solid transparent;
+        border-radius: 9999px;
+        background-clip: padding-box;
+      }
+      .uttr-scrollbar::-webkit-scrollbar-thumb:hover {
+        background-color: rgba(139, 152, 173, 0.65);
+      }
+      * {
+        scrollbar-width: thin;
+        scrollbar-color: rgba(139, 152, 173, 0.45) transparent;
+      }
+      *::-webkit-scrollbar {
+        width: 10px;
+        height: 10px;
+      }
+      *::-webkit-scrollbar-track {
+        background: transparent;
+      }
+      *::-webkit-scrollbar-thumb {
+        background-color: rgba(139, 152, 173, 0.45);
+        border: 2px solid transparent;
+        border-radius: 9999px;
+        background-clip: padding-box;
+      }
+      *::-webkit-scrollbar-thumb:hover {
+        background-color: rgba(139, 152, 173, 0.65);
+      }
+      @property --tw-scale-x {
+        syntax: "*";
+        inherits: false;
+        initial-value: 1;
+      }
+      @property --tw-scale-y {
+        syntax: "*";
+        inherits: false;
+        initial-value: 1;
+      }
+      @property --tw-scale-z {
+        syntax: "*";
+        inherits: false;
+        initial-value: 1;
+      }
+      @property --tw-rotate-x {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-rotate-y {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-rotate-z {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-skew-x {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-skew-y {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-space-y-reverse {
+        syntax: "*";
+        inherits: false;
+        initial-value: 0;
+      }
+      @property --tw-space-x-reverse {
+        syntax: "*";
+        inherits: false;
+        initial-value: 0;
+      }
+      @property --tw-divide-y-reverse {
+        syntax: "*";
+        inherits: false;
+        initial-value: 0;
+      }
+      @property --tw-border-style {
+        syntax: "*";
+        inherits: false;
+        initial-value: solid;
+      }
+      @property --tw-gradient-position {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-gradient-from {
+        syntax: "<color>";
+        inherits: false;
+        initial-value: #0000;
+      }
+      @property --tw-gradient-via {
+        syntax: "<color>";
+        inherits: false;
+        initial-value: #0000;
+      }
+      @property --tw-gradient-to {
+        syntax: "<color>";
+        inherits: false;
+        initial-value: #0000;
+      }
+      @property --tw-gradient-stops {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-gradient-via-stops {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-gradient-from-position {
+        syntax: "<length-percentage>";
+        inherits: false;
+        initial-value: 0%;
+      }
+      @property --tw-gradient-via-position {
+        syntax: "<length-percentage>";
+        inherits: false;
+        initial-value: 50%;
+      }
+      @property --tw-gradient-to-position {
+        syntax: "<length-percentage>";
+        inherits: false;
+        initial-value: 100%;
+      }
+      @property --tw-leading {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-font-weight {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-tracking {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-ordinal {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-slashed-zero {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-numeric-figure {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-numeric-spacing {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-numeric-fraction {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-shadow {
+        syntax: "*";
+        inherits: false;
+        initial-value: 0 0 #0000;
+      }
+      @property --tw-shadow-color {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-shadow-alpha {
+        syntax: "<percentage>";
+        inherits: false;
+        initial-value: 100%;
+      }
+      @property --tw-inset-shadow {
+        syntax: "*";
+        inherits: false;
+        initial-value: 0 0 #0000;
+      }
+      @property --tw-inset-shadow-color {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-inset-shadow-alpha {
+        syntax: "<percentage>";
+        inherits: false;
+        initial-value: 100%;
+      }
+      @property --tw-ring-color {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-ring-shadow {
+        syntax: "*";
+        inherits: false;
+        initial-value: 0 0 #0000;
+      }
+      @property --tw-inset-ring-color {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-inset-ring-shadow {
+        syntax: "*";
+        inherits: false;
+        initial-value: 0 0 #0000;
+      }
+      @property --tw-ring-inset {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-ring-offset-width {
+        syntax: "<length>";
+        inherits: false;
+        initial-value: 0px;
+      }
+      @property --tw-ring-offset-color {
+        syntax: "*";
+        inherits: false;
+        initial-value: #fff;
+      }
+      @property --tw-ring-offset-shadow {
+        syntax: "*";
+        inherits: false;
+        initial-value: 0 0 #0000;
+      }
+      @property --tw-outline-style {
+        syntax: "*";
+        inherits: false;
+        initial-value: solid;
+      }
+      @property --tw-blur {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-brightness {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-contrast {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-grayscale {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-hue-rotate {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-invert {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-opacity {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-saturate {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-sepia {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-drop-shadow {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-drop-shadow-color {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-drop-shadow-alpha {
+        syntax: "<percentage>";
+        inherits: false;
+        initial-value: 100%;
+      }
+      @property --tw-drop-shadow-size {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-backdrop-blur {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-backdrop-brightness {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-backdrop-contrast {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-backdrop-grayscale {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-backdrop-hue-rotate {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-backdrop-invert {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-backdrop-opacity {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-backdrop-saturate {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-backdrop-sepia {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-duration {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-ease {
+        syntax: "*";
+        inherits: false;
+      }
+      @property --tw-content {
+        syntax: "*";
+        initial-value: "";
+        inherits: false;
+      }
+      @property --tw-translate-x {
+        syntax: "*";
+        inherits: false;
+        initial-value: 0;
+      }
+      @property --tw-translate-y {
+        syntax: "*";
+        inherits: false;
+        initial-value: 0;
+      }
+      @property --tw-translate-z {
+        syntax: "*";
+        inherits: false;
+        initial-value: 0;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @keyframes pulse {
+        50% {
+          opacity: 0.5;
+        }
+      }
+      @layer properties {
+        @supports ((-webkit-hyphens: none) and (not (margin-trim: inline))) or
+          ((-moz-orient: inline) and (not (color: rgb(from red r g b)))) {
+          *,
+          ::before,
+          ::after,
+          ::backdrop {
+            --tw-scale-x: 1;
+            --tw-scale-y: 1;
+            --tw-scale-z: 1;
+            --tw-rotate-x: initial;
+            --tw-rotate-y: initial;
+            --tw-rotate-z: initial;
+            --tw-skew-x: initial;
+            --tw-skew-y: initial;
+            --tw-space-y-reverse: 0;
+            --tw-space-x-reverse: 0;
+            --tw-divide-y-reverse: 0;
+            --tw-border-style: solid;
+            --tw-gradient-position: initial;
+            --tw-gradient-from: #0000;
+            --tw-gradient-via: #0000;
+            --tw-gradient-to: #0000;
+            --tw-gradient-stops: initial;
+            --tw-gradient-via-stops: initial;
+            --tw-gradient-from-position: 0%;
+            --tw-gradient-via-position: 50%;
+            --tw-gradient-to-position: 100%;
+            --tw-leading: initial;
+            --tw-font-weight: initial;
+            --tw-tracking: initial;
+            --tw-ordinal: initial;
+            --tw-slashed-zero: initial;
+            --tw-numeric-figure: initial;
+            --tw-numeric-spacing: initial;
+            --tw-numeric-fraction: initial;
+            --tw-shadow: 0 0 #0000;
+            --tw-shadow-color: initial;
+            --tw-shadow-alpha: 100%;
+            --tw-inset-shadow: 0 0 #0000;
+            --tw-inset-shadow-color: initial;
+            --tw-inset-shadow-alpha: 100%;
+            --tw-ring-color: initial;
+            --tw-ring-shadow: 0 0 #0000;
+            --tw-inset-ring-color: initial;
+            --tw-inset-ring-shadow: 0 0 #0000;
+            --tw-ring-inset: initial;
+            --tw-ring-offset-width: 0px;
+            --tw-ring-offset-color: #fff;
+            --tw-ring-offset-shadow: 0 0 #0000;
+            --tw-outline-style: solid;
+            --tw-blur: initial;
+            --tw-brightness: initial;
+            --tw-contrast: initial;
+            --tw-grayscale: initial;
+            --tw-hue-rotate: initial;
+            --tw-invert: initial;
+            --tw-opacity: initial;
+            --tw-saturate: initial;
+            --tw-sepia: initial;
+            --tw-drop-shadow: initial;
+            --tw-drop-shadow-color: initial;
+            --tw-drop-shadow-alpha: 100%;
+            --tw-drop-shadow-size: initial;
+            --tw-backdrop-blur: initial;
+            --tw-backdrop-brightness: initial;
+            --tw-backdrop-contrast: initial;
+            --tw-backdrop-grayscale: initial;
+            --tw-backdrop-hue-rotate: initial;
+            --tw-backdrop-invert: initial;
+            --tw-backdrop-opacity: initial;
+            --tw-backdrop-saturate: initial;
+            --tw-backdrop-sepia: initial;
+            --tw-duration: initial;
+            --tw-ease: initial;
+            --tw-content: "";
+            --tw-translate-x: 0;
+            --tw-translate-y: 0;
+            --tw-translate-z: 0;
+          }
+        }
+      }
+
+      /* macOS window controls and local preview navigation. */
+      body {
+        background: #0c111a;
+      }
+      .preview-titlebar {
+        height: 33px;
+        display: flex;
+        align-items: flex-start;
+        gap: 9px;
+        padding: 10px 10px 0;
+      }
+      .preview-titlebar i {
+        width: 14px;
+        height: 14px;
+        border-radius: 50%;
+        box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.28);
+      }
+      .preview-titlebar i:nth-child(1) {
+        background: #f05650;
+      }
+      .preview-titlebar i:nth-child(2) {
+        background: #ffbe0b;
+      }
+      .preview-titlebar i:nth-child(3) {
+        background: #363c47;
+      }
+      #root {
+        height: calc(100vh - 33px);
+        min-height: 0;
+      }
+      [data-view],
+      [data-view] > div {
+        height: 100%;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="preview-titlebar" aria-hidden="true"><i></i><i></i><i></i></div>
+    <div id="root">
+      <div data-view="models">
+        <div
+          class="relative h-screen overflow-hidden select-none cursor-default bg-[linear-gradient(180deg,rgba(10,15,25,0.985),rgba(6,10,18,0.96))] text-text"
+          dir="ltr"
+        >
+          <div
+            class="flex h-full flex-col overflow-hidden bg-[linear-gradient(180deg,rgba(10,15,25,0.985),rgba(6,10,18,0.96))] backdrop-blur-xl"
+          >
+            <div
+              class="flex min-h-0 flex-1 flex-col gap-3 p-3 pt-1 sm:p-4 sm:pt-1 md:flex-row md:gap-4 md:p-5 md:pt-1"
+            >
+              <div
+                class="flex w-full min-w-0 flex-col rounded-[18px] border border-white/6 bg-[rgba(4,9,15,0.45)] px-3 py-4 md:h-full md:w-[214px] md:min-w-[214px]"
+              >
+                <div class="mb-4 px-2">
+                  <p
+                    class="text-[11px] font-medium uppercase tracking-[0.18em] text-text/35"
+                  >
+                    Uttr
+                  </p>
+                </div>
+                <div
+                  class="flex min-h-0 flex-1 gap-1.5 overflow-x-auto pb-1 uttr-scrollbar md:flex-col md:overflow-x-hidden md:overflow-y-auto md:pb-0"
+                >
+                  <button
+                    type="button"
+                    class="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-all md:w-full text-text/72 hover:bg-white/[0.04] hover:text-text"
+                  >
+                    <span
+                      class="h-1.5 w-1.5 rounded-full transition-all bg-transparent"
+                    ></span
+                    ><svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="17"
+                      height="17"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      class="lucide lucide-settings shrink-0"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"
+                      ></path>
+                      <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                    <p class="text-sm font-medium truncate" title="Settings">
+                      Settings
+                    </p></button
+                  ><button
+                    type="button"
+                    class="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-all md:w-full bg-[linear-gradient(90deg,rgba(29,155,100,0.2),rgba(29,155,100,0.08))] text-text shadow-[inset_0_0_0_1px_rgba(103,215,163,0.32)]"
+                    data-preview-page="models"
+                  >
+                    <span
+                      class="h-1.5 w-1.5 rounded-full transition-all bg-logo-primary shadow-[0_0_10px_rgba(103,215,163,0.55)]"
+                    ></span
+                    ><svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="17"
+                      height="17"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      class="lucide lucide-cpu shrink-0 text-logo-primary"
+                      aria-hidden="true"
+                    >
+                      <path d="M12 20v2"></path>
+                      <path d="M12 2v2"></path>
+                      <path d="M17 20v2"></path>
+                      <path d="M17 2v2"></path>
+                      <path d="M2 12h2"></path>
+                      <path d="M2 17h2"></path>
+                      <path d="M2 7h2"></path>
+                      <path d="M20 12h2"></path>
+                      <path d="M20 17h2"></path>
+                      <path d="M20 7h2"></path>
+                      <path d="M7 20v2"></path>
+                      <path d="M7 2v2"></path>
+                      <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+                      <rect x="8" y="8" width="8" height="8" rx="1"></rect>
+                    </svg>
+                    <p class="text-sm font-medium truncate" title="Models">
+                      Models
+                    </p></button
+                  ><button
+                    type="button"
+                    class="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-all md:w-full text-text/72 hover:bg-white/[0.04] hover:text-text"
+                    data-preview-page="keys"
+                  >
+                    <span
+                      class="h-1.5 w-1.5 rounded-full transition-all bg-transparent"
+                    ></span
+                    ><svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="17"
+                      height="17"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      class="lucide lucide-key-round shrink-0"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"
+                      ></path>
+                      <circle
+                        cx="16.5"
+                        cy="7.5"
+                        r=".5"
+                        fill="currentColor"
+                      ></circle>
+                    </svg>
+                    <p class="text-sm font-medium truncate" title="API Keys">
+                      API Keys
+                    </p></button
+                  ><button
+                    type="button"
+                    class="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-all md:w-full text-text/72 hover:bg-white/[0.04] hover:text-text"
+                  >
+                    <span
+                      class="h-1.5 w-1.5 rounded-full transition-all bg-transparent"
+                    ></span
+                    ><svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="17"
+                      height="17"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      class="lucide lucide-house shrink-0"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"
+                      ></path>
+                      <path
+                        d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"
+                      ></path>
+                    </svg>
+                    <p class="text-sm font-medium truncate" title="Meetings">
+                      Meetings
+                    </p></button
+                  ><button
+                    type="button"
+                    class="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-all md:w-full text-text/72 hover:bg-white/[0.04] hover:text-text"
+                  >
+                    <span
+                      class="h-1.5 w-1.5 rounded-full transition-all bg-transparent"
+                    ></span
+                    ><svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="17"
+                      height="17"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      class="lucide lucide-file-audio shrink-0"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M17.5 22h.5a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v3"
+                      ></path>
+                      <path d="M14 2v4a2 2 0 0 0 2 2h4"></path>
+                      <path
+                        d="M2 19a2 2 0 1 1 4 0v1a2 2 0 1 1-4 0v-4a6 6 0 0 1 12 0v4a2 2 0 1 1-4 0v-1a2 2 0 1 1 4 0"
+                      ></path>
+                    </svg>
+                    <p class="text-sm font-medium truncate" title="Files">
+                      Files
+                    </p></button
+                  ><button
+                    type="button"
+                    class="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-all md:w-full text-text/72 hover:bg-white/[0.04] hover:text-text"
+                  >
+                    <span
+                      class="h-1.5 w-1.5 rounded-full transition-all bg-transparent"
+                    ></span
+                    ><svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="17"
+                      height="17"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      class="lucide lucide-history shrink-0"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"
+                      ></path>
+                      <path d="M3 3v5h5"></path>
+                      <path d="M12 7v5l4 2"></path>
+                    </svg>
+                    <p
+                      class="text-sm font-medium truncate"
+                      title="Transcriptions"
+                    >
+                      Transcriptions
+                    </p>
+                  </button>
+                </div>
+                <div class="mt-4 shrink-0 border-t border-white/6 px-2 pt-4">
+                  <div class="flex flex-col gap-1.5 text-xs text-text/48">
+                    <div class="flex items-center gap-3 min-w-0">
+                      <span class="text-text/60 tabular-nums"
+                        >Check for updates</span
+                      >
+                    </div>
+                    <button
+                      type="button"
+                      class="w-fit rounded-md px-1 py-0.5 text-left text-text/28 transition hover:bg-white/[0.04] hover:text-text/42"
+                      aria-label="App version"
+                    >
+                      v0.1.18
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div
+                class="min-w-0 flex-1 overflow-hidden rounded-[20px] border border-white/6 bg-[rgba(5,10,18,0.56)] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
+              >
+                <div
+                  class="flex h-full flex-col overflow-x-hidden overflow-y-auto uttr-scrollbar"
+                >
+                  <div
+                    class="flex flex-col items-center gap-5 px-4 py-5 sm:px-5 sm:py-6 md:gap-6 md:px-6 md:py-7"
+                  >
+                    <div class="mx-auto w-full max-w-3xl space-y-6">
+                      <div
+                        class="flex flex-wrap items-end justify-between gap-4"
+                      >
+                        <div class="space-y-2">
+                          <h1
+                            class="text-[28px] font-semibold tracking-tight text-text"
+                          >
+                            Transcription Models
+                          </h1>
+                          <p
+                            class="max-w-2xl text-sm leading-relaxed text-text/52"
+                          >
+                            Select a transcription model or download additional
+                            models. Different models offer varying levels of
+                            accuracy and speed.
+                          </p>
+                        </div>
+                        <div
+                          class="rounded-full border border-white/8 bg-white/[0.03] px-3 py-2 text-sm text-text/62"
+                        >
+                          <span class="mr-2 text-text/40">Active</span
+                          ><span
+                            class="font-medium text-text/88"
+                            data-active-model-name=""
+                            >Groq Whisper Large V3</span
+                          >
+                        </div>
+                      </div>
+                      <div class="space-y-7">
+                        <div class="space-y-3">
+                          <div class="flex items-center justify-between gap-4">
+                            <div>
+                              <h2
+                                class="text-[11px] font-medium uppercase tracking-[0.18em] text-text/34"
+                              >
+                                Downloaded Models
+                              </h2>
+                            </div>
+                            <div class="relative">
+                              <button
+                                type="button"
+                                class="flex items-center gap-2 rounded-full border px-3 py-2 text-sm transition-colors border-white/8 bg-white/[0.03] text-text/62 hover:bg-white/[0.05]"
+                              >
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  width="24"
+                                  height="24"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2"
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  class="lucide lucide-globe h-3.5 w-3.5"
+                                  aria-hidden="true"
+                                >
+                                  <circle cx="12" cy="12" r="10"></circle>
+                                  <path
+                                    d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"
+                                  ></path>
+                                  <path d="M2 12h20"></path></svg
+                                ><span class="max-w-[120px] truncate"
+                                  >All Languages</span
+                                ><svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  width="24"
+                                  height="24"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2"
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  class="lucide lucide-chevron-down h-3.5 w-3.5 transition-transform"
+                                  aria-hidden="true"
+                                >
+                                  <path d="m6 9 6 6 6-6"></path>
+                                </svg>
+                              </button>
+                            </div>
+                          </div>
+                          <div
+                            role="button"
+                            tabindex="0"
+                            class="flex flex-col gap-3 rounded-[18px] border px-4 py-4 text-left transition-all duration-200 border-white/7 bg-white/[0.025] group cursor-pointer hover:-translate-y-0.5 hover:border-white/14 hover:bg-white/[0.045] hover:shadow-[0_14px_32px_rgba(2,6,23,0.24)] active:translate-y-0"
+                            data-model-name="Parakeet V3"
+                          >
+                            <div
+                              class="flex w-full items-start justify-between gap-4"
+                            >
+                              <div
+                                class="flex flex-col items-start flex-1 min-w-0"
+                              >
+                                <div
+                                  class="flex flex-wrap items-center gap-2.5"
+                                >
+                                  <h3
+                                    class="text-[17px] font-semibold tracking-tight text-text group-hover:text-white transition-colors"
+                                  >
+                                    Parakeet V3
+                                  </h3>
+                                  <span
+                                    class="inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-medium bg-white/[0.05] text-text/65 border border-white/8"
+                                    >Local</span
+                                  >
+                                </div>
+                                <p
+                                  class="mt-1 text-sm leading-relaxed text-text/56"
+                                >
+                                  Fast and accurate
+                                </p>
+                              </div>
+                              <div class="hidden shrink-0 gap-2 sm:flex">
+                                <span
+                                  class="rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-text/56"
+                                  >Low latency</span
+                                >
+                              </div>
+                            </div>
+                            <div class="h-px w-full bg-white/7"></div>
+                            <div
+                              class="flex min-h-5 w-full flex-wrap items-center gap-3 text-xs text-text/48"
+                            >
+                              <div
+                                class="flex items-center gap-1"
+                                title="Supports multiple input languages"
+                              >
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  width="24"
+                                  height="24"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2"
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  class="lucide lucide-globe w-3.5 h-3.5"
+                                  aria-hidden="true"
+                                >
+                                  <circle cx="12" cy="12" r="10"></circle>
+                                  <path
+                                    d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"
+                                  ></path>
+                                  <path d="M2 12h20"></path></svg
+                                ><span>Multi-language</span>
+                              </div>
+                              <button
+                                type="button"
+                                class="font-medium rounded-xl border focus:outline-none transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer text-current border-transparent hover:bg-white/[0.05] hover:border-white/10 focus:bg-white/[0.06] px-2.5 py-1.5 text-xs ml-auto flex items-center gap-1.5 text-text/56 hover:text-text"
+                                title="Delete Parakeet V3"
+                              >
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  width="24"
+                                  height="24"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2"
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  class="lucide lucide-trash2 lucide-trash-2 w-3.5 h-3.5"
+                                  aria-hidden="true"
+                                >
+                                  <path d="M10 11v6"></path>
+                                  <path d="M14 11v6"></path>
+                                  <path
+                                    d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"
+                                  ></path>
+                                  <path d="M3 6h18"></path>
+                                  <path
+                                    d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"
+                                  ></path></svg
+                                ><span>Delete</span>
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                        <div class="space-y-3">
+                          <div class="flex items-center justify-between gap-4">
+                            <h2
+                              class="text-[11px] font-medium uppercase tracking-[0.18em] text-text/34"
+                            >
+                              Cloud Models
+                            </h2>
+                          </div>
+                          <div
+                            role="button"
+                            tabindex="0"
+                            class="flex flex-col gap-3 rounded-[18px] border px-4 py-4 text-left transition-all duration-200 border-white/7 bg-white/[0.025] group cursor-pointer hover:-translate-y-0.5 hover:border-white/14 hover:bg-white/[0.045] hover:shadow-[0_14px_32px_rgba(2,6,23,0.24)] active:translate-y-0"
+                            data-model-name="Groq Whisper Large V3 Turbo"
+                          >
+                            <div
+                              class="flex w-full items-start justify-between gap-4"
+                            >
+                              <div
+                                class="flex flex-col items-start flex-1 min-w-0"
+                              >
+                                <div
+                                  class="flex flex-wrap items-center gap-2.5"
+                                >
+                                  <h3
+                                    class="text-[17px] font-semibold tracking-tight text-text group-hover:text-white transition-colors"
+                                  >
+                                    Groq Whisper Large V3 Turbo
+                                  </h3>
+                                  <span
+                                    class="inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-medium bg-white/[0.05] text-text/65 border border-white/8"
+                                    ><svg
+                                      xmlns="http://www.w3.org/2000/svg"
+                                      width="24"
+                                      height="24"
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      stroke-width="2"
+                                      stroke-linecap="round"
+                                      stroke-linejoin="round"
+                                      class="lucide lucide-cloud w-3 h-3 mr-1"
+                                      aria-hidden="true"
+                                    >
+                                      <path
+                                        d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"
+                                      ></path></svg
+                                    >Cloud</span
+                                  >
+                                </div>
+                                <p
+                                  class="mt-1 text-sm leading-relaxed text-text/56"
+                                >
+                                  Extremely fast.
+                                </p>
+                              </div>
+                              <div class="hidden shrink-0 gap-2 sm:flex">
+                                <span
+                                  class="rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-text/56"
+                                  >Low latency</span
+                                >
+                              </div>
+                            </div>
+                            <div class="h-px w-full bg-white/7"></div>
+                            <div
+                              class="flex min-h-5 w-full flex-wrap items-center gap-3 text-xs text-text/48"
+                            >
+                              <div
+                                class="flex items-center gap-1"
+                                title="Supports multiple input languages"
+                              >
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  width="24"
+                                  height="24"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2"
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  class="lucide lucide-globe w-3.5 h-3.5"
+                                  aria-hidden="true"
+                                >
+                                  <circle cx="12" cy="12" r="10"></circle>
+                                  <path
+                                    d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"
+                                  ></path>
+                                  <path d="M2 12h20"></path></svg
+                                ><span>Multi-language</span>
+                              </div>
+                              <div
+                                class="flex items-center gap-1"
+                                title="Can translate to English"
+                              >
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  width="24"
+                                  height="24"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2"
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  class="lucide lucide-languages w-3.5 h-3.5"
+                                  aria-hidden="true"
+                                >
+                                  <path d="m5 8 6 6"></path>
+                                  <path d="m4 14 6-6 2-3"></path>
+                                  <path d="M2 5h12"></path>
+                                  <path d="M7 2h1"></path>
+                                  <path d="m22 22-5-10-5 10"></path>
+                                  <path d="M14 18h6"></path></svg
+                                ><span>Translate to English</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div
+                            role="button"
+                            tabindex="0"
+                            class="flex flex-col gap-3 rounded-[18px] border px-4 py-4 text-left transition-all duration-200 border-white/7 bg-white/[0.025] group cursor-pointer hover:-translate-y-0.5 hover:border-white/14 hover:bg-white/[0.045] hover:shadow-[0_14px_32px_rgba(2,6,23,0.24)] active:translate-y-0"
+                            data-model-name="OpenAI GPT-4o Transcribe"
+                          >
+                            <div
+                              class="flex w-full items-start justify-between gap-4"
+                            >
+                              <div
+                                class="flex flex-col items-start flex-1 min-w-0"
+                              >
+                                <div
+                                  class="flex flex-wrap items-center gap-2.5"
+                                >
+                                  <h3
+                                    class="text-[17px] font-semibold tracking-tight text-text group-hover:text-white transition-colors"
+                                  >
+                                    OpenAI GPT-4o Transcribe
+                                  </h3>
+                                  <span
+                                    class="inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-medium bg-white/[0.05] text-text/65 border border-white/8"
+                                    ><svg
+                                      xmlns="http://www.w3.org/2000/svg"
+                                      width="24"
+                                      height="24"
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      stroke-width="2"
+                                      stroke-linecap="round"
+                                      stroke-linejoin="round"
+                                      class="lucide lucide-cloud w-3 h-3 mr-1"
+                                      aria-hidden="true"
+                                    >
+                                      <path
+                                        d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"
+                                      ></path></svg
+                                    >Cloud</span
+                                  >
+                                </div>
+                                <p
+                                  class="mt-1 text-sm leading-relaxed text-text/56"
+                                >
+                                  Accuracy-first dictation.
+                                </p>
+                              </div>
+                              <div class="hidden shrink-0 gap-2 sm:flex">
+                                <span
+                                  class="rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-text/56"
+                                  >Low latency</span
+                                ><span
+                                  class="rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-text/56"
+                                  >High accuracy</span
+                                >
+                              </div>
+                            </div>
+                            <div class="h-px w-full bg-white/7"></div>
+                            <div
+                              class="flex min-h-5 w-full flex-wrap items-center gap-3 text-xs text-text/48"
+                            >
+                              <div
+                                class="flex items-center gap-1"
+                                title="Supports multiple input languages"
+                              >
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  width="24"
+                                  height="24"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2"
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  class="lucide lucide-globe w-3.5 h-3.5"
+                                  aria-hidden="true"
+                                >
+                                  <circle cx="12" cy="12" r="10"></circle>
+                                  <path
+                                    d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"
+                                  ></path>
+                                  <path d="M2 12h20"></path></svg
+                                ><span>Multi-language</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div
+                            role="button"
+                            tabindex="0"
+                            class="flex flex-col gap-3 rounded-[18px] border px-4 py-4 text-left transition-all duration-200 border-logo-primary/34 bg-[linear-gradient(180deg,rgba(103,215,163,0.11),rgba(103,215,163,0.04))] shadow-[0_12px_28px_rgba(16,185,129,0.08)] group cursor-pointer hover:-translate-y-0.5 hover:border-white/14 hover:bg-white/[0.045] hover:shadow-[0_14px_32px_rgba(2,6,23,0.24)] active:translate-y-0"
+                            data-model-name="Groq Whisper Large V3"
+                          >
+                            <div
+                              class="flex w-full items-start justify-between gap-4"
+                            >
+                              <div
+                                class="flex flex-col items-start flex-1 min-w-0"
+                              >
+                                <div
+                                  class="flex flex-wrap items-center gap-2.5"
+                                >
+                                  <h3
+                                    class="text-[17px] font-semibold tracking-tight text-text group-hover:text-white transition-colors"
+                                  >
+                                    Groq Whisper Large V3
+                                  </h3>
+                                  <span
+                                    class="inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-medium bg-logo-primary/16 text-logo-primary border border-logo-primary/18"
+                                    data-preview-active=""
+                                    ><svg
+                                      xmlns="http://www.w3.org/2000/svg"
+                                      width="24"
+                                      height="24"
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      stroke-width="2"
+                                      stroke-linecap="round"
+                                      stroke-linejoin="round"
+                                      class="lucide lucide-check w-3 h-3 mr-1"
+                                      aria-hidden="true"
+                                    >
+                                      <path d="M20 6 9 17l-5-5"></path></svg
+                                    >Active</span
+                                  ><span
+                                    class="inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-medium bg-white/[0.05] text-text/65 border border-white/8"
+                                    ><svg
+                                      xmlns="http://www.w3.org/2000/svg"
+                                      width="24"
+                                      height="24"
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      stroke-width="2"
+                                      stroke-linecap="round"
+                                      stroke-linejoin="round"
+                                      class="lucide lucide-cloud w-3 h-3 mr-1"
+                                      aria-hidden="true"
+                                    >
+                                      <path
+                                        d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"
+                                      ></path></svg
+                                    >Cloud</span
+                                  >
+                                </div>
+                                <p
+                                  class="mt-1 text-sm leading-relaxed text-text/56"
+                                >
+                                  Higher quality.
+                                </p>
+                              </div>
+                              <div class="hidden shrink-0 gap-2 sm:flex">
+                                <span
+                                  class="rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-text/56"
+                                  >Low latency</span
+                                ><span
+                                  class="rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-text/56"
+                                  >High accuracy</span
+                                >
+                              </div>
+                            </div>
+                            <div class="h-px w-full bg-white/7"></div>
+                            <div
+                              class="flex min-h-5 w-full flex-wrap items-center gap-3 text-xs text-text/48"
+                            >
+                              <div
+                                class="flex items-center gap-1"
+                                title="Supports multiple input languages"
+                              >
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  width="24"
+                                  height="24"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2"
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  class="lucide lucide-globe w-3.5 h-3.5"
+                                  aria-hidden="true"
+                                >
+                                  <circle cx="12" cy="12" r="10"></circle>
+                                  <path
+                                    d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"
+                                  ></path>
+                                  <path d="M2 12h20"></path></svg
+                                ><span>Multi-language</span>
+                              </div>
+                              <div
+                                class="flex items-center gap-1"
+                                title="Can translate to English"
+                              >
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  width="24"
+                                  height="24"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2"
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  class="lucide lucide-languages w-3.5 h-3.5"
+                                  aria-hidden="true"
+                                >
+                                  <path d="m5 8 6 6"></path>
+                                  <path d="m4 14 6-6 2-3"></path>
+                                  <path d="M2 5h12"></path>
+                                  <path d="M7 2h1"></path>
+                                  <path d="m22 22-5-10-5 10"></path>
+                                  <path d="M14 18h6"></path></svg
+                                ><span>Translate to English</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div
+                            role="button"
+                            tabindex="0"
+                            class="flex flex-col gap-3 rounded-[18px] border px-4 py-4 text-left transition-all duration-200 border-white/7 bg-white/[0.025] group cursor-pointer hover:-translate-y-0.5 hover:border-white/14 hover:bg-white/[0.045] hover:shadow-[0_14px_32px_rgba(2,6,23,0.24)] active:translate-y-0"
+                            data-model-name="ElevenLabs Scribe v3 Live"
+                            title="Select ElevenLabs Scribe v3 Live"
+                          >
+                            <div
+                              class="flex w-full items-start justify-between gap-4"
+                            >
+                              <div
+                                class="flex flex-col items-start flex-1 min-w-0"
+                              >
+                                <div
+                                  class="flex flex-wrap items-center gap-2.5"
+                                >
+                                  <h3
+                                    class="text-[17px] font-semibold tracking-tight text-text group-hover:text-white transition-colors"
+                                  >
+                                    ElevenLabs Scribe v3 Live
+                                  </h3>
+                                  <span
+                                    class="inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-medium bg-white/[0.05] text-text/65 border border-white/8"
+                                    ><svg
+                                      xmlns="http://www.w3.org/2000/svg"
+                                      width="24"
+                                      height="24"
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      stroke-width="2"
+                                      stroke-linecap="round"
+                                      stroke-linejoin="round"
+                                      class="lucide lucide-cloud w-3 h-3 mr-1"
+                                      aria-hidden="true"
+                                    >
+                                      <path
+                                        d="M17.5 19H9a7 7 0 1 1 6.71-9h1.79a4.5 4.5 0 1 1 0 9Z"
+                                      ></path></svg
+                                    >Cloud</span
+                                  >
+                                </div>
+                                <p
+                                  class="mt-1 text-sm leading-relaxed text-text/56"
+                                >
+                                  Realtime microphone dictation.
+                                </p>
+                              </div>
+                              <div class="hidden shrink-0 gap-2 sm:flex">
+                                <span
+                                  class="rounded-full border border-white/8 bg-white/[0.04] px-2.5 py-1 text-[11px] font-medium text-text/56"
+                                  >Low latency</span
+                                >
+                              </div>
+                            </div>
+                            <div class="h-px w-full bg-white/7"></div>
+                            <div
+                              class="flex min-h-5 w-full flex-wrap items-center gap-3 text-xs text-text/48"
+                            >
+                              <div
+                                class="flex items-center gap-1"
+                                title="Supports multiple input languages"
+                              >
+                                <svg
+                                  xmlns="http://www.w3.org/2000/svg"
+                                  width="24"
+                                  height="24"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  stroke-width="2"
+                                  stroke-linecap="round"
+                                  stroke-linejoin="round"
+                                  class="lucide lucide-globe w-3.5 h-3.5"
+                                  aria-hidden="true"
+                                >
+                                  <circle cx="12" cy="12" r="10"></circle>
+                                  <path
+                                    d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"
+                                  ></path>
+                                  <path d="M2 12h20"></path></svg
+                                ><span>Multi-language</span>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div data-view="keys" hidden>
+        <div
+          class="relative h-screen overflow-hidden select-none cursor-default bg-[linear-gradient(180deg,rgba(10,15,25,0.985),rgba(6,10,18,0.96))] text-text"
+          dir="ltr"
+        >
+          <div
+            class="flex h-full flex-col overflow-hidden bg-[linear-gradient(180deg,rgba(10,15,25,0.985),rgba(6,10,18,0.96))] backdrop-blur-xl"
+          >
+            <div
+              class="flex min-h-0 flex-1 flex-col gap-3 p-3 pt-1 sm:p-4 sm:pt-1 md:flex-row md:gap-4 md:p-5 md:pt-1"
+            >
+              <div
+                class="flex w-full min-w-0 flex-col rounded-[18px] border border-white/6 bg-[rgba(4,9,15,0.45)] px-3 py-4 md:h-full md:w-[214px] md:min-w-[214px]"
+              >
+                <div class="mb-4 px-2">
+                  <p
+                    class="text-[11px] font-medium uppercase tracking-[0.18em] text-text/35"
+                  >
+                    Uttr
+                  </p>
+                </div>
+                <div
+                  class="flex min-h-0 flex-1 gap-1.5 overflow-x-auto pb-1 uttr-scrollbar md:flex-col md:overflow-x-hidden md:overflow-y-auto md:pb-0"
+                >
+                  <button
+                    type="button"
+                    class="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-all md:w-full text-text/72 hover:bg-white/[0.04] hover:text-text"
+                  >
+                    <span
+                      class="h-1.5 w-1.5 rounded-full transition-all bg-transparent"
+                    ></span
+                    ><svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="17"
+                      height="17"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      class="lucide lucide-settings shrink-0"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M9.671 4.136a2.34 2.34 0 0 1 4.659 0 2.34 2.34 0 0 0 3.319 1.915 2.34 2.34 0 0 1 2.33 4.033 2.34 2.34 0 0 0 0 3.831 2.34 2.34 0 0 1-2.33 4.033 2.34 2.34 0 0 0-3.319 1.915 2.34 2.34 0 0 1-4.659 0 2.34 2.34 0 0 0-3.32-1.915 2.34 2.34 0 0 1-2.33-4.033 2.34 2.34 0 0 0 0-3.831A2.34 2.34 0 0 1 6.35 6.051a2.34 2.34 0 0 0 3.319-1.915"
+                      ></path>
+                      <circle cx="12" cy="12" r="3"></circle>
+                    </svg>
+                    <p class="text-sm font-medium truncate" title="Settings">
+                      Settings
+                    </p></button
+                  ><button
+                    type="button"
+                    class="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-all md:w-full text-text/72 hover:bg-white/[0.04] hover:text-text"
+                    data-preview-page="models"
+                  >
+                    <span
+                      class="h-1.5 w-1.5 rounded-full transition-all bg-transparent"
+                    ></span
+                    ><svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="17"
+                      height="17"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      class="lucide lucide-cpu shrink-0"
+                      aria-hidden="true"
+                    >
+                      <path d="M12 20v2"></path>
+                      <path d="M12 2v2"></path>
+                      <path d="M17 20v2"></path>
+                      <path d="M17 2v2"></path>
+                      <path d="M2 12h2"></path>
+                      <path d="M2 17h2"></path>
+                      <path d="M2 7h2"></path>
+                      <path d="M20 12h2"></path>
+                      <path d="M20 17h2"></path>
+                      <path d="M20 7h2"></path>
+                      <path d="M7 20v2"></path>
+                      <path d="M7 2v2"></path>
+                      <rect x="4" y="4" width="16" height="16" rx="2"></rect>
+                      <rect x="8" y="8" width="8" height="8" rx="1"></rect>
+                    </svg>
+                    <p class="text-sm font-medium truncate" title="Models">
+                      Models
+                    </p></button
+                  ><button
+                    type="button"
+                    class="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-all md:w-full bg-[linear-gradient(90deg,rgba(29,155,100,0.2),rgba(29,155,100,0.08))] text-text shadow-[inset_0_0_0_1px_rgba(103,215,163,0.32)]"
+                    data-preview-page="keys"
+                  >
+                    <span
+                      class="h-1.5 w-1.5 rounded-full transition-all bg-logo-primary shadow-[0_0_10px_rgba(103,215,163,0.55)]"
+                    ></span
+                    ><svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="17"
+                      height="17"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      class="lucide lucide-key-round shrink-0 text-logo-primary"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M2.586 17.414A2 2 0 0 0 2 18.828V21a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h1a1 1 0 0 0 1-1v-1a1 1 0 0 1 1-1h.172a2 2 0 0 0 1.414-.586l.814-.814a6.5 6.5 0 1 0-4-4z"
+                      ></path>
+                      <circle
+                        cx="16.5"
+                        cy="7.5"
+                        r=".5"
+                        fill="currentColor"
+                      ></circle>
+                    </svg>
+                    <p class="text-sm font-medium truncate" title="API Keys">
+                      API Keys
+                    </p></button
+                  ><button
+                    type="button"
+                    class="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-all md:w-full text-text/72 hover:bg-white/[0.04] hover:text-text"
+                  >
+                    <span
+                      class="h-1.5 w-1.5 rounded-full transition-all bg-transparent"
+                    ></span
+                    ><svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="17"
+                      height="17"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      class="lucide lucide-house shrink-0"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M15 21v-8a1 1 0 0 0-1-1h-4a1 1 0 0 0-1 1v8"
+                      ></path>
+                      <path
+                        d="M3 10a2 2 0 0 1 .709-1.528l7-5.999a2 2 0 0 1 2.582 0l7 5.999A2 2 0 0 1 21 10v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"
+                      ></path>
+                    </svg>
+                    <p class="text-sm font-medium truncate" title="Meetings">
+                      Meetings
+                    </p></button
+                  ><button
+                    type="button"
+                    class="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-all md:w-full text-text/72 hover:bg-white/[0.04] hover:text-text"
+                  >
+                    <span
+                      class="h-1.5 w-1.5 rounded-full transition-all bg-transparent"
+                    ></span
+                    ><svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="17"
+                      height="17"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      class="lucide lucide-file-audio shrink-0"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M17.5 22h.5a2 2 0 0 0 2-2V7l-5-5H6a2 2 0 0 0-2 2v3"
+                      ></path>
+                      <path d="M14 2v4a2 2 0 0 0 2 2h4"></path>
+                      <path
+                        d="M2 19a2 2 0 1 1 4 0v1a2 2 0 1 1-4 0v-4a6 6 0 0 1 12 0v4a2 2 0 1 1-4 0v-1a2 2 0 1 1 4 0"
+                      ></path>
+                    </svg>
+                    <p class="text-sm font-medium truncate" title="Files">
+                      Files
+                    </p></button
+                  ><button
+                    type="button"
+                    class="flex shrink-0 items-center gap-3 rounded-xl px-3 py-2.5 text-left transition-all md:w-full text-text/72 hover:bg-white/[0.04] hover:text-text"
+                  >
+                    <span
+                      class="h-1.5 w-1.5 rounded-full transition-all bg-transparent"
+                    ></span
+                    ><svg
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="17"
+                      height="17"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="2"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                      class="lucide lucide-history shrink-0"
+                      aria-hidden="true"
+                    >
+                      <path
+                        d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"
+                      ></path>
+                      <path d="M3 3v5h5"></path>
+                      <path d="M12 7v5l4 2"></path>
+                    </svg>
+                    <p
+                      class="text-sm font-medium truncate"
+                      title="Transcriptions"
+                    >
+                      Transcriptions
+                    </p>
+                  </button>
+                </div>
+                <div class="mt-4 shrink-0 border-t border-white/6 px-2 pt-4">
+                  <div class="flex flex-col gap-1.5 text-xs text-text/48">
+                    <div class="flex items-center gap-3 min-w-0">
+                      <span class="text-text/60 tabular-nums"
+                        >Check for updates</span
+                      >
+                    </div>
+                    <button
+                      type="button"
+                      class="w-fit rounded-md px-1 py-0.5 text-left text-text/28 transition hover:bg-white/[0.04] hover:text-text/42"
+                      aria-label="App version"
+                    >
+                      v0.1.18
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <div
+                class="min-w-0 flex-1 overflow-hidden rounded-[20px] border border-white/6 bg-[rgba(5,10,18,0.56)] shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]"
+              >
+                <div
+                  class="flex h-full flex-col overflow-x-hidden overflow-y-auto uttr-scrollbar"
+                >
+                  <div
+                    class="flex flex-col items-center gap-5 px-4 py-5 sm:px-5 sm:py-6 md:gap-6 md:px-6 md:py-7"
+                  >
+                    <div class="mx-auto w-full max-w-3xl space-y-6">
+                      <div>
+                        <h1
+                          class="text-[28px] font-semibold tracking-tight text-text"
+                        >
+                          API Keys
+                        </h1>
+                      </div>
+                      <div
+                        class="rounded-[20px] border border-white/8 bg-[rgba(255,255,255,0.026)] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]"
+                      >
+                        <h2
+                          class="text-xl font-semibold tracking-tight text-text"
+                        >
+                          Groq Cloud
+                        </h2>
+                        <button
+                          type="button"
+                          class="mt-1 cursor-pointer text-sm text-text/48 transition-colors hover:text-text/72"
+                        >
+                          https://console.groq.com/keys
+                        </button>
+                        <div class="mt-5 space-y-4">
+                          <div class="space-y-2.5">
+                            <label
+                              class="text-xs font-medium uppercase tracking-[0.18em] text-text/34"
+                              >Groq API key</label
+                            ><input
+                              class="text-sm font-medium bg-white/[0.04] border border-white/10 rounded-xl text-start transition-all duration-150 text-text/92 px-3.5 py-2.5 hover:bg-white/[0.06] hover:border-white/16 focus:outline-none focus:bg-white/[0.07] focus:border-logo-primary/40 focus:ring-1 focus:ring-logo-primary/30 w-full"
+                              type="password"
+                              placeholder="gsk_..."
+                              value=""
+                            />
+                          </div>
+                          <div class="flex flex-wrap gap-2 pt-1">
+                            <button
+                              type="button"
+                              class="font-medium rounded-xl border focus:outline-none transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer text-text bg-logo-primary/14 border-logo-primary/12 hover:bg-logo-primary/18 hover:border-logo-primary/25 focus:ring-1 focus:ring-logo-primary/40 px-2.5 py-1.5 text-xs"
+                              disabled=""
+                            >
+                              Save key
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                      <div
+                        class="rounded-[20px] border border-white/8 bg-[rgba(255,255,255,0.026)] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]"
+                      >
+                        <h2
+                          class="text-xl font-semibold tracking-tight text-text"
+                        >
+                          OpenAI
+                        </h2>
+                        <button
+                          type="button"
+                          class="mt-1 cursor-pointer text-sm text-text/48 transition-colors hover:text-text/72"
+                        >
+                          https://platform.openai.com/api-keys
+                        </button>
+                        <div class="mt-5 space-y-4">
+                          <div class="space-y-2.5">
+                            <label
+                              class="text-xs font-medium uppercase tracking-[0.18em] text-text/34"
+                              >OpenAI API key</label
+                            ><input
+                              class="text-sm font-medium bg-white/[0.04] border border-white/10 rounded-xl text-start transition-all duration-150 text-text/92 px-3.5 py-2.5 hover:bg-white/[0.06] hover:border-white/16 focus:outline-none focus:bg-white/[0.07] focus:border-logo-primary/40 focus:ring-1 focus:ring-logo-primary/30 w-full"
+                              type="password"
+                              placeholder="sk-..."
+                              value=""
+                            />
+                          </div>
+                          <div class="flex flex-wrap gap-2 pt-1">
+                            <button
+                              type="button"
+                              class="font-medium rounded-xl border focus:outline-none transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer text-text bg-logo-primary/14 border-logo-primary/12 hover:bg-logo-primary/18 hover:border-logo-primary/25 focus:ring-1 focus:ring-logo-primary/40 px-2.5 py-1.5 text-xs"
+                              disabled=""
+                            >
+                              Save key
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                      <div
+                        class="rounded-[20px] border border-white/8 bg-[rgba(255,255,255,0.026)] p-5 shadow-[inset_0_1px_0_rgba(255,255,255,0.02)]"
+                        data-preview-provider="elevenlabs"
+                      >
+                        <h2
+                          class="text-xl font-semibold tracking-tight text-text"
+                        >
+                          ElevenLabs
+                        </h2>
+                        <button
+                          type="button"
+                          class="mt-1 cursor-pointer text-sm text-text/48 transition-colors hover:text-text/72"
+                        >
+                          https://elevenlabs.io/app/developers/api-keys
+                        </button>
+                        <div class="mt-5 space-y-4">
+                          <div class="space-y-2.5">
+                            <label
+                              class="text-xs font-medium uppercase tracking-[0.18em] text-text/34"
+                              for="elevenlabs-preview-key"
+                              >ElevenLabs API key</label
+                            ><input
+                              class="text-sm font-medium bg-white/[0.04] border border-white/10 rounded-xl text-start transition-all duration-150 text-text/92 px-3.5 py-2.5 hover:bg-white/[0.06] hover:border-white/16 focus:outline-none focus:bg-white/[0.07] focus:border-logo-primary/40 focus:ring-1 focus:ring-logo-primary/30 w-full"
+                              type="password"
+                              placeholder="ElevenLabs API key"
+                              id="elevenlabs-preview-key"
+                              autocomplete="off"
+                              data-preview-key=""
+                            />
+                          </div>
+                          <div class="flex flex-wrap gap-2 pt-1">
+                            <button
+                              type="button"
+                              class="font-medium rounded-xl border focus:outline-none transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer text-text bg-logo-primary/14 border-logo-primary/12 hover:bg-logo-primary/18 hover:border-logo-primary/25 focus:ring-1 focus:ring-logo-primary/40 px-2.5 py-1.5 text-xs"
+                              disabled=""
+                              data-preview-save=""
+                            >
+                              Save key
+                            </button>
+                            <button
+                              type="button"
+                              class="cursor-pointer rounded-xl px-2.5 py-1.5 text-xs font-medium"
+                              data-preview-clear
+                              hidden
+                            >
+                              Clear key
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <script>
+      const root = document.getElementById("root");
+      const views = Object.fromEntries(
+        [...root.querySelectorAll("[data-view]")].map((view) => [
+          view.dataset.view,
+          view,
+        ]),
+      );
+      const cards = [...root.querySelectorAll("[data-model-name]")];
+      const savedBadge = root.querySelector("[data-preview-active]");
+      const activeModelName = root.querySelector("[data-active-model-name]");
+      const activeClass =
+        "flex flex-col gap-3 rounded-[18px] border px-4 py-4 text-left transition-all duration-200 border-logo-primary/34 bg-[linear-gradient(180deg,rgba(103,215,163,0.11),rgba(103,215,163,0.04))] shadow-[0_12px_28px_rgba(16,185,129,0.08)] group cursor-pointer hover:-translate-y-0.5 hover:border-white/14 hover:bg-white/[0.045] hover:shadow-[0_14px_32px_rgba(2,6,23,0.24)] active:translate-y-0";
+      const idleClass =
+        "flex flex-col gap-3 rounded-[18px] border px-4 py-4 text-left transition-all duration-200 border-white/7 bg-white/[0.025] group cursor-pointer hover:-translate-y-0.5 hover:border-white/14 hover:bg-white/[0.045] hover:shadow-[0_14px_32px_rgba(2,6,23,0.24)] active:translate-y-0";
+      const key = root.querySelector("[data-preview-key]");
+      const save = root.querySelector("[data-preview-save]");
+      const clear = root.querySelector("[data-preview-clear]");
+      let active = "Groq Whisper Large V3";
+      let keySaved = false;
+
+      function show(page) {
+        for (const [name, view] of Object.entries(views))
+          view.hidden = name !== page;
+        const heading = views[page].querySelector("h1");
+        heading.tabIndex = -1;
+        heading.focus({ preventScroll: true });
+      }
+
+      function updateSelection() {
+        for (const card of cards) {
+          const isActive = card.dataset.modelName === active;
+          card.className = isActive ? activeClass : idleClass;
+          card.setAttribute("aria-pressed", String(isActive));
+          card.querySelector("[data-preview-active]")?.remove();
+          if (isActive)
+            card.querySelector("h3").after(savedBadge.cloneNode(true));
+        }
+        activeModelName.textContent = active;
+      }
+
+      function select(card) {
+        active = card.dataset.modelName;
+        updateSelection();
+      }
+
+      function updateKeyState() {
+        key.value = "";
+        key.disabled = keySaved;
+        key.placeholder = keySaved ? "Saved key" : "ElevenLabs API key";
+        save.disabled = true;
+        clear.hidden = !keySaved;
+      }
+
+      for (const nav of root.querySelectorAll("[data-preview-page]"))
+        nav.addEventListener("click", () => show(nav.dataset.previewPage));
+      for (const card of cards) {
+        card.addEventListener("click", () => select(card));
+        card.addEventListener("keydown", (event) => {
+          if (event.target === card && ["Enter", " "].includes(event.key)) {
+            event.preventDefault();
+            select(card);
+          }
+        });
+      }
+      key.addEventListener("input", () => {
+        save.disabled = !key.value.trim();
+      });
+      save.addEventListener("click", () => {
+        keySaved = true;
+        updateKeyState();
+      });
+      clear.addEventListener("click", () => {
+        keySaved = false;
+        updateKeyState();
+      });
+      updateSelection();
+      updateKeyState();
+    </script>
+  </body>
+</html>
