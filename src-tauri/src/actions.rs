@@ -17,7 +17,7 @@ use crate::managers::full_system_audio::{
 use crate::managers::history::HistoryManager;
 use crate::managers::model::is_cloud_model_id;
 use crate::managers::transcription::{
-    DictationRequestContext, DictationTranscription, TranscriptionManager,
+    is_accidental_fn_tap, DictationRequestContext, DictationTranscription, TranscriptionManager,
 };
 use crate::settings::{
     get_settings, normalize_custom_vocabulary_terms, write_settings, AppSettings,
@@ -501,6 +501,7 @@ pub trait ShortcutAction: Send + Sync {
         binding_id: &str,
         shortcut_str: &str,
         operation_id: OperationId,
+        observed_fn_hold: Option<Duration>,
     );
 }
 
@@ -3969,6 +3970,7 @@ fn handle_transcription_stop(
     operation_id: OperationId,
     samples: Option<Vec<f32>>,
     recording_duration: Option<Duration>,
+    observed_fn_hold: Option<Duration>,
     post_process: bool,
     use_incremental: bool,
     completion_mode: TranscriptionCompletionMode,
@@ -3978,10 +3980,11 @@ fn handle_transcription_stop(
     finish_guard: Option<FinishGuard>,
 ) {
     log::info!(
-        "[latency] transcription task scheduling binding={} sample_count={} recording_duration_ms={}",
+        "[latency] transcription task scheduling binding={} sample_count={} recording_duration_ms={} observed_fn_hold_ms={:?}",
         binding_id,
         samples.as_ref().map(|samples| samples.len()).unwrap_or(0),
-        recording_duration.unwrap_or_default().as_millis()
+        recording_duration.unwrap_or_default().as_millis(),
+        observed_fn_hold.map(|hold| hold.as_millis())
     );
 
     let dictation_context = (completion_mode == TranscriptionCompletionMode::Standard)
@@ -4028,6 +4031,28 @@ fn handle_transcription_stop(
         ) {
             debug!("Transcription task was cancelled before processing started");
             restore_ui_after_transcription(&ah, &completion_context);
+            return;
+        }
+
+        if completion_mode == TranscriptionCompletionMode::Standard
+            && is_accidental_fn_tap(observed_fn_hold)
+        {
+            log::info!(
+                "Discarding accidental Fn tap before transcription operation={} observed_hold_ms={:?}",
+                operation_id,
+                observed_fn_hold.map(|hold| hold.as_millis())
+            );
+            cancel_incremental_for_completion(
+                &tm_for_worker,
+                &binding_id,
+                operation_id,
+                completion_mode,
+            );
+            tm_for_worker.cancel_dictation_context(&binding_id, operation_id);
+            complete_transcription_ui_if_active(completion_mode, operation_id, || {
+                restore_ui_after_transcription(&ah, &completion_context);
+            });
+            ui_guard.suppress();
             return;
         }
 
@@ -4290,7 +4315,14 @@ fn handle_transcription_stop(
                     return;
                 }
                 if dictation_context.as_ref().zip(output_evidence).is_some_and(
-                    |(context, evidence)| context.reject_output(evidence, samples_clone.len()),
+                    |(context, evidence)| {
+                        context.reject_output(
+                            evidence,
+                            &samples_clone,
+                            observed_fn_hold,
+                            &transcription,
+                        )
+                    },
                 ) {
                     cancel_incremental_for_completion(
                         &tm_for_worker,
@@ -5165,6 +5197,7 @@ impl ShortcutAction for TranscribeAction {
         binding_id: &str,
         _shortcut_str: &str,
         operation_id: OperationId,
+        observed_fn_hold: Option<Duration>,
     ) {
         let stop_time = Instant::now();
         log::info!(
@@ -5259,6 +5292,7 @@ impl ShortcutAction for TranscribeAction {
             operation_id,
             samples,
             recording_duration,
+            observed_fn_hold,
             post_process,
             use_incremental,
             self.completion_mode,
@@ -5425,6 +5459,7 @@ impl ShortcutAction for FullSystemTranscribeAction {
         binding_id: &str,
         _shortcut_str: &str,
         operation_id: OperationId,
+        _observed_fn_hold: Option<Duration>,
     ) {
         let stop_time = Instant::now();
         log::info!(
@@ -5560,6 +5595,7 @@ impl ShortcutAction for FullSystemTranscribeAction {
                 operation_id,
                 fallback_samples,
                 None,
+                None,
                 post_process,
                 false,
                 TranscriptionCompletionMode::FullSystemOverlay,
@@ -5598,6 +5634,7 @@ impl ShortcutAction for CancelAction {
         _binding_id: &str,
         _shortcut_str: &str,
         _operation_id: OperationId,
+        _observed_fn_hold: Option<Duration>,
     ) {
         // Nothing to do on stop for cancel
     }
@@ -5617,6 +5654,7 @@ impl ShortcutAction for CopyLastTranscriptAction {
         _binding_id: &str,
         _shortcut_str: &str,
         _operation_id: OperationId,
+        _observed_fn_hold: Option<Duration>,
     ) {
         // Nothing to do on stop for one-shot actions.
     }
@@ -5645,6 +5683,7 @@ impl ShortcutAction for TogglePostProcessingAction {
         _binding_id: &str,
         _shortcut_str: &str,
         _operation_id: OperationId,
+        _observed_fn_hold: Option<Duration>,
     ) {
         // Toggle shortcuts act on press only.
     }
@@ -5669,6 +5708,7 @@ impl ShortcutAction for TestAction {
         binding_id: &str,
         shortcut_str: &str,
         _operation_id: OperationId,
+        _observed_fn_hold: Option<Duration>,
     ) {
         log::info!(
             "Shortcut ID '{}': Stopped - {} (App: {})", // Changed "Released" to "Stopped" for consistency

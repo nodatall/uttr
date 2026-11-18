@@ -1,5 +1,6 @@
 pub mod audio;
 pub mod constants;
+pub(crate) mod short_tap;
 pub mod text;
 pub mod utils;
 pub mod vad;

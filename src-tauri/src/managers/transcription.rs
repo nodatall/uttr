@@ -1,4 +1,5 @@
 use crate::access::{bootstrap_install_state, refresh_entitlement_state, request_claim_token};
+use crate::audio_toolkit::short_tap::sounds_like_short_tap;
 use crate::audio_toolkit::{
     apply_custom_words, filter_transcription_output, trim_proxy_upload_audio, DictationAnalysis,
     SpeechEvidence,
@@ -85,6 +86,12 @@ const MIN_ONE_CHUNK_INCREMENTAL_FINALIZATION_SAMPLES: usize = SAMPLE_RATE * 15;
 // None collects content-free evidence without rejecting audio during calibration.
 // Synchronized eight-phase evidence, including model-only terminal context.
 const DICTATION_NO_SPEECH_CUTOFF: Option<f32> = Some(0.16);
+
+pub(crate) fn is_accidental_fn_tap(observed_fn_hold: Option<Duration>) -> bool {
+    // This is a gesture policy. Pre-roll, upload padding, speech scores, and
+    // recognition output cannot turn a tap into an intentional dictation hold.
+    observed_fn_hold.is_some_and(|hold| hold < Duration::from_millis(200))
+}
 
 pub(crate) enum DictationTranscription {
     Text(String),
@@ -189,8 +196,25 @@ impl DictationRequestContext {
         }
     }
 
-    pub(crate) fn reject_output(&self, evidence: SpeechEvidence, sample_count: usize) -> bool {
-        self.reject_evidence(evidence, &[0..sample_count], "output")
+    pub(crate) fn reject_output(
+        &self,
+        evidence: SpeechEvidence,
+        samples: &[f32],
+        observed_fn_hold: Option<Duration>,
+        transcription: &str,
+    ) -> bool {
+        if is_accidental_fn_tap(observed_fn_hold) {
+            self.log_skip("short_fn_hold_output");
+            return true;
+        }
+        if self.reject_evidence(evidence, &[0..samples.len()], "output") {
+            return true;
+        }
+        if should_suppress_fn_tap_output(observed_fn_hold, samples, transcription) {
+            self.log_skip("short_fn_tap_output");
+            return true;
+        }
+        false
     }
 
     /// Gate this request while preserving all context in admitted audio.
@@ -377,6 +401,18 @@ fn normalized_silence_hallucination_text(text: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn should_suppress_fn_tap_output(
+    observed_fn_hold: Option<Duration>,
+    samples: &[f32],
+    transcription: &str,
+) -> bool {
+    // The hold only selects candidates. Genuine speech can start in the pre-roll.
+    const MAX_TAP_HOLD: Duration = Duration::from_secs(1);
+    observed_fn_hold.is_some_and(|hold| hold <= MAX_TAP_HOLD)
+        && normalized_silence_hallucination_text(transcription) == "thank you"
+        && sounds_like_short_tap(samples)
 }
 
 fn audio_levels(audio: &[f32]) -> Option<(f32, f32)> {
@@ -3326,6 +3362,81 @@ mod tests {
 
         assert_eq!(live_chunk_unique_audio_seconds(first, 1), 20);
         assert_eq!(live_chunk_unique_audio_seconds(second, 2), 10);
+    }
+
+    #[test]
+    fn fn_tap_policy_uses_raw_hold_and_preserves_the_exact_minimum() {
+        for ms in [0, 86, 111, 143, 199] {
+            assert!(is_accidental_fn_tap(Some(Duration::from_millis(ms))));
+        }
+        assert!(is_accidental_fn_tap(Some(Duration::from_nanos(
+            199_999_999
+        ))));
+        for ms in [200, 201, 945, 1_207] {
+            assert!(!is_accidental_fn_tap(Some(Duration::from_millis(ms))));
+        }
+        assert!(!is_accidental_fn_tap(None));
+    }
+
+    #[test]
+    fn a_tap_cannot_be_admitted_by_speech_scores_padding_or_recognized_words() {
+        let context = DictationRequestContext::new("transcribe", 32, None);
+        // A short capture can include loud pre-roll and a padded upload.
+        let mut samples = vec![0.1; SAMPLE_RATE / 2];
+        samples.resize(SAMPLE_RATE * 2, 0.0);
+        for ms in [86, 111, 143] {
+            for evidence in [
+                SpeechEvidence::Unknown,
+                SpeechEvidence::Complete { max_score: 1.0 },
+            ] {
+                for text in ["Thank you.", "Bye.", "Yes."] {
+                    assert!(context.reject_output(
+                        evidence,
+                        &samples,
+                        Some(Duration::from_millis(ms)),
+                        text
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn admitted_fn_holds_check_phrase_and_audio_before_suppressing_a_click() {
+        let context = DictationRequestContext::new("transcribe", 78, None);
+        // A click that the existing speech detector admitted, as both reported taps were.
+        let admitted = SpeechEvidence::Complete { max_score: 0.57 };
+        let samples = |burst: Range<usize>| -> Vec<f32> {
+            (0..SAMPLE_RATE)
+                .map(|i| {
+                    let phase = std::f32::consts::TAU * 800.0 * i as f32 / SAMPLE_RATE as f32;
+                    let amplitude = if burst.contains(&i) { 0.002 } else { 0.0002 };
+                    amplitude * phase.sin()
+                })
+                .collect()
+        };
+        let click = samples(8_000..8_320);
+        for ms in [80, 500, 1_000] {
+            assert!(context.reject_output(
+                admitted,
+                &click,
+                Some(Duration::from_millis(ms)),
+                "Thank you!",
+            ));
+        }
+        let accepted_hold = Some(Duration::from_millis(200));
+        assert!(!context.reject_output(admitted, &click, None, "Thank you."));
+        assert!(!context.reject_output(
+            admitted,
+            &click,
+            Some(Duration::from_millis(1_001)),
+            "Thank you."
+        ));
+        assert!(!context.reject_output(admitted, &click, accepted_hold, "Thank you for that."));
+        assert!(!context.reject_output(admitted, &click, accepted_hold, "Yes."));
+        // A hold that meets the minimum retains speech from the pre-roll.
+        let sustained = samples(800..4_000);
+        assert!(!context.reject_output(admitted, &sustained, accepted_hold, "Thank you."));
     }
 
     #[test]

@@ -57,7 +57,7 @@ pub fn setup_signal_handler(app_handle: AppHandle, mut signals: Signals) {
                 info!("Received SIGUSR2 transcription toggle request");
                 debug!("Received SIGUSR2");
                 if let Some(c) = app_handle.try_state::<TranscriptionCoordinator>() {
-                    c.send_input("transcribe", "SIGUSR2", true, false);
+                    c.send_input("transcribe", "SIGUSR2", true, false, None);
                 } else {
                     warn!("TranscriptionCoordinator not initialized");
                 }

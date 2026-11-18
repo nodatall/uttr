@@ -107,6 +107,7 @@ pub fn register_shortcut(app: &AppHandle, binding: ShortcutBinding) -> Result<()
                     &binding_id_for_closure,
                     &shortcut_string,
                     is_pressed,
+                    None,
                 );
             }
         })
