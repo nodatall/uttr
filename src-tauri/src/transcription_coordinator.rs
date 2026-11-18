@@ -2,6 +2,7 @@ use crate::actions::{promote_active_transcription_to_edit_mode, ACTION_MAP};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::full_system_audio::FullSystemAudioSessionManager;
 use crate::managers::transcription::TranscriptionManager;
+use crate::scribe_live::{FnPress, LiveGate};
 use crate::{shortcut, utils};
 use log::{debug, error, info, warn};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -68,6 +69,7 @@ enum Command {
         is_pressed: bool,
         push_to_talk: bool,
         received_at: Instant,
+        fn_press: Option<FnPress>,
         observed_fn_hold: Option<Duration>,
     },
     StopMeeting,
@@ -412,6 +414,7 @@ impl TranscriptionCoordinator {
                         is_pressed,
                         push_to_talk,
                         received_at,
+                        fn_press,
                         observed_fn_hold,
                     } => {
                         warn!(
@@ -469,7 +472,14 @@ impl TranscriptionCoordinator {
                                 {
                                     continue;
                                 }
-                                start(&app, &mut stage, &binding_id, &hotkey_string, push_to_talk);
+                                start(
+                                    &app,
+                                    &mut stage,
+                                    &binding_id,
+                                    &hotkey_string,
+                                    push_to_talk,
+                                    fn_press,
+                                );
                             } else if is_pressed
                                 && can_start_dictation_while_legacy_meeting_processing(
                                     &stage,
@@ -512,6 +522,7 @@ impl TranscriptionCoordinator {
                                     &app,
                                     &from_binding_id,
                                     &binding_id,
+                                    operation_id,
                                 ) {
                                     info!(
                                         "Promoted push-to-talk recording from '{}' to '{}'",
@@ -581,6 +592,7 @@ impl TranscriptionCoordinator {
                                         &binding_id,
                                         &hotkey_string,
                                         push_to_talk,
+                                        None,
                                     );
                                 }
                                 _ if can_start_dictation_while_legacy_meeting_processing(
@@ -686,12 +698,32 @@ impl TranscriptionCoordinator {
         push_to_talk: bool,
         observed_fn_hold: Option<Duration>,
     ) {
+        self.send_input_with_fn_press(
+            binding_id,
+            hotkey_string,
+            is_pressed,
+            push_to_talk,
+            observed_fn_hold,
+            None,
+        );
+    }
+
+    pub(crate) fn send_input_with_fn_press(
+        &self,
+        binding_id: &str,
+        hotkey_string: &str,
+        is_pressed: bool,
+        push_to_talk: bool,
+        observed_fn_hold: Option<Duration>,
+        fn_press: Option<FnPress>,
+    ) {
         self.send_with_recovery(Command::Input {
             binding_id: binding_id.to_string(),
             hotkey_string: hotkey_string.to_string(),
             is_pressed,
             push_to_talk,
             received_at: Instant::now(),
+            fn_press,
             observed_fn_hold,
         });
     }
@@ -1025,6 +1057,7 @@ fn start(
     binding_id: &str,
     hotkey_string: &str,
     push_to_talk: bool,
+    fn_press: Option<FnPress>,
 ) {
     let start_time = Instant::now();
     let operation = Operation::new(binding_id, hotkey_string, push_to_talk);
@@ -1033,7 +1066,15 @@ fn start(
         warn!("No action in ACTION_MAP for '{binding_id}'");
         return;
     };
-    action.start_with_operation(app, binding_id, hotkey_string, operation.id);
+    let plain_fn = hotkey_string
+        .parse::<handy_keys::Hotkey>()
+        .is_ok_and(|hotkey| hotkey.key.is_none() && hotkey.modifiers == handy_keys::Modifiers::FN);
+    let gate = if push_to_talk && plain_fn {
+        LiveGate::Fn(fn_press)
+    } else {
+        LiveGate::Open
+    };
+    action.start_with_operation(app, binding_id, hotkey_string, operation.id, Some(gate));
     let audio_recording_active = app
         .try_state::<Arc<AudioRecordingManager>>()
         .map_or(false, |a| a.is_recording());
@@ -1098,7 +1139,7 @@ fn start_legacy_meeting_processing_dictation(
         warn!("No action in ACTION_MAP for '{binding_id}'");
         return;
     };
-    action.start_with_operation(app, binding_id, hotkey_string, operation.id);
+    action.start_with_operation(app, binding_id, hotkey_string, operation.id, None);
 
     let audio_recording_active = app
         .try_state::<Arc<AudioRecordingManager>>()
@@ -1280,7 +1321,7 @@ fn start_meeting_quick_dictation(
         return;
     };
     crate::actions::set_active_quick_dictation_ui_operation(operation.id);
-    action.start_with_operation(app, binding_id, hotkey_string, operation.id);
+    action.start_with_operation(app, binding_id, hotkey_string, operation.id, None);
 
     let audio_recording_active = app
         .try_state::<Arc<AudioRecordingManager>>()
@@ -1314,7 +1355,7 @@ fn start_stopping_meeting_dictation(
         warn!("No action in ACTION_MAP for '{binding_id}'");
         return;
     };
-    action.start_with_operation(app, binding_id, hotkey_string, operation.id);
+    action.start_with_operation(app, binding_id, hotkey_string, operation.id, None);
 
     let audio_recording_active = app
         .try_state::<Arc<AudioRecordingManager>>()
@@ -1561,6 +1602,9 @@ fn cancel_stale_push_to_talk_recording(app: &AppHandle, stage: &mut Stage, bindi
         binding_id
     );
 
+    if let Stage::Recording(operation) = stage {
+        crate::scribe_live::cancel(operation.id);
+    }
     shortcut::unregister_cancel_shortcut(app);
 
     if let Some(audio_manager) = app.try_state::<Arc<AudioRecordingManager>>() {

@@ -122,7 +122,7 @@ async fn send_chat_completion_with_timeout(
     let base_url = provider.base_url.trim_end_matches('/');
     let url = format!("{}/chat/completions", base_url);
 
-    debug!("Sending chat completion request to: {}", url);
+    debug!("Sending chat completion to provider '{}'", provider.id);
 
     let client = create_client(provider, &api_key)?;
 
@@ -155,25 +155,19 @@ async fn send_chat_completion_with_timeout(
         .json(&request_body)
         .send()
         .await
-        .map_err(|e| format!("HTTP request failed: {}", e))?;
+        .map_err(|e| format!("HTTP request failed: {}", e.without_url()))?;
 
     let status = response.status();
     if !status.is_success() {
-        let error_text = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Failed to read error response".to_string());
-        return Err(format!(
-            "API request failed with status {}: {}",
-            status, error_text
-        ));
+        // A provider can include the original prompt in its error response.
+        return Err(format!("API request failed with status {}", status));
     }
 
     let completion: ChatCompletionResponse = response.json().await.map_err(|e| {
         if e.is_timeout() {
             "Chat completion timed out while reading the response".to_string()
         } else {
-            format!("Failed to parse API response: {}", e)
+            "Failed to parse API response".to_string()
         }
     })?;
 
@@ -218,6 +212,50 @@ mod tests {
         assert!(error.contains("timed out"), "unexpected error: {error}");
     }
 
+    #[tokio::test]
+    async fn provider_errors_expose_status_without_response_content() {
+        let marker = "synthetic-private-response-marker";
+        for chat_request in [true, false] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let mut local_provider = provider("openai");
+            local_provider.base_url = format!("http://{}", listener.local_addr().unwrap());
+            let server = std::thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut buffer = [0; 4096];
+                stream.read(&mut buffer).unwrap();
+                write!(
+                    stream,
+                    "HTTP/1.1 400 Bad Request\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{marker}",
+                    marker.len()
+                )
+                .unwrap();
+            });
+
+            let error = if chat_request {
+                send_chat_completion_with_timeout(
+                    &local_provider,
+                    String::new(),
+                    "test",
+                    "synthetic prompt".into(),
+                    None,
+                    Duration::from_secs(2),
+                )
+                .await
+                .unwrap_err()
+            } else {
+                fetch_models(&local_provider, String::new())
+                    .await
+                    .unwrap_err()
+            };
+            server.join().unwrap();
+            assert!(error.contains("400"), "unexpected error: {error}");
+            assert!(
+                !error.contains(marker),
+                "response content made it into the error"
+            );
+        }
+    }
+
     fn provider(id: &str) -> PostProcessProvider {
         PostProcessProvider {
             id: id.to_string(),
@@ -238,7 +276,7 @@ pub async fn fetch_models(
     let base_url = provider.base_url.trim_end_matches('/');
     let url = format!("{}/models", base_url);
 
-    debug!("Fetching models from: {}", url);
+    debug!("Fetching models for provider '{}'", provider.id);
 
     let client = create_client(provider, &api_key)?;
 
@@ -247,24 +285,17 @@ pub async fn fetch_models(
         .timeout(MODEL_LIST_TIMEOUT)
         .send()
         .await
-        .map_err(|e| format!("Failed to fetch models: {}", e))?;
+        .map_err(|e| format!("Failed to fetch models: {}", e.without_url()))?;
 
     let status = response.status();
     if !status.is_success() {
-        let error_text = response
-            .text()
-            .await
-            .unwrap_or_else(|_| "Unknown error".to_string());
-        return Err(format!(
-            "Model list request failed ({}): {}",
-            status, error_text
-        ));
+        return Err(format!("Model list request failed ({})", status));
     }
 
     let parsed: serde_json::Value = response
         .json()
         .await
-        .map_err(|e| format!("Failed to parse response: {}", e))?;
+        .map_err(|_| "Failed to parse model list response".to_string())?;
 
     let mut models = Vec::new();
 

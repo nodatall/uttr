@@ -9,6 +9,7 @@ import {
   Loader2,
   Trash2,
 } from "lucide-react";
+import { isCloudModel, SCRIBE_LIVE_MODEL_ID } from "@/lib/constants/models";
 import type { ModelInfo } from "@/bindings";
 import { formatModelSize } from "../../lib/utils/format";
 import {
@@ -32,9 +33,6 @@ const getLanguageDisplayText = (
   }
   return t("modelSelector.capabilities.multiLanguage");
 };
-
-const isCloudModel = (model: ModelInfo): boolean =>
-  model.id.startsWith("groq-") || model.id.startsWith("openai-");
 
 const isDefaultLocalModel = (model: ModelInfo): boolean =>
   model.id === "parakeet-tdt-0.6b-v3";
@@ -126,7 +124,7 @@ const ModelCard: React.FC<ModelCardProps> = ({
 
   const handleClick = () => {
     if (!isClickable || disabled) return;
-    if (!isCloudModel(model) && status === "downloadable" && onDownload) {
+    if (!isCloudModel(model.id) && status === "downloadable" && onDownload) {
       onDownload(model.id);
     } else {
       onSelect(model.id);
@@ -180,7 +178,7 @@ const ModelCard: React.FC<ModelCardProps> = ({
             {model.is_custom && (
               <Badge variant="secondary">{t("modelSelector.custom")}</Badge>
             )}
-            {isCloudModel(model) && (
+            {isCloudModel(model.id) && (
               <Badge variant="secondary">
                 <Cloud className="w-3 h-3 mr-1" />
                 {t("settings.models.groq.badge", { defaultValue: "Cloud" })}
@@ -219,7 +217,8 @@ const ModelCard: React.FC<ModelCardProps> = ({
       <div className="h-px w-full bg-white/7" />
 
       <div className="flex min-h-5 w-full flex-wrap items-center gap-3 text-xs text-text/48">
-        {model.supported_languages.length > 0 && (
+        {(model.supported_languages.length > 0 ||
+          model.id === SCRIBE_LIVE_MODEL_ID) && (
           <div
             className="flex items-center gap-1"
             title={
@@ -241,14 +240,14 @@ const ModelCard: React.FC<ModelCardProps> = ({
             <span>{t("modelSelector.capabilities.translate")}</span>
           </div>
         )}
-        {status === "downloadable" && !isCloudModel(model) && (
+        {status === "downloadable" && !isCloudModel(model.id) && (
           <span className="ml-auto flex items-center gap-1.5">
             <Download className="w-3.5 h-3.5" />
             <span>{formatModelSize(Number(model.size_mb))}</span>
           </span>
         )}
         {onDelete &&
-          !isCloudModel(model) &&
+          !isCloudModel(model.id) &&
           (status === "available" || status === "active") && (
             <Button
               variant="ghost"

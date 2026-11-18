@@ -57,6 +57,24 @@ pub fn handle_shortcut_event(
     is_pressed: bool,
     observed_fn_hold: Option<Duration>,
 ) {
+    handle_shortcut_event_with_fn_press(
+        app,
+        binding_id,
+        hotkey_string,
+        is_pressed,
+        observed_fn_hold,
+        None,
+    );
+}
+
+pub(super) fn handle_shortcut_event_with_fn_press(
+    app: &AppHandle,
+    binding_id: &str,
+    hotkey_string: &str,
+    is_pressed: bool,
+    observed_fn_hold: Option<Duration>,
+    fn_press: Option<crate::scribe_live::FnPress>,
+) {
     match shortcut_event_route(binding_id, is_pressed) {
         ShortcutEventRoute::CoordinatorInput => {
             let settings = get_settings(app);
@@ -65,12 +83,13 @@ pub fn handle_shortcut_event(
                 binding_id, hotkey_string, is_pressed
             );
             if let Some(coordinator) = app.try_state::<TranscriptionCoordinator>() {
-                coordinator.send_input(
+                coordinator.send_input_with_fn_press(
                     binding_id,
                     hotkey_string,
                     is_pressed,
                     transcribe_binding_push_to_talk(binding_id, settings.push_to_talk),
                     observed_fn_hold,
+                    fn_press,
                 );
             } else {
                 warn!("TranscriptionCoordinator is not initialized");

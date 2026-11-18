@@ -28,7 +28,14 @@ enum Cmd {
     StartObserved(DictationAnalysis),
     ObservationBoundary(Option<DictationAnalysis>, mpsc::Sender<DrainResult>),
     Drain(mpsc::Sender<DrainResult>),
-    Stop(mpsc::Sender<Vec<f32>>),
+    ReadDictation {
+        operation_id: u64,
+        binding_id: String,
+        offset: usize,
+        limit: usize,
+        reply: mpsc::Sender<Result<Vec<f32>, ()>>,
+    },
+    Stop(mpsc::Sender<(Vec<f32>, usize)>),
     Shutdown,
 }
 
@@ -431,6 +438,14 @@ impl AudioRecorder {
     }
 
     pub fn stop(&self) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+        self.stop_with_sample_boundary().map(|(samples, _)| samples)
+    }
+
+    /// The returned boundary excludes only VAD-frame completion zeros. All
+    /// available filtered Rubato output remains part of the recording.
+    pub(crate) fn stop_with_sample_boundary(
+        &self,
+    ) -> Result<(Vec<f32>, usize), Box<dyn std::error::Error>> {
         let (resp_tx, resp_rx) = mpsc::channel();
         let tx = self
             .cmd_tx
@@ -452,6 +467,28 @@ impl AudioRecorder {
                 };
                 Box::new(io_err) as Box<dyn std::error::Error>
             })
+    }
+
+    // An absolute read never advances the shared recorder cursor, even if its reply times out.
+    pub(crate) fn request_dictation_samples(
+        &self,
+        binding_id: &str,
+        operation_id: u64,
+        offset: usize,
+        limit: usize,
+    ) -> Option<mpsc::Receiver<Result<Vec<f32>, ()>>> {
+        let (reply, rx) = mpsc::channel();
+        self.cmd_tx
+            .as_ref()?
+            .send(Cmd::ReadDictation {
+                binding_id: binding_id.to_owned(),
+                operation_id,
+                offset,
+                limit,
+                reply,
+            })
+            .ok()?;
+        Some(rx)
     }
 
     pub fn drain(&self) -> Result<DrainResult, Box<dyn std::error::Error>> {
@@ -897,6 +934,29 @@ fn run_consumer(
                 let _ = reply_tx.send(delta);
                 false
             }
+            Cmd::ReadDictation {
+                binding_id,
+                operation_id,
+                offset,
+                limit,
+                reply,
+            } => {
+                let result = if *recording
+                    && observation
+                        .as_ref()
+                        .is_some_and(|o| o.analysis.matches(&binding_id, operation_id))
+                {
+                    processed_samples
+                        .get(offset..)
+                        .filter(|tail| tail.len() <= limit)
+                        .map(|tail| tail.to_vec())
+                        .ok_or(())
+                } else {
+                    Err(())
+                };
+                let _ = reply.send(result);
+                false
+            }
             Cmd::Drain(reply_tx) => {
                 let _ = reply_tx.send(drain_recording(
                     *recording,
@@ -910,6 +970,7 @@ fn run_consumer(
                 *recording = false;
 
                 let mut flush_passthrough = 0usize;
+                let mut trailing_padding = 0;
                 frame_resampler.finish_with_validity(&mut |frame: &[f32], valid| {
                     pre_roll_samples.push_frame_with_validity(frame, valid);
                     if let Some(observer) = observation.as_mut() {
@@ -922,8 +983,13 @@ fn run_consumer(
                     // we still want to process the last few frames
                     let _ =
                         handle_frame(frame, true, vad, processed_samples, &mut flush_passthrough);
+                    let appended = processed_samples.len() - before;
+                    if appended != 0 {
+                        trailing_padding = valid
+                            .map_or(0, |count| frame.len().saturating_sub(count).min(appended));
+                    }
                     if let Some(observer) = observation.as_ref() {
-                        observer.retained(processed_samples.len() - before, frame.len(), valid);
+                        observer.retained(appended, frame.len(), valid);
                     }
                 });
 
@@ -935,7 +1001,8 @@ fn run_consumer(
                 *silence_run_samples = 0;
                 *saw_pause_since_last_drain = false;
                 *startup_passthrough_remaining = 0;
-                let _ = reply_tx.send(std::mem::take(processed_samples));
+                let boundary = processed_samples.len() - trailing_padding;
+                let _ = reply_tx.send((std::mem::take(processed_samples), boundary));
                 false
             }
             Cmd::Shutdown => {

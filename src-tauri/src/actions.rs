@@ -492,6 +492,7 @@ pub trait ShortcutAction: Send + Sync {
         binding_id: &str,
         shortcut_str: &str,
         _operation_id: OperationId,
+        _live_gate: Option<crate::scribe_live::LiveGate>,
     ) {
         self.start(app, binding_id, shortcut_str);
     }
@@ -1459,10 +1460,12 @@ pub fn cancel_dictation_operation(operation_id: OperationId) -> bool {
         operation_id,
         DictationOperationTerminalState::Cancelled,
     );
+    crate::scribe_live::cancel(operation_id);
     true
 }
 
 pub(crate) fn release_dictation_operation(operation_id: OperationId) {
+    crate::scribe_live::cancel(operation_id);
     DICTATION_OPERATION_TERMINAL_STATES
         .lock()
         .unwrap()
@@ -1735,6 +1738,7 @@ pub fn promote_active_transcription_to_edit_mode(
     app: &AppHandle,
     from_binding_id: &str,
     to_binding_id: &str,
+    operation_id: OperationId,
 ) -> bool {
     if from_binding_id == to_binding_id || to_binding_id != "edit_mode" {
         warn!(
@@ -1762,6 +1766,7 @@ pub fn promote_active_transcription_to_edit_mode(
         return false;
     }
 
+    crate::scribe_live::cancel(operation_id);
     clear_ask_selection_session();
     utils::hide_ask_selection_panel(app);
     let context_start = Instant::now();
@@ -3969,6 +3974,7 @@ fn handle_transcription_stop(
     binding_id: &str,
     operation_id: OperationId,
     samples: Option<Vec<f32>>,
+    scribe: Option<crate::scribe_live::Session>,
     recording_duration: Option<Duration>,
     observed_fn_hold: Option<Duration>,
     post_process: bool,
@@ -4193,7 +4199,13 @@ fn handle_transcription_stop(
             return;
         }
 
-        let transcription_result = if use_incremental
+        let is_scribe = scribe.is_some();
+        let transcription_result = if let Some(session) = scribe {
+            session
+                .finish(samples)
+                .await
+                .map(|raw| tm_for_worker.finish_live_dictation(raw, &samples_clone))
+        } else if use_incremental
             && samples.len() >= SHORT_UTTERANCE_SAMPLES
             && has_incremental_progress
         {
@@ -4867,7 +4879,7 @@ fn handle_transcription_stop(
                     change_tray_icon(&ah, TrayIconState::Idle);
                     return;
                 }
-                if suspected_no_input {
+                if suspected_no_input && !is_scribe {
                     refresh_microphone_stream_after_suspected_no_input(
                         &ah,
                         &binding_id,
@@ -4935,12 +4947,21 @@ impl TranscribeAction {
         app: &AppHandle,
         binding_id: &str,
         operation_id: Option<OperationId>,
+        live_gate: Option<crate::scribe_live::LiveGate>,
     ) {
         let start_time = Instant::now();
         utils::cancel_pending_overlay_transitions();
 
+        let settings = get_settings(app);
+        let live_gate = live_gate.filter(|_| {
+            settings.scribe_live_dictation
+                && !settings.translate_to_english
+                && self.completion_mode == TranscriptionCompletionMode::Standard
+        });
         let access = get_install_access_snapshot(app);
-        if !install_access_allows_transcription(&access) {
+        // Standalone Scribe is BYOK-only. A selected model with a cleared key
+        // reports its configuration error after the Fn gate admits the recording.
+        if live_gate.is_none() && !install_access_allows_transcription(&access) {
             change_tray_icon(app, TrayIconState::Idle);
             utils::show_trial_ended_overlay(app);
             let overlay_epoch = utils::current_overlay_session_epoch();
@@ -4963,7 +4984,6 @@ impl TranscribeAction {
         // Load model in the background
         let tm = app.state::<Arc<TranscriptionManager>>();
         tm.clear_cancel_request();
-        let settings = get_settings(app);
         if self.completion_mode == TranscriptionCompletionMode::EditMode
             && !settings.edit_mode_enabled
         {
@@ -4982,7 +5002,8 @@ impl TranscribeAction {
         if !is_edit_mode && (self.post_process || settings.post_process_enabled) {
             store_active_context_async(&binding_id);
         }
-        let use_incremental = should_use_incremental_transcription(&settings, &tm);
+        let use_incremental =
+            live_gate.is_none() && should_use_incremental_transcription(&settings, &tm);
 
         let binding_id = binding_id.to_string();
         let rm = app.state::<Arc<AudioRecordingManager>>();
@@ -5136,6 +5157,22 @@ impl TranscribeAction {
             }
         }
         tm.cancel_incremental_session();
+        let using_scribe = live_gate.is_some();
+        if let (true, Some(operation), Some(gate)) = (recording_started, operation_id, live_gate) {
+            // current_recording_started_at belongs to the just-started standalone operation.
+            let recording_start = rm
+                .current_recording_started_at(&binding_id)
+                .unwrap_or_else(Instant::now);
+            crate::scribe_live::start(
+                app,
+                settings.clone(),
+                Arc::clone(&rm),
+                binding_id.clone(),
+                operation,
+                gate,
+                recording_start,
+            );
+        }
         start_transcription_session(app, &binding_id, recording_started);
         let preload_model_id = if settings.selected_model.is_empty() {
             tm.get_current_model().unwrap_or_default()
@@ -5144,7 +5181,7 @@ impl TranscribeAction {
         };
         // Keep visual recording feedback on the hot path. Local model preload
         // is useful, but it can wait until after the overlay has been requested.
-        if preload_model_id.is_empty() || !is_cloud_model_id(&preload_model_id) {
+        if !using_scribe && (preload_model_id.is_empty() || !is_cloud_model_id(&preload_model_id)) {
             tm.initiate_model_load();
         } else {
             debug!(
@@ -5178,7 +5215,7 @@ impl TranscribeAction {
 
 impl ShortcutAction for TranscribeAction {
     fn start(&self, app: &AppHandle, binding_id: &str, _shortcut_str: &str) {
-        self.start_recording(app, binding_id, None);
+        self.start_recording(app, binding_id, None, None);
     }
 
     fn start_with_operation(
@@ -5187,8 +5224,9 @@ impl ShortcutAction for TranscribeAction {
         binding_id: &str,
         _shortcut_str: &str,
         operation_id: OperationId,
+        live_gate: Option<crate::scribe_live::LiveGate>,
     ) {
-        self.start_recording(app, binding_id, Some(operation_id));
+        self.start_recording(app, binding_id, Some(operation_id), live_gate);
     }
 
     fn stop(
@@ -5220,7 +5258,9 @@ impl ShortcutAction for TranscribeAction {
         // When post-processing is enabled in settings, apply it automatically for normal
         // transcription. The dedicated post-process hotkey still forces it on.
         let post_process = self.post_process || settings.post_process_enabled;
-        let use_incremental = should_use_incremental_transcription(&settings, &tm);
+        let scribe = crate::scribe_live::take_for_stop(operation_id);
+        let use_incremental =
+            scribe.is_none() && should_use_incremental_transcription(&settings, &tm);
         let is_edit_mode = self.completion_mode == TranscriptionCompletionMode::EditMode;
         warn!(
             "[ask-hotkey] action_stop binding={} completion_mode={} is_edit_mode={}",
@@ -5269,6 +5309,8 @@ impl ShortcutAction for TranscribeAction {
         );
         let samples = if let Some(meeting_binding_id) = meeting_restore_binding.as_deref() {
             rm.finish_borrowed_recording_and_restore(binding_id, meeting_binding_id)
+        } else if scribe.is_some() {
+            rm.stop_recording_unpadded(binding_id)
         } else {
             rm.stop_recording(binding_id)
         };
@@ -5291,6 +5333,7 @@ impl ShortcutAction for TranscribeAction {
             binding_id,
             operation_id,
             samples,
+            scribe,
             recording_duration,
             observed_fn_hold,
             post_process,
@@ -5594,6 +5637,7 @@ impl ShortcutAction for FullSystemTranscribeAction {
                 &live_binding_id,
                 operation_id,
                 fallback_samples,
+                None,
                 None,
                 None,
                 post_process,

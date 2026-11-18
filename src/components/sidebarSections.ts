@@ -38,7 +38,9 @@ export const SECTIONS_CONFIG = {
     enabled: (settings) =>
       shouldShowModelControls(settings?.installAccess ?? null) ||
       Boolean(
-        settings?.settings?.byok_enabled || settings?.settings?.debug_mode,
+        settings?.settings?.byok_enabled ||
+          settings?.settings?.debug_mode ||
+          settings?.settings?.scribe_live_dictation,
       ),
   },
   apiKeys: {
@@ -48,7 +50,9 @@ export const SECTIONS_CONFIG = {
     enabled: (settings) =>
       shouldShowModelControls(settings?.installAccess ?? null) ||
       Boolean(
-        settings?.settings?.byok_enabled || settings?.settings?.debug_mode,
+        settings?.settings?.byok_enabled ||
+          settings?.settings?.debug_mode ||
+          settings?.settings?.scribe_live_dictation,
       ),
   },
   home: {

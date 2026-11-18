@@ -1,8 +1,10 @@
-use crate::managers::model::{is_cloud_model_id, ModelInfo, ModelManager};
+use crate::managers::model::{
+    is_cloud_model_id, ModelInfo, ModelManager, ELEVENLABS_MODEL_SCRIBE_V3_LIVE,
+};
 use crate::managers::transcription::TranscriptionManager;
 use crate::settings::{get_settings, write_settings};
 use std::sync::Arc;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Emitter, State};
 
 #[tauri::command]
 #[specta::specta]
@@ -82,15 +84,21 @@ pub async fn set_active_model(
         return Err(format!("Model not downloaded: {}", model_id));
     }
 
-    // Load the model in the transcription manager
-    transcription_manager
-        .load_model(&model_id)
-        .map_err(|e| e.to_string())?;
-
-    // Update settings
+    // Live dictation owns its connection. Keep the compatible engine for other jobs.
+    if model_id != ELEVENLABS_MODEL_SCRIBE_V3_LIVE {
+        transcription_manager
+            .load_model(&model_id)
+            .map_err(|e| e.to_string())?;
+    }
     let mut settings = get_settings(&app_handle);
-    settings.selected_model = model_id.clone();
+    settings.select_dictation_model(model_id);
+    let live = settings.scribe_live_dictation;
     write_settings(&app_handle, settings);
+    let _ = app_handle.emit(
+        "settings-changed",
+        serde_json::json!({ "setting": "scribe_live_dictation", "value": live }),
+    );
+    let _ = app_handle.emit("model-state-changed", ());
 
     Ok(())
 }
@@ -99,7 +107,7 @@ pub async fn set_active_model(
 #[specta::specta]
 pub async fn get_current_model(app_handle: AppHandle) -> Result<String, String> {
     let settings = get_settings(&app_handle);
-    Ok(settings.selected_model)
+    Ok(settings.dictation_model_id().to_string())
 }
 
 #[tauri::command]

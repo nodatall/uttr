@@ -304,7 +304,7 @@ pub struct ProxyTranscriptionMetadata<'a> {
     pub audio_seconds: Option<u32>,
 }
 
-fn normalize_language(language: &str) -> Option<&str> {
+pub(crate) fn normalize_language(language: &str) -> Option<&str> {
     match language {
         "" | "auto" => None,
         "zh-Hans" | "zh-Hant" => Some("zh"),

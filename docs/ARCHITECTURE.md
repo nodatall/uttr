@@ -11,6 +11,7 @@ This document records the repo boundaries that are easy to blur during desktop f
 - `src-tauri/src/clipboard.rs` owns normal dictation paste/copy behavior. Ask Selection should not use this paste path because it displays answers instead of replacing text.
 - `src-tauri/src/managers/full_system_audio.rs` owns full-system meeting source capture. It may return mixed audio for saved playback and source-specific buffers for meeting transcript labeling.
 - During full-system meeting capture, `src-tauri/src/transcription_coordinator.rs` may run normal dictation as a nested quick action. `src-tauri/src/managers/audio.rs` owns microphone borrow, sample boundary, and restore behavior; full-system session lifecycle stays owned by `src-tauri/src/managers/full_system_audio.rs`.
+- `src-tauri/src/scribe_live/` owns ElevenLabs streaming for standalone dictation. The shortcut listener confirms a continuous plain Fn push-to-talk hold before its operation can send audio. The recorder supplies audio by sample position, and the dictation action owns cancellation, final speech checks, history, and paste.
 
 ## Overlay And Floating Panels
 
@@ -23,6 +24,7 @@ This document records the repo boundaries that are easy to blur during desktop f
 - `src-tauri/src/settings.rs` remains the source for persisted shortcut ids and default binding metadata.
 - The `edit_mode` setting key and shortcut id are compatibility names. User-facing labels should say Ask Selection.
 - `src/components/settings/` owns the settings UI for enabling Ask Selection and editing its shortcut.
+- Scribe selection applies to standalone microphone dictation. The saved compatible model serves meeting, file, Ask Selection, and translation requests.
 
 ## Dependency Direction
 

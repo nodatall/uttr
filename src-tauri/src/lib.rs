@@ -16,6 +16,7 @@ mod input;
 mod llm_client;
 mod managers;
 mod overlay;
+mod scribe_live;
 mod settings;
 mod shortcut;
 mod signal_handle;
@@ -85,6 +86,30 @@ fn build_console_filter() -> env_filter::Filter {
     }
 
     builder.build()
+}
+
+fn should_log_record(metadata: &log::Metadata<'_>) -> bool {
+    // WebSocket wire logs include credentials and speech. Enigo logs typed text.
+    !matches!(
+        metadata.target().split("::").next(),
+        Some("tungstenite" | "tokio_tungstenite" | "enigo")
+    )
+}
+
+#[cfg(test)]
+#[test]
+fn dependency_logs_cannot_record_dictation_content() {
+    for level in [log::Level::Debug, log::Level::Trace] {
+        for (target, allowed) in [
+            ("tungstenite::handshake::client", false),
+            ("tokio_tungstenite", false),
+            ("enigo::macos::macos_impl", false),
+            ("handy_app_lib::actions", true),
+        ] {
+            let metadata = log::Metadata::builder().level(level).target(target).build();
+            assert_eq!(should_log_record(&metadata), allowed, "{level} {target}");
+        }
+    }
 }
 
 fn should_write_file_log(metadata: &log::Metadata<'_>) -> bool {
@@ -450,7 +475,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(
             LogBuilder::new()
-                .level(log::LevelFilter::Trace) // Set to most verbose level globally
+                .level(log::LevelFilter::Trace)
+                .filter(should_log_record)
                 .max_file_size(500_000)
                 .rotation_strategy(RotationStrategy::KeepOne)
                 .clear_targets()

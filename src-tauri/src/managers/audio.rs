@@ -659,6 +659,19 @@ impl AudioRecordingManager {
     }
 
     pub fn stop_recording(&self, binding_id: &str) -> Option<Vec<f32>> {
+        self.stop_recording_samples(binding_id, true)
+            .map(pad_short_recording_samples)
+    }
+
+    pub(crate) fn stop_recording_unpadded(&self, binding_id: &str) -> Option<Vec<f32>> {
+        self.stop_recording_samples(binding_id, false)
+    }
+
+    fn stop_recording_samples(
+        &self,
+        binding_id: &str,
+        keep_frame_padding: bool,
+    ) -> Option<Vec<f32>> {
         let _lifecycle = self.lifecycle.lock().unwrap();
         let mut state = self.state.lock().unwrap();
 
@@ -692,8 +705,13 @@ impl AudioRecordingManager {
                     } else {
                         let recorder_guard = self.recorder.lock().unwrap();
                         if let Some(rec) = recorder_guard.as_ref() {
-                            match rec.stop() {
-                                Ok(buf) => (buf, false),
+                            match rec.stop_with_sample_boundary() {
+                                Ok((mut samples, boundary)) => {
+                                    if !keep_frame_padding {
+                                        samples.truncate(boundary);
+                                    }
+                                    (samples, false)
+                                }
                                 Err(e) => {
                                     error!("stop() failed: {e}");
                                     (Vec::new(), true)
@@ -714,7 +732,7 @@ impl AudioRecordingManager {
                     self.close_on_demand_stream();
                 }
 
-                Some(pad_short_recording_samples(samples))
+                Some(samples)
             }
             _ => None,
         }
@@ -876,6 +894,28 @@ impl AudioRecordingManager {
                 binding_id: ref active
             } if active == binding_id
         )
+    }
+
+    pub(crate) fn read_dictation_samples(
+        &self,
+        binding_id: &str,
+        operation_id: u64,
+        offset: usize,
+        limit: usize,
+    ) -> Option<Result<Vec<f32>, ()>> {
+        let receiver = {
+            let state = self.state.try_lock().ok()?;
+            if !matches!(&*state, RecordingState::Recording { binding_id: active } if active == binding_id)
+            {
+                return None;
+            }
+            let recorder = self.recorder.try_lock().ok()?;
+            recorder
+                .as_ref()?
+                .request_dictation_samples(binding_id, operation_id, offset, limit)?
+        };
+        // Stop and promotion are free to run while this absolute read is in flight.
+        receiver.recv_timeout(Duration::from_millis(75)).ok()
     }
 
     pub fn drain_recording_delta(&self, binding_id: &str) -> Option<DrainResult> {

@@ -1242,6 +1242,46 @@ impl TranscriptionManager {
         filter_transcription_output(&corrected_result)
     }
 
+    pub(crate) fn finish_live_dictation(
+        &self,
+        raw: String,
+        samples: &[f32],
+    ) -> DictationTranscription {
+        let text = self.filter_with_audio_levels(
+            raw,
+            &get_settings(&self.app_handle),
+            audio_levels(samples),
+            DICTATION_NO_SPEECH_CUTOFF.is_some(),
+        );
+        if text.trim().is_empty() {
+            DictationTranscription::NoSpeech
+        } else {
+            DictationTranscription::Text(text)
+        }
+    }
+
+    fn filter_with_audio_levels(
+        &self,
+        raw_transcription: String,
+        settings: &AppSettings,
+        levels: Option<(f32, f32)>,
+        retire_phrase_filter: bool,
+    ) -> String {
+        let mut filtered_result = self.apply_transcription_filters(raw_transcription, settings);
+        let suppress = if retire_phrase_filter {
+            is_punctuation_only_transcription(&filtered_result)
+                && levels.is_some_and(is_near_silent_punctuation_candidate)
+        } else {
+            should_suppress_silence_hallucination(levels, &filtered_result)
+        };
+        if suppress {
+            info!("Suppressing likely silence hallucination for near-silent audio");
+            filtered_result.clear();
+        }
+
+        filtered_result
+    }
+
     fn transcribe_raw_local_with_settings(
         &self,
         audio: Vec<f32>,
@@ -3027,17 +3067,12 @@ impl TranscriptionManager {
             self.maybe_unload_immediately("speech-free transcription");
             return Ok(DictationTranscription::NoSpeech);
         };
-        let mut filtered_result = self.apply_transcription_filters(raw_transcription, &settings);
-        let suppress = if retire_phrase_filter {
-            is_punctuation_only_transcription(&filtered_result)
-                && levels.is_some_and(is_near_silent_punctuation_candidate)
-        } else {
-            should_suppress_silence_hallucination(levels, &filtered_result)
-        };
-        if suppress {
-            info!("Suppressing likely silence hallucination for near-silent audio");
-            filtered_result.clear();
-        }
+        let filtered_result = self.filter_with_audio_levels(
+            raw_transcription,
+            &settings,
+            levels,
+            retire_phrase_filter,
+        );
 
         let et = std::time::Instant::now();
         let translation_note = if settings.translate_to_english {

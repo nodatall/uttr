@@ -641,6 +641,8 @@ export const useSettingsStore = create<SettingsStore>()(
       }));
       if (providerId === "groq" || providerId === "openai") {
         await get().refreshInstallAccess();
+      } else if (providerId === "elevenlabs") {
+        await get().loadInstallAccessSnapshot();
       }
     },
 
