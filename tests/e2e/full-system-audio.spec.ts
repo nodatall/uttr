@@ -665,14 +665,12 @@ test.describe("full-system audio settings", () => {
     const scribe = page.getByRole("button", {
       name: /ElevenLabs Scribe v3 Live/,
     });
-    const groq = page
-      .getByRole("button")
-      .filter({
-        has: page.getByRole("heading", {
-          name: "Groq Whisper Large V3",
-          exact: true,
-        }),
-      });
+    const groq = page.getByRole("button").filter({
+      has: page.getByRole("heading", {
+        name: "Groq Whisper Large V3",
+        exact: true,
+      }),
+    });
     await models.click();
     await expect(scribe).toContainText("Cloud");
     await scribe.click();

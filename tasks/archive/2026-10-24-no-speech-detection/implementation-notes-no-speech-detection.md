@@ -117,17 +117,17 @@ Debug app bundling initially failed only at updater-archive signing after buildi
 
 The user confirmed the requested sequence worked except the last silent quick tap pasted “thank you.” Rejection was disabled throughout. The nine consecutive labeled operations are from the candidate launched at 16:46 Pacific; later unrelated dictation is excluded. Content-free diagnostics are saved locally in `agent-scratch/no-speech-dji-calibration.log`.
 
-| Operation | Intended control | Maximum raw score | Hold ms |
-| --- | --- | ---: | ---: |
-| 1 | Quiet yes, immediate release | 0.752774 | 932 |
-| 2 | Quiet no, immediate release | 0.091510 | 1066 |
-| 3 | Quiet bye, immediate release | 0.178816 | 1057 |
-| 4 | Quiet thank you, immediate release | 0.409982 | 1207 |
-| 5 | Whispered yes | 0.104455 | 1073 |
-| 6 | Silence then yes | 0.159173 | 2246 |
-| 7 | Silence then no | 0.386747 | 5218 |
-| 8 | Silent tap | 0.004686 | 131 |
-| 9 | Silent tap, hallucinated thank you | 0.011937 | 152 |
+| Operation | Intended control                   | Maximum raw score | Hold ms |
+| --------- | ---------------------------------- | ----------------: | ------: |
+| 1         | Quiet yes, immediate release       |          0.752774 |     932 |
+| 2         | Quiet no, immediate release        |          0.091510 |    1066 |
+| 3         | Quiet bye, immediate release       |          0.178816 |    1057 |
+| 4         | Quiet thank you, immediate release |          0.409982 |    1207 |
+| 5         | Whispered yes                      |          0.104455 |    1073 |
+| 6         | Silence then yes                   |          0.159173 |    2246 |
+| 7         | Silence then no                    |          0.386747 |    5218 |
+| 8         | Silent tap                         |          0.004686 |     131 |
+| 9         | Silent tap, hallucinated thank you |          0.011937 |     152 |
 
 All nine analyses completed. Whole-recording evidence was briefly unavailable at the first inspection for operations 4 and 5 and passed through; it was ready before their full-pass dispatch. Cold detector initialization took 30.812 ms on its separate worker. The whispered take's retained-request score was 0.077380, still above either silent tap. A prospective cutoff must preserve that lower retained-range value, not just the whole-session maximum. The user subsequently limited verification to DJI MIC MINI. Eight saved control recordings were preserved locally under `agent-scratch/no-speech-calibration/dji/` before history retention could remove them; the first silent take had no history audio because its output was suppressed.
 
@@ -179,12 +179,12 @@ The debug app bundle was explicitly rebuilt with updater artifacts disabled and 
 
 The native UI tool cannot synthesize Fn (`keyNotFound("fn")`), so it did not start a recording. The user attempted the requested six silent quick taps with background voices paused and reported pasted “amen” and “thank you.” Logs contain four actual capture operations at 20:15:36–40 Pacific. Other presses were ignored during processing or cancelled within the existing shortcut debounce; do not count them as analyzed recordings or change shortcut behavior in this task.
 
-| Operation | Highest chronological score | Final-window score | Whole maximum | Evidence |
-| --- | ---: | ---: | ---: | --- |
-| 1 | 0.010799 | 0.006146 | 0.010799 | Complete, cold init 34.158 ms |
-| 2 | 0.011775 | 0.006047 | 0.011775 | Complete |
-| 3 | 0.010296 | 0.005837 | 0.010296 | Complete |
-| 4 | 0.002407 | 0.002217 | 0.002407 | Complete |
+| Operation | Highest chronological score | Final-window score | Whole maximum | Evidence                      |
+| --------- | --------------------------: | -----------------: | ------------: | ----------------------------- |
+| 1         |                    0.010799 |           0.006146 |      0.010799 | Complete, cold init 34.158 ms |
+| 2         |                    0.011775 |           0.006047 |      0.011775 | Complete                      |
+| 3         |                    0.010296 |           0.005837 |      0.010296 | Complete                      |
+| 4         |                    0.002407 |           0.002217 |      0.002407 | Complete                      |
 
 All four whole scores were ready at dispatch and below the frozen 0.02 cutoff. Blocking was intentionally disabled, so all four issued ASR requests; the old phrase filter suppressed the first two, and operations 3/4 pasted 5/10-character results. This batch is consistent with the user's report and would have rejected under the previous enabled gate. It does not reproduce the earlier high-score false detection: every final-window score is lower than its chronological maximum. The earlier operation 17's cause remains unresolved. Do not claim this observation proves or disproves that earlier tail's responsibility.
 
@@ -208,17 +208,17 @@ The corrected repository bundle passed signature verification and was launched b
 
 The user explicitly confirmed the first three requested spoken controls all transcribed correctly, and reported every silent tap produced “Thank you.” The nine completed operations below form this calibration partition; none is a held-out acceptance result. Individual handling-noise labels among the six silent takes were not confirmed separately.
 
-| Operation | Confirmed control | Whole/request maximum | Final remainder score | Hold ms |
-| --- | --- | ---: | ---: | ---: |
-| 1 | Quiet no, immediate release | 0.917809 / 0.917809 | 0.042105 | 1147 |
-| 2 | Whispered yes, immediate release | 0.990624 / 0.990624 | 0.023283 | 2798 |
-| 3 | Quiet thank you | 0.905976 / 0.905976 | 0.634558 | 945 |
-| 4 | Silent tap | 0.036247 / Unknown | 0.004737 | 114 |
-| 5 | Silent tap | 0.018439 / Unknown | 0.004853 | 114 |
-| 6 | Silent tap | 0.038906 / Unknown | 0.005388 | 116 |
-| 7 | Silent tap | 0.042123 / Unknown | 0.004620 | 113 |
-| 8 | Silent tap | 0.026389 / Unknown | 0.004116 | 119 |
-| 9 | Silent tap | 0.051017 / Unknown | 0.004381 | 126 |
+| Operation | Confirmed control                | Whole/request maximum | Final remainder score | Hold ms |
+| --------- | -------------------------------- | --------------------: | --------------------: | ------: |
+| 1         | Quiet no, immediate release      |   0.917809 / 0.917809 |              0.042105 |    1147 |
+| 2         | Whispered yes, immediate release |   0.990624 / 0.990624 |              0.023283 |    2798 |
+| 3         | Quiet thank you                  |   0.905976 / 0.905976 |              0.634558 |     945 |
+| 4         | Silent tap                       |    0.036247 / Unknown |              0.004737 |     114 |
+| 5         | Silent tap                       |    0.018439 / Unknown |              0.004853 |     114 |
+| 6         | Silent tap                       |    0.038906 / Unknown |              0.005388 |     116 |
+| 7         | Silent tap                       |    0.042123 / Unknown |              0.004620 |     113 |
+| 8         | Silent tap                       |    0.026389 / Unknown |              0.004116 |     119 |
+| 9         | Silent tap                       |    0.051017 / Unknown |              0.004381 |     126 |
 
 All whole-session analyses completed and were ready at dispatch; request-only Unknown on the short padded recordings does not invalidate the already-complete whole gate. None of the final remainder scores exceeded its full-window maximum. Cold initialization was 24.225 ms on the worker. All nine saved WAVs are preserved locally in `agent-scratch/no-speech-calibration/dji-512-calibration/`, excluded from commits and fixture creation.
 
@@ -290,13 +290,13 @@ The current six recorder tests cover lifecycle, pre-roll draining, quiet-energy 
 
 ### Existing corrected-scorer regression evidence
 
-| Evidence | Confirmed cases | Observed maximum-score range | Fixed 0.35 comparison |
-| --- | ---: | ---: | --- |
-| Quiet no, whispered yes, quiet thank-you calibration | 3 | 0.90597594–0.99062383 | All pass |
-| User-confirmed quiet yes/no/bye/thank-you and whisper during failed acceptance | 5 | 0.88422024–0.96543610 | All pass |
-| Corrected calibration silent taps | 6 | 0.018438965–0.051016808 | All reject at completed whole-recording gate |
-| Latest user-confirmed wholly silent take | 1 | 0.02621609 | Rejects with complete whole/request evidence |
-| Two final requests surrounding the reported longer-silence failure | Exact individual labels unresolved | 0.10048628 and 0.13067126 | Both reject; do not infer a two-case rejection rate |
+| Evidence                                                                       |                    Confirmed cases | Observed maximum-score range | Fixed 0.35 comparison                               |
+| ------------------------------------------------------------------------------ | ---------------------------------: | ---------------------------: | --------------------------------------------------- |
+| Quiet no, whispered yes, quiet thank-you calibration                           |                                  3 |        0.90597594–0.99062383 | All pass                                            |
+| User-confirmed quiet yes/no/bye/thank-you and whisper during failed acceptance |                                  5 |        0.88422024–0.96543610 | All pass                                            |
+| Corrected calibration silent taps                                              |                                  6 |      0.018438965–0.051016808 | All reject at completed whole-recording gate        |
+| Latest user-confirmed wholly silent take                                       |                                  1 |                   0.02621609 | Rejects with complete whole/request evidence        |
+| Two final requests surrounding the reported longer-silence failure             | Exact individual labels unresolved |    0.10048628 and 0.13067126 | Both reject; do not infer a two-case rejection rate |
 
 These are direct comparisons with the already logged production evidence, not a new audio replay, fresh held-out result, or population guarantee. Old 480-sample scores are excluded. A 0.35 comparison does not reject Unknown evidence, fix pre-roll uncertainty, or prove large-upload behavior. User-reported spoken output establishes capture/provider preservation for the previous candidate; it is not proof of a newly rebuilt candidate's behavior.
 
@@ -308,15 +308,15 @@ Provider-internal quiet-audio retries and cloud-to-local rescue continue to use 
 
 The resampler repair clears the wrapper input after its finish processing attempt, including errors, and removes the obsolete duplicate-input accounting. An independent source trace covered partial finish followed by push, repeated finish, exact alignment, no-resampling, and processing failure. Six unchanged recorder tests passed. Rubato internal state and conservative transition uncertainty are preserved. No existing test exercises this precise finish/restart path, so the source-level correction is not a native acceptance result.
 
-| Required behavior | Existing evidence | Remaining gap |
-| --- | --- | --- |
-| Quiet/short words and whispers | Eight user-confirmed corrected-scorer spoken controls appeared; fixed 0.35 comparison preserves all eight | No enabled 0.35 native acceptance; repairs changed capture/dispatch afterward |
-| Silent taps and longer silence | Six confirmed short silent calibration takes and the latest confirmed longer silent take all score below 0.35; earlier enabled 0.08 longer-silence acceptance failed | No independent enabled 0.35 result or reliable aggregate rejection rate |
-| Handling noise | One older short clip explicitly confirmed as silence/handling noise; corrected silent-tap individual handling labels unresolved | No separately labeled corrected-scorer handling control |
-| Initial silence then speech | Baseline user check included three seconds then yes and was reported working | No confirmed corrected-scorer 3/5-second leading-silence control |
-| Rapid restart and cancellation | Source isolates operations and preserves uncertain-evidence fallback; consumed-input replay repaired | Native cancellation/restart isolation and the conditional pre-roll Unknown window remain unverified |
-| Incremental, large-upload, and borrowed dictation | Original-coordinate mappings and borrowed full-segment repair source-reviewed; existing tests compile/pass | No native proof for rejection boundaries, word overlap, or restored meeting ownership |
-| Paste/history/overlay cleanup and retired phrases | One complete rejection observed in the failed 0.08 batch; spoken thank-you and bye appeared | Full existing smoke stopped at TextEdit focus before transcription; quoted subtitle-credit preservation and full cleanup contract unverified |
+| Required behavior                                 | Existing evidence                                                                                                                                                    | Remaining gap                                                                                                                                |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| Quiet/short words and whispers                    | Eight user-confirmed corrected-scorer spoken controls appeared; fixed 0.35 comparison preserves all eight                                                            | No enabled 0.35 native acceptance; repairs changed capture/dispatch afterward                                                                |
+| Silent taps and longer silence                    | Six confirmed short silent calibration takes and the latest confirmed longer silent take all score below 0.35; earlier enabled 0.08 longer-silence acceptance failed | No independent enabled 0.35 result or reliable aggregate rejection rate                                                                      |
+| Handling noise                                    | One older short clip explicitly confirmed as silence/handling noise; corrected silent-tap individual handling labels unresolved                                      | No separately labeled corrected-scorer handling control                                                                                      |
+| Initial silence then speech                       | Baseline user check included three seconds then yes and was reported working                                                                                         | No confirmed corrected-scorer 3/5-second leading-silence control                                                                             |
+| Rapid restart and cancellation                    | Source isolates operations and preserves uncertain-evidence fallback; consumed-input replay repaired                                                                 | Native cancellation/restart isolation and the conditional pre-roll Unknown window remain unverified                                          |
+| Incremental, large-upload, and borrowed dictation | Original-coordinate mappings and borrowed full-segment repair source-reviewed; existing tests compile/pass                                                           | No native proof for rejection boundaries, word overlap, or restored meeting ownership                                                        |
+| Paste/history/overlay cleanup and retired phrases | One complete rejection observed in the failed 0.08 batch; spoken thank-you and bye appeared                                                                          | Full existing smoke stopped at TextEdit focus before transcription; quoted subtitle-credit preservation and full cleanup contract unverified |
 
 No further recordings are requested. The unchanged native smoke injects audio at stop and invalidates observer evidence, so even resolving its focus failure would not prove the missing acoustic acceptance. Existing saved WAVs cannot reproduce original raw observer samples. Keep ordinary-use rejection and phrase retirement disabled; no new tests or replay harnesses were added to bridge these gaps.
 
@@ -324,12 +324,12 @@ No further recordings are requested. The unchanged native smoke injects audio at
 
 Re-reading the corrected-scorer production logs gives these small-sample measurements. Median/p95 use nearest-rank p95; for these counts p95 is the maximum. Start/stop are handler measurements, and provider-stage timing excludes final paste and some scheduling.
 
-| Session | Takes | Start ms median/p95 | Stop ms median/p95 | Provider stage ms median/p95 |
-| --- | ---: | ---: | ---: | ---: |
-| Saved baseline | 10 | 35.5 / 47 | 37.5 / 103 | 308 / 333 |
-| Corrected 512 calibration, disabled | 9 | 40 / 49 | 37 / 2702 | 294 / 793 |
-| Corrected 0.08 failed acceptance | 9 | 35 / 82 | 44 / 76 | 295.5 / 721 (8 provider calls) |
-| Latest disabled silent take | 1 | 44 / 44 | 37 / 37 | 494 / 494 |
+| Session                             | Takes | Start ms median/p95 | Stop ms median/p95 |   Provider stage ms median/p95 |
+| ----------------------------------- | ----: | ------------------: | -----------------: | -----------------------------: |
+| Saved baseline                      |    10 |           35.5 / 47 |         37.5 / 103 |                      308 / 333 |
+| Corrected 512 calibration, disabled |     9 |             40 / 49 |          37 / 2702 |                      294 / 793 |
+| Corrected 0.08 failed acceptance    |     9 |             35 / 82 |            44 / 76 | 295.5 / 721 (8 provider calls) |
+| Latest disabled silent take         |     1 |             44 / 44 |            37 / 37 |                      494 / 494 |
 
 The three corrected sessions initialized the detector in 24.225, 30.550, and 31.585 ms on its worker; subsequent operations reported zero initialization time. Capture does not await that worker, and request checks use ready evidence without waiting. These are source properties and observed timings, not a causal overhead estimate. The unexplained 2702 ms stop outlier remains a limitation; later checkpoints measured capture-stop work at 1–10 ms and the outlier did not recur. Exact stop-to-paste median/p95, cold-tap fallback frequency, and population rejection rates remain unknown. These measurements predate the two latest repairs.
 
