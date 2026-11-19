@@ -67,7 +67,9 @@ impl Session {
 
     pub(crate) async fn finish(mut self, samples: Vec<f32>) -> anyhow::Result<String> {
         if !self.gate.lock().unwrap().admitted(self.recording_start) {
-            return Ok(String::new());
+            return Err(anyhow::anyhow!(
+                "Uttr couldn't verify the Fn hold for Scribe. Try the dictation again."
+            ));
         }
         if let Some(finish) = self.finish.take() {
             let _ = finish.send(samples);
@@ -120,7 +122,14 @@ pub(crate) fn start(
             let read: ReadAudio = Arc::new(move |offset| {
                 rm.read_dictation_samples(&binding, operation, offset, wire::MAX_PENDING)
             });
-            wire::run(&endpoint, &key, read, receive).await
+            let result = wire::run(&endpoint, &key, read, receive).await;
+            if let Ok(text) = &result {
+                log::debug!(
+                    "Scribe finished operation={operation} empty={}",
+                    text.is_empty()
+                );
+            }
+            result
         },
     );
 }
@@ -149,6 +158,7 @@ where
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
+        log::debug!("Scribe input admitted operation={operation}");
         connect(receive).await
     });
     let abort = worker.abort_handle();
