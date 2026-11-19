@@ -5,60 +5,95 @@ use std::time::{Duration, Instant};
 
 const MIN_HOLD: Duration = Duration::from_millis(200);
 
-type EventCounters = [u32; 3];
+const SESSION_STATE: i32 = 0;
+const HARDWARE_STATE: i32 = 1;
+const NATIVE_STATES: [i32; 2] = [SESSION_STATE, HARDWARE_STATE];
+
+type EventCounters = [u32; 2];
 
 #[derive(Clone)]
 pub(crate) struct FnPress {
-    edge: EventCounters,
     verification: Arc<Mutex<HoldVerification>>,
 }
 
 struct HoldVerification {
     recording_start: Instant,
-    stable_since: Option<(Instant, EventCounters)>,
     verified_at: Option<Instant>,
+    sources: [NativeHold; 2],
+}
+
+struct NativeHold {
+    edge: EventCounters,
+    stable_since: Option<(Instant, EventCounters)>,
     interrupted: bool,
+    last_observation: Observation,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum Observation {
+    WaitingForFn,
+    MouseButtonDown,
+    ConcurrentEvent,
+    Held(EventCounters),
 }
 
 impl FnPress {
     pub(crate) fn capture() -> Option<Self> {
         // The native event tap can deliver the edge before Quartz updates its
         // combined-session flags and event counter for that same press.
-        let edge = native_event_counters()?;
-        Some(Self::new(Instant::now(), edge))
+        let session = native_event_counters(SESSION_STATE)?;
+        let mut hardware = native_event_counters(HARDWARE_STATE)?;
+        // Both lanes use the original key-down count even if inputs arrive
+        // between the two flag-counter reads.
+        hardware[1] = session[1];
+        Some(Self::new(Instant::now(), [session, hardware]))
     }
 
-    fn new(began: Instant, edge: EventCounters) -> Self {
+    fn new(began: Instant, edges: [EventCounters; 2]) -> Self {
         Self {
-            edge,
             verification: Arc::new(Mutex::new(HoldVerification {
                 recording_start: began,
-                stable_since: None,
                 verified_at: None,
-                interrupted: false,
+                sources: edges.map(|edge| NativeHold {
+                    edge,
+                    stable_since: None,
+                    interrupted: false,
+                    last_observation: Observation::WaitingForFn,
+                }),
             })),
         }
     }
 
     pub(crate) fn on_empty_poll(&self) {
-        let started_at = Instant::now();
-        if !self.verification.lock().unwrap().needs_observation() {
+        let mut proof = self.verification.lock().unwrap();
+        if proof
+            .verified_at
+            .is_some_and(|t| t >= proof.recording_start)
+        {
             return;
         }
-        let counters = native_fn_counters();
-        let finished_at = Instant::now();
-        self.verification
-            .lock()
-            .unwrap()
-            .observe(self.edge, started_at, counters, finished_at);
+        // An unrelated flag in the combined session must not erase a verified
+        // uninterrupted hold in the hardware state table.
+        for (source, state) in proof.sources.iter_mut().zip(NATIVE_STATES) {
+            if source.interrupted {
+                continue;
+            }
+            let started_at = Instant::now();
+            let observation = native_fn_observation(state);
+            if source.observe(started_at, observation, Instant::now()) {
+                proof.verified_at = Some(started_at);
+                return;
+            }
+        }
     }
 
     #[cfg(test)]
-    fn verify(&self, now: Instant, counters: Option<EventCounters>) {
-        self.verification
-            .lock()
-            .unwrap()
-            .observe(self.edge, now, counters, now);
+    fn verify(&self, source: usize, now: Instant, counters: Option<EventCounters>) {
+        let mut proof = self.verification.lock().unwrap();
+        let observation = counters.map_or(Observation::WaitingForFn, Observation::Held);
+        if proof.sources[source].observe(now, observation, now) {
+            proof.verified_at = Some(now);
+        }
     }
 
     pub(crate) fn arm(&self, recording_start: Instant) {
@@ -72,87 +107,109 @@ impl FnPress {
             .verified_at
             .is_some_and(|time| time >= start)
     }
+
+    pub(crate) fn log_unverified(&self, operation: u64) {
+        let proof = self.verification.lock().unwrap();
+        let [session, hardware] = &proof.sources;
+        log::debug!(
+            "Scribe Fn proof missing operation={operation} session={:?} session_interrupted={} hardware={:?} hardware_interrupted={}",
+            session.last_observation,
+            session.interrupted,
+            hardware.last_observation,
+            hardware.interrupted,
+        );
+    }
 }
 
-impl HoldVerification {
-    fn needs_observation(&self) -> bool {
-        !self.interrupted
-            && !self
-                .verified_at
-                .is_some_and(|time| time >= self.recording_start)
-    }
-
+impl NativeHold {
     fn observe(
         &mut self,
-        edge: EventCounters,
         started_at: Instant,
-        counters: Option<EventCounters>,
+        observation: Observation,
         finished_at: Instant,
-    ) {
-        if !self.needs_observation() {
-            return;
+    ) -> bool {
+        if self.interrupted {
+            return false;
         }
-        let Some(counters) = counters else {
+        self.last_observation = observation;
+        let Observation::Held(counters) = observation else {
             self.stable_since = None;
-            return;
+            return false;
         };
         // A single flag update can be the original Fn-down settling. A release
         // and re-press add at least two updates and must never inherit this press.
-        if counters[0].wrapping_sub(edge[0]) > 1 || counters[1..] != edge[1..] {
+        if counters[0].wrapping_sub(self.edge[0]) > 1 || counters[1] != self.edge[1] {
             self.interrupted = true;
-            return;
+            return false;
         }
         match self.stable_since {
             Some((since, confirmed)) if counters == confirmed => {
-                if started_at.saturating_duration_since(since) >= MIN_HOLD {
-                    self.verified_at = Some(started_at);
-                }
+                started_at.saturating_duration_since(since) >= MIN_HOLD
             }
-            _ => self.stable_since = Some((finished_at, counters)),
+            _ => {
+                self.stable_since = Some((finished_at, counters));
+                false
+            }
         }
     }
 }
 
 #[cfg(target_os = "macos")]
-fn native_event_counters() -> Option<EventCounters> {
+fn native_event_counters(state: i32) -> Option<EventCounters> {
     #[link(name = "CoreGraphics", kind = "framework")]
     extern "C" {
         fn CGEventSourceCounterForEventType(state: i32, event: u32) -> u32;
     }
-    // FlagsChanged, KeyDown, KeyUp in the combined session.
-    Some([12, 10, 11].map(|event| unsafe { CGEventSourceCounterForEventType(0, event) }))
+    // Track this source's modifier edges, and any new key-down in the session.
+    // A release alone can belong to a key that was already down before Fn.
+    Some(unsafe {
+        [
+            CGEventSourceCounterForEventType(state, 12),
+            CGEventSourceCounterForEventType(SESSION_STATE, 10),
+        ]
+    })
 }
 
 #[cfg(not(target_os = "macos"))]
-fn native_event_counters() -> Option<EventCounters> {
+fn native_event_counters(_state: i32) -> Option<EventCounters> {
     None
 }
 
 #[cfg(target_os = "macos")]
-fn native_fn_counters() -> Option<EventCounters> {
+fn native_fn_observation(state: i32) -> Observation {
     #[link(name = "CoreGraphics", kind = "framework")]
     extern "C" {
         fn CGEventSourceFlagsState(state: i32) -> u64;
         fn CGEventSourceButtonState(state: i32, button: u32) -> bool;
     }
-    // Combined session state includes the modifier transitions used by handy-keys.
-    // Read counters on both sides of the state check so a concurrent edge is ambiguous.
-    let before = native_event_counters()?;
+    let Some(before) = native_event_counters(state) else {
+        return Observation::WaitingForFn;
+    };
     const FN: u64 = 1 << 23;
-    const MODIFIERS: u64 = FN | (0xf << 17); // Fn, Shift, Control, Option, Command
-    let only_fn = unsafe { CGEventSourceFlagsState(0) & MODIFIERS == FN };
+    const CHORD_MODIFIERS: u64 = 0xf << 17; // Shift, Control, Option, Command
+    let source_flags = unsafe { CGEventSourceFlagsState(state) };
+    let session_flags = unsafe { CGEventSourceFlagsState(SESSION_STATE) };
+    if before[0] == 0
+        || source_flags & FN == 0
+        || (source_flags | session_flags) & CHORD_MODIFIERS != 0
+    {
+        return Observation::WaitingForFn;
+    }
     // Sample the physical buttons recognized by handy-keys; some unmodified
     // mouse releases are never delivered to the raw listener.
-    let click_held = (0..5).any(|button| unsafe { CGEventSourceButtonState(0, button) });
-    if before[0] == 0 || !only_fn || click_held {
-        return None;
+    if (0..5).any(|button| unsafe { CGEventSourceButtonState(SESSION_STATE, button) }) {
+        return Observation::MouseButtonDown;
     }
-    (native_event_counters() == Some(before)).then_some(before)
+    // A concurrent modifier or key-down edge invalidates this sample.
+    if native_event_counters(state) != Some(before) {
+        return Observation::ConcurrentEvent;
+    }
+    Observation::Held(before)
 }
 
 #[cfg(not(target_os = "macos"))]
-fn native_fn_counters() -> Option<EventCounters> {
-    None
+fn native_fn_observation(_state: i32) -> Observation {
+    Observation::WaitingForFn
 }
 
 #[cfg(test)]
@@ -165,7 +222,7 @@ mod tests {
         use tokio::sync::oneshot;
 
         let start = Instant::now();
-        let press = FnPress::new(start, [40, 12, 12]);
+        let press = FnPress::new(start, [[40, 12], [80, 12]]);
         let operation = u64::MAX - 201;
         let (started, mut connected) = oneshot::channel();
         spawn_session(
@@ -179,18 +236,18 @@ mod tests {
             },
         );
 
-        let settled = [41, 12, 12];
-        press.verify(start + Duration::from_millis(5), None);
-        press.verify(start + Duration::from_millis(6), Some([40, 12, 12]));
-        press.verify(start + Duration::from_millis(10), Some(settled));
-        press.verify(start + Duration::from_millis(209), Some(settled));
+        let settled = [41, 12];
+        press.verify(0, start + Duration::from_millis(5), None);
+        press.verify(0, start + Duration::from_millis(6), Some([40, 12]));
+        press.verify(0, start + Duration::from_millis(10), Some(settled));
+        press.verify(0, start + Duration::from_millis(209), Some(settled));
         assert!(!press.verified_during(start));
         assert_eq!(
             connected.try_recv(),
             Err(oneshot::error::TryRecvError::Empty)
         );
 
-        press.verify(start + Duration::from_millis(210), Some(settled));
+        press.verify(0, start + Duration::from_millis(210), Some(settled));
         assert!(press.verified_during(start));
         tokio::time::timeout(Duration::from_secs(1), connected)
             .await
@@ -204,25 +261,43 @@ mod tests {
         cancel(operation);
     }
 
+    #[test]
+    fn hardware_hold_can_confirm_when_the_session_flags_are_noisy() {
+        let t = Instant::now();
+        let press = FnPress::new(t, [[40, 12], [80, 12]]);
+        press.verify(0, t, Some([42, 12]));
+        press.verify(0, t + MIN_HOLD, Some([42, 12]));
+        press.verify(1, t, Some([81, 12]));
+        press.verify(1, t + MIN_HOLD - Duration::from_millis(1), Some([81, 12]));
+        assert!(!press.verified_during(t));
+        press.verify(1, t + MIN_HOLD, Some([81, 12]));
+        assert!(press.verified_during(t));
+    }
+
     // test_disposition: permanent. A delivered release time cannot authorize an upload.
     #[test]
     fn fn_hold_requires_a_continuous_native_press_during_this_recording() {
         let t = Instant::now();
-        let counters = [40, 12, 12];
-        let press = FnPress::new(t, counters);
-        press.verify(t, Some(counters));
-        press.verify(t + Duration::from_millis(199), Some(counters));
-        press.verify(t + Duration::from_secs(2), None); // up, delivered after a stall
-        press.verify(t + Duration::from_secs(2), Some([42, 12, 12])); // release + re-press
+        let counters = [40, 12];
+        let press = FnPress::new(t, [counters; 2]);
+        for source in 0..2 {
+            press.verify(source, t, Some(counters));
+            press.verify(source, t + Duration::from_millis(199), Some(counters));
+            press.verify(source, t + Duration::from_secs(2), None);
+            // A delayed release and subsequent re-press aren't the same hold.
+            press.verify(source, t + Duration::from_secs(2), Some([42, 12]));
+        }
         assert!(!press.verified_during(t));
         // A keyboard edge can also interrupt an otherwise settled hold.
-        let chord = FnPress::new(t, counters);
-        chord.verify(t, Some(counters));
-        chord.verify(t + Duration::from_secs(1), Some([40, 13, 13]));
+        let chord = FnPress::new(t, [counters; 2]);
+        for source in 0..2 {
+            chord.verify(source, t, Some(counters));
+            chord.verify(source, t + Duration::from_secs(1), Some([40, 13]));
+        }
         assert!(!chord.verified_during(t));
-        let next = FnPress::new(t, [42, 13, 13]);
-        next.verify(t, Some([42, 13, 13]));
-        next.verify(t + MIN_HOLD, Some([42, 13, 13]));
+        let next = FnPress::new(t, [[42, 13]; 2]);
+        next.verify(0, t, Some([42, 13]));
+        next.verify(0, t + MIN_HOLD, Some([42, 13]));
         assert!(next.verified_during(t));
         assert!(!next.verified_during(t + Duration::from_secs(1)));
         assert!(!press.verified_during(t));
@@ -236,7 +311,7 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("ws://{}", listener.local_addr().unwrap());
         let start = Instant::now();
-        let press = FnPress::new(start, [22, 33, 33]);
+        let press = FnPress::new(start, [[22, 33]; 2]);
         let operation = u64::MAX - 200;
         spawn_session(
             operation,
@@ -246,11 +321,13 @@ mod tests {
                 wire::run(&endpoint, "test-local", Arc::new(|_| None), finish).await
             },
         );
-        press.verify(start + Duration::from_millis(80), Some([22, 33, 33]));
-        press.verify(start + Duration::from_millis(280), None);
-        press.verify(start + Duration::from_millis(500), Some([24, 33, 33]));
+        for source in 0..2 {
+            press.verify(source, start + Duration::from_millis(80), Some([22, 33]));
+            press.verify(source, start + Duration::from_millis(280), None);
+            press.verify(source, start + Duration::from_millis(500), Some([24, 33]));
+        }
         let stopped = take_for_stop(operation).unwrap();
-        press.verify(start + Duration::from_secs(1), Some([22, 33, 33]));
+        press.verify(0, start + Duration::from_secs(1), Some([22, 33]));
         assert!(stopped
             .finish(vec![0.02; 16000])
             .await

@@ -121,6 +121,10 @@ fn starts_isolated_fn_press(event: &KeyEvent, fn_down: bool, modifier_binding_bu
         && event.modifiers == handy_keys::Modifiers::FN
 }
 
+fn releases_other_key_during_plain_fn(event: &KeyEvent) -> bool {
+    !event.is_key_down && event.key.is_some() && event.modifiers == handy_keys::Modifiers::FN
+}
+
 impl PlainFnGesture {
     fn observe(
         &mut self,
@@ -330,6 +334,8 @@ impl HandyKeysState {
         let mut modifier_only_tracker = ModifierOnlyTracker::default();
         let mut fn_gesture = PlainFnGesture::default();
         let mut fn_press: Option<FnPress> = None;
+        #[cfg(target_os = "macos")]
+        let mut fn_preview = None;
         let mut active_push_to_talk: HashMap<String, ActivePushToTalkGuard> = HashMap::new();
         let mut pending_modifier_only_presses: HashMap<String, PendingModifierOnlyPress> =
             HashMap::new();
@@ -366,17 +372,36 @@ impl HandyKeysState {
                         }
                         break;
                     };
-                    // Any other raw edge removes this witness from the verification lane.
-                    fn_press = if starts_isolated_fn_press(
+                    let isolated_fn_down = starts_isolated_fn_press(
                         &event,
                         fn_gesture.down,
                         !pending_modifier_only_releases.is_empty()
                             || !pressed_modifier_only.is_empty(),
-                    ) {
-                        FnPress::capture()
-                    } else {
-                        None
-                    };
+                    );
+                    let unrelated_release = releases_other_key_during_plain_fn(&event);
+                    // Capture the native counters before scheduling any overlay work.
+                    if isolated_fn_down {
+                        fn_press = FnPress::capture();
+                    } else if !unrelated_release {
+                        if fn_press.take().is_some()
+                            && event.changed_modifier != Some(handy_keys::Modifiers::FN)
+                        {
+                            debug!(
+                                "Scribe Fn witness interrupted by another input edge (down={})",
+                                event.is_key_down
+                            );
+                        }
+                    }
+                    #[cfg(target_os = "macos")]
+                    if isolated_fn_down {
+                        fn_preview = modifier_only_bindings
+                            .get("transcribe")
+                            .filter(|(hotkey, _)| hotkey.modifiers == handy_keys::Modifiers::FN)
+                            .map(|_| crate::overlay::FnOverlayPreview::show(&app));
+                    } else if !unrelated_release {
+                        // A release or chord dismisses a box still owned by the raw press.
+                        drop(fn_preview.take());
+                    }
                     // The previous empty poll supplies an upper bound for the
                     // separate, existing short-tap check on release.
                     let observed_fn_hold = fn_gesture.observe(
@@ -485,6 +510,10 @@ impl HandyKeysState {
                         hotkey_string,
                         response,
                     } => {
+                        #[cfg(target_os = "macos")]
+                        if binding_id == "transcribe" {
+                            drop(fn_preview.take());
+                        }
                         let result = Self::do_register(
                             &manager,
                             &mut binding_to_hotkey,
@@ -502,6 +531,10 @@ impl HandyKeysState {
                         binding_id,
                         response,
                     } => {
+                        #[cfg(target_os = "macos")]
+                        if binding_id == "transcribe" {
+                            drop(fn_preview.take());
+                        }
                         let result = Self::do_unregister(
                             &manager,
                             &mut binding_to_hotkey,
@@ -1531,6 +1564,26 @@ mod tests {
             is_key_down,
             changed_modifier: Some(handy_keys::Modifiers::FN),
         }
+    }
+
+    #[test]
+    fn releasing_an_earlier_key_is_not_a_new_fn_chord() {
+        let release = KeyEvent {
+            modifiers: handy_keys::Modifiers::FN,
+            key: Some(handy_keys::Key::A),
+            changed_modifier: None,
+            is_key_down: false,
+        };
+        assert!(releases_other_key_during_plain_fn(&release));
+        assert!(!releases_other_key_during_plain_fn(&KeyEvent {
+            is_key_down: true,
+            ..release
+        }));
+        assert!(!releases_other_key_during_plain_fn(&KeyEvent {
+            modifiers: handy_keys::Modifiers::FN | handy_keys::Modifiers::OPT_LEFT,
+            ..release
+        }));
+        assert!(!releases_other_key_during_plain_fn(&raw_fn_edge(false)));
     }
 
     // test_disposition: permanent. Enigo emits a Unicode key-down without a key-up.

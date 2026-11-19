@@ -4,6 +4,8 @@ use log::debug;
 use serde::{Deserialize, Serialize};
 use specta::Type;
 use std::sync::atomic::{AtomicU64, Ordering};
+#[cfg(target_os = "macos")]
+use std::sync::Arc;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager};
 
@@ -609,6 +611,98 @@ fn overlay_session_epoch_is_current(epoch: u64) -> bool {
     OVERLAY_SESSION_EPOCH.load(Ordering::Relaxed) == epoch
 }
 
+#[cfg(target_os = "macos")]
+fn show_macos_overlay(window: &tauri::WebviewWindow, state: &str) {
+    apply_overlay_z_order_for_state(window, state);
+    let _ = window.show();
+    if let Ok(panel) = window.app_handle().get_webview_panel(OVERLAY_LABEL_BASE) {
+        panel.order_front_regardless();
+    }
+    let _ = window.emit("show-overlay", state);
+}
+
+#[cfg(target_os = "macos")]
+#[derive(PartialEq, Eq)]
+enum FnPreviewState {
+    Queued,
+    Shown,
+    Dismissed,
+}
+
+/// The raw Fn press owns the preview until the real overlay takes over.
+#[cfg(target_os = "macos")]
+pub(crate) struct FnOverlayPreview {
+    app: AppHandle,
+    epoch: u64,
+    state: Arc<Mutex<FnPreviewState>>,
+}
+
+#[cfg(target_os = "macos")]
+impl FnOverlayPreview {
+    pub(crate) fn show(app: &AppHandle) -> Self {
+        let start = std::time::Instant::now();
+        let epoch = current_overlay_session_epoch();
+        let state = Arc::new(Mutex::new(FnPreviewState::Queued));
+        let app_for_show = app.clone();
+        let state_for_show = Arc::clone(&state);
+        let _ = app.run_on_main_thread(move || {
+            if !overlay_session_epoch_is_current(epoch)
+                || settings::get_settings(&app_for_show).overlay_position == OverlayPosition::None
+            {
+                return;
+            }
+            let Some(window) = app_for_show.get_webview_window(OVERLAY_LABEL_BASE) else {
+                return;
+            };
+            // Preserve a recording, processing state, or alert that's already on screen.
+            if window.is_visible().unwrap_or(true) {
+                return;
+            }
+            {
+                let mut state = state_for_show.lock().unwrap();
+                if *state != FnPreviewState::Queued || !overlay_session_epoch_is_current(epoch) {
+                    return;
+                }
+                *state = FnPreviewState::Shown;
+            }
+            apply_overlay_dimensions(&app_for_show, OVERLAY_WIDTH, OVERLAY_HEIGHT);
+            show_macos_overlay(&window, "fn-preview");
+            log::info!(
+                "[latency] overlay shown state=fn-preview elapsed_ms={}",
+                start.elapsed().as_millis()
+            );
+        });
+        Self {
+            app: app.clone(),
+            epoch,
+            state,
+        }
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl Drop for FnOverlayPreview {
+    fn drop(&mut self) {
+        let previous_state =
+            std::mem::replace(&mut *self.state.lock().unwrap(), FnPreviewState::Dismissed);
+        if previous_state != FnPreviewState::Shown {
+            return;
+        }
+
+        let app = self.app.clone();
+        let epoch = self.epoch;
+        let _ = self.app.run_on_main_thread(move || {
+            // The recorder may have replaced the preview while dismissal was queued.
+            if overlay_session_epoch_is_current(epoch) {
+                if let Some(window) = app.get_webview_window(OVERLAY_LABEL_BASE) {
+                    let _ = window.emit("hide-overlay", ());
+                    let _ = window.hide();
+                }
+            }
+        });
+    }
+}
+
 fn show_overlay_state(app_handle: &AppHandle, state: &str, width: f64, height: f64) {
     let show_start = std::time::Instant::now();
     let show_epoch = current_overlay_session_epoch();
@@ -654,12 +748,7 @@ fn show_overlay_state(app_handle: &AppHandle, state: &str, width: f64, height: f
                 create_recording_overlay(&app);
                 apply_overlay_dimensions(&app, width, height);
                 if let Some(overlay_window) = app.get_webview_window(OVERLAY_LABEL_BASE) {
-                    apply_overlay_z_order_for_state(&overlay_window, &state_for_show);
-                    let _ = overlay_window.show();
-                    if let Ok(panel) = app.get_webview_panel(OVERLAY_LABEL_BASE) {
-                        panel.order_front_regardless();
-                    }
-                    let _ = overlay_window.emit("show-overlay", &state_for_show);
+                    show_macos_overlay(&overlay_window, &state_for_show);
                     log::info!(
                         "[latency] overlay shown state={} elapsed_ms={}",
                         state_for_show,

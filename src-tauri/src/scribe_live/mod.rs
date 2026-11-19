@@ -56,11 +56,16 @@ impl Drop for Session {
 }
 
 impl Session {
-    fn freeze_gate(&self) {
+    fn freeze_gate(&self, operation: u64) {
         let mut gate = self.gate.lock().unwrap();
         *gate = if gate.admitted(self.recording_start) {
             LiveGate::Open
         } else {
+            if let LiveGate::Fn(Some(press)) = &*gate {
+                press.log_unverified(operation);
+            } else {
+                log::debug!("Scribe Fn input witness missing operation={operation}");
+            }
             LiveGate::Fn(None)
         };
     }
@@ -184,7 +189,7 @@ pub(crate) fn take_for_stop(operation: u64) -> Option<Session> {
         .get_mut(&operation)?
         .recording
         .take()?;
-    session.freeze_gate();
+    session.freeze_gate(operation);
     Some(session)
 }
 
