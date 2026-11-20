@@ -839,9 +839,10 @@ async function clickUttrButtonByName(buttonName) {
 }
 
 async function clickUttrSidebarButtonByIndex(visibleIndex) {
-  return osascript([
+  const pid = await findUttrProcessId();
+  const point = await osascript([
     'tell application "System Events"',
-    `set targetProcesses to every process whose unix id is ${await findUttrProcessId()}`,
+    `set targetProcesses to every process whose unix id is ${pid}`,
     'if (count of targetProcesses) is 0 then error "Uttr process not found"',
     "set targetProcess to item 1 of targetProcesses",
     'set windowPosition to position of window "Uttr" of targetProcess',
@@ -849,11 +850,40 @@ async function clickUttrSidebarButtonByIndex(visibleIndex) {
     "set windowY to item 2 of windowPosition",
     "set clickX to windowX + 116",
     `set clickY to windowY + 103 + (${visibleIndex - 1} * 43)`,
-    "click at {clickX, clickY}",
+    'return (clickX as text) & "," & (clickY as text)',
     "end tell",
-    "delay 0.75",
-    'return "clicked-coordinate"',
   ]);
+  const [x, y] = point.trim().split(",");
+  const helperPath = path.join(scratchDir, "click-uttr-sidebar.swift");
+  await writeFile(
+    helperPath,
+    `import AppKit
+import CoreGraphics
+
+guard CommandLine.arguments.count == 4,
+      let pid = Int32(CommandLine.arguments[1]),
+      let x = Double(CommandLine.arguments[2]), x.isFinite,
+      let y = Double(CommandLine.arguments[3]), y.isFinite,
+      NSWorkspace.shared.frontmostApplication?.processIdentifier == pid else {
+    fatalError("The Uttr smoke window must be frontmost before clicking its sidebar")
+}
+
+let point = CGPoint(x: x, y: y)
+let source = CGEventSource(stateID: .hidSystemState)
+guard let down = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown,
+                         mouseCursorPosition: point, mouseButton: .left),
+      let up = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp,
+                       mouseCursorPosition: point, mouseButton: .left) else {
+    fatalError("Could not create sidebar click events")
+}
+down.post(tap: .cghidEventTap)
+up.post(tap: .cghidEventTap)
+`,
+    "utf8",
+  );
+  await execFileText("swift", [helperPath, String(pid), x, y]);
+  await sleep(750);
+  return "clicked-coordinate";
 }
 
 async function triggerSmokeShortcut() {
