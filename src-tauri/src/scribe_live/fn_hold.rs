@@ -345,7 +345,7 @@ mod tests {
             LiveGate::Fn(Some(press.clone())),
             start,
             move |finish| async move {
-                wire::run(&endpoint, "test-local", Arc::new(|_| None), finish).await
+                wire::run(&endpoint, "test-local", Arc::new(|_| None), finish, None).await
             },
         );
         for source in 0..2 {

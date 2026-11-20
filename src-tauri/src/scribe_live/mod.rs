@@ -6,7 +6,9 @@ pub(crate) use fn_hold::FnPress;
 pub(crate) use fn_timing::FnTimingMonitor;
 
 use crate::{
-    byok_secrets, groq_client, managers::audio::AudioRecordingManager, settings::AppSettings,
+    byok_secrets, groq_client,
+    managers::{audio::AudioRecordingManager, transcription::DictationRequestContext},
+    settings::AppSettings,
 };
 use once_cell::sync::Lazy;
 use std::{
@@ -122,6 +124,7 @@ pub(crate) fn start(
     operation: u64,
     gate: LiveGate,
     recording_start: Instant,
+    context: DictationRequestContext,
 ) {
     let app = app.clone();
     spawn_session(
@@ -139,7 +142,7 @@ pub(crate) fn start(
                 endpoint.push_str("&language_code=");
                 endpoint.push_str(lang);
             }
-            let key = timeout(
+            let key_lookup = timeout(
                 wire::CONNECT_WAIT,
                 tokio::task::spawn_blocking(move || {
                     byok_secrets::load_elevenlabs_api_key(&app, &settings)
@@ -147,13 +150,12 @@ pub(crate) fn start(
             )
             .await
             .map_err(|_| Failure::Timeout)?
-            .map_err(|_| Failure::MissingKey)?
-            .map_err(|_| Failure::MissingKey)?
-            .ok_or(Failure::MissingKey)?;
+            .map_err(|_| Failure::CredentialStore)?;
+            let key = require_api_key(key_lookup)?;
             let read: ReadAudio = Arc::new(move |offset| {
                 rm.read_dictation_samples(&binding, operation, offset, wire::MAX_PENDING)
             });
-            let result = wire::run(&endpoint, &key, read, receive).await;
+            let result = wire::run(&endpoint, &key, read, receive, Some(&context)).await;
             if let Ok(text) = &result {
                 log::debug!(
                     "Scribe finished operation={operation} empty={}",
@@ -163,6 +165,27 @@ pub(crate) fn start(
             result
         },
     );
+}
+
+fn require_api_key(lookup: Result<Option<String>, String>) -> wire::Result<String> {
+    lookup
+        .map_err(|_| Failure::CredentialStore)?
+        .ok_or(Failure::MissingKey)
+}
+
+#[cfg(test)]
+#[test]
+fn unreadable_key_store_is_distinct_from_a_missing_key() {
+    assert_eq!(require_api_key(Ok(None)), Err(Failure::MissingKey));
+    assert_eq!(
+        require_api_key(Ok(Some("test-local".into()))).unwrap(),
+        "test-local"
+    );
+    assert_eq!(
+        require_api_key(Err("private credential store detail".into())),
+        Err(Failure::CredentialStore)
+    );
+    assert!(!Failure::CredentialStore.message().contains("private"));
 }
 
 fn spawn_session<F, Fut>(operation: u64, gate: LiveGate, recording_start: Instant, connect: F)

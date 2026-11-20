@@ -104,6 +104,7 @@ struct DictationAttemptStats {
     // Client/engine invocations, not proof that an HTTP request was sent.
     attempted: u64,
     completed: u64,
+    scribe_recorded_samples_written: usize,
 }
 
 /// Explicit microphone-dictation identity, even when analysis is unavailable.
@@ -133,7 +134,7 @@ impl DictationRequestContext {
         self.binding_id == binding_id && self.operation_id == operation_id
     }
 
-    fn log_attempt(&self, boundary: &str, samples: usize, completed: bool) {
+    pub(crate) fn log_attempt(&self, boundary: &str, samples: usize, completed: bool) {
         let mut stats = self.attempts.lock().unwrap();
         if completed {
             stats.completed += 1;
@@ -146,11 +147,28 @@ impl DictationRequestContext {
         );
     }
 
+    pub(crate) fn record_scribe_write(&self, samples: usize) {
+        self.attempts
+            .lock()
+            .unwrap()
+            .scribe_recorded_samples_written += samples;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn scribe_attempts_for_test(&self) -> (u64, u64, usize) {
+        let stats = self.attempts.lock().unwrap();
+        (
+            stats.attempted,
+            stats.completed,
+            stats.scribe_recorded_samples_written,
+        )
+    }
+
     fn log_skip(&self, boundary: &str) {
         let stats = self.attempts.lock().unwrap();
         info!(
-            "Dictation speech gate suppressed operation={} boundary={} attempted_total={} completed_total={}",
-            self.operation_id, boundary, stats.attempted, stats.completed
+            "Dictation speech gate suppressed operation={} boundary={} attempted_total={} completed_total={} scribe_recorded_samples_written={}",
+            self.operation_id, boundary, stats.attempted, stats.completed, stats.scribe_recorded_samples_written
         );
     }
 

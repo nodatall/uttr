@@ -124,7 +124,8 @@ enum ProcessingFinishedAction {
 enum ControlEffect {
     DispatchMeetingStop(Operation),
     StopTrackedDictation(Operation),
-    CancelStandalone(Option<OperationId>),
+    CancelStandaloneRecording(OperationId),
+    CancelStandaloneProcessing(OperationId),
     CancelQuickRecording {
         meeting: Operation,
         quick: Operation,
@@ -883,12 +884,17 @@ fn handle_user_cancel(app: &AppHandle, stage: &mut Stage) {
 fn apply_user_cancel_command(stage: &mut Stage) -> Vec<ControlEffect> {
     match user_cancel_action(stage) {
         UserCancelAction::CancelStandalone => {
-            let operation_id = match stage {
-                Stage::Processing(operation) => Some(operation.id),
-                _ => None,
+            let effect = match stage {
+                Stage::Recording(operation) => {
+                    ControlEffect::CancelStandaloneRecording(operation.id)
+                }
+                Stage::Processing(operation) => {
+                    ControlEffect::CancelStandaloneProcessing(operation.id)
+                }
+                _ => unreachable!("standalone cancellation requires an active operation"),
             };
             *stage = Stage::Idle;
-            vec![ControlEffect::CancelStandalone(operation_id)]
+            vec![effect]
         }
         UserCancelAction::CancelQuickRecording => {
             let Stage::MeetingRecording {
@@ -1004,16 +1010,16 @@ fn execute_control_effects(app: &AppHandle, effects: Vec<ControlEffect>) {
                     None,
                 );
             }
-            ControlEffect::CancelStandalone(operation_id) => {
-                if let Some(operation_id) = operation_id {
-                    if crate::actions::cancel_dictation_operation(operation_id) {
-                        crate::actions::cancel_ask_selection_operation(app, operation_id);
-                        utils::cancel_non_meeting_operation(app);
-                    } else {
-                        debug!("Ignoring cancellation after dictation operation committed");
-                    }
-                } else {
+            ControlEffect::CancelStandaloneRecording(operation_id) => {
+                crate::scribe_live::cancel(operation_id);
+                utils::cancel_non_meeting_operation(app);
+            }
+            ControlEffect::CancelStandaloneProcessing(operation_id) => {
+                if crate::actions::cancel_dictation_operation(operation_id) {
+                    crate::actions::cancel_ask_selection_operation(app, operation_id);
                     utils::cancel_non_meeting_operation(app);
+                } else {
+                    debug!("Ignoring cancellation after dictation operation committed");
                 }
             }
             ControlEffect::CancelQuickRecording { meeting, quick } => {
@@ -1741,6 +1747,13 @@ mod tests {
 
     #[test]
     fn escape_targets_only_the_active_dictation_stage() {
+        let mut recording = Stage::Recording(operation("transcribe", 1));
+        assert_eq!(
+            apply_control_command(&mut recording, &Command::UserCancel),
+            vec![ControlEffect::CancelStandaloneRecording(1)]
+        );
+        assert_eq!(recording, Stage::Idle);
+
         assert_eq!(
             user_cancel_action(&Stage::Recording(operation("transcribe", 1))),
             UserCancelAction::CancelStandalone

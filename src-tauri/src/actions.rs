@@ -5158,7 +5158,12 @@ impl TranscribeAction {
         }
         tm.cancel_incremental_session();
         let using_scribe = live_gate.is_some();
-        if let (true, Some(operation), Some(gate)) = (recording_started, operation_id, live_gate) {
+        if let (true, Some(operation), Some(gate), Some(context)) = (
+            recording_started,
+            operation_id,
+            live_gate,
+            &dictation_context,
+        ) {
             // current_recording_started_at belongs to the just-started standalone operation.
             let recording_start = rm
                 .current_recording_started_at(&binding_id)
@@ -5171,6 +5176,7 @@ impl TranscribeAction {
                 operation,
                 gate,
                 recording_start,
+                context.clone(),
             );
         }
         start_transcription_session(app, &binding_id, recording_started);

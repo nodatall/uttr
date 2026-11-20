@@ -86,7 +86,7 @@ const ProviderKeyField = ({
         <div className="space-y-2.5">
           <label
             htmlFor={`api-key-${id}`}
-            className="text-xs font-medium uppercase tracking-[0.18em] text-text/34"
+            className="text-xs font-medium uppercase tracking-[0.18em] text-text/72"
           >
             {t(`settings.apiKeys.${id}.keyLabel`, {
               defaultValue: `${providerName} API key`,

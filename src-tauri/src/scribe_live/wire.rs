@@ -1,5 +1,6 @@
 //! Exactly one manual commit may be outstanding. The recorder retains the
 //! next segment locally while we await its predecessor's acknowledgement.
+use crate::managers::transcription::DictationRequestContext;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
@@ -8,7 +9,7 @@ use std::{sync::Arc, time::Duration};
 use tokio::{
     net::TcpStream,
     sync::oneshot,
-    time::{interval, timeout, MissedTickBehavior},
+    time::{interval, timeout, Instant, MissedTickBehavior},
 };
 use tokio_tungstenite::{
     connect_async_with_config,
@@ -27,6 +28,8 @@ pub(super) const MAX_PENDING: usize = RATE * 12;
 pub(super) const CONNECT_WAIT: Duration = Duration::from_secs(6);
 const ACK_WAIT: Duration = Duration::from_secs(6);
 const WRITE_WAIT: Duration = Duration::from_secs(3);
+// ElevenLabs closes an idle connection after 15 seconds without audio.
+const KEEPALIVE_AFTER: Duration = Duration::from_secs(5);
 
 type Socket = WebSocketStream<MaybeTlsStream<TcpStream>>;
 pub(super) type ReadAudio =
@@ -36,6 +39,7 @@ pub(super) type Result<T> = std::result::Result<T, Failure>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Failure {
     MissingKey,
+    CredentialStore,
     Authentication,
     Quota,
     Connection,
@@ -48,6 +52,7 @@ impl Failure {
     pub(super) fn message(self) -> &'static str {
         match self {
             Self::MissingKey => "Add your ElevenLabs key in Settings → API Keys to use Scribe v3 Live.",
+            Self::CredentialStore => "Uttr could not read the saved ElevenLabs key.",
             Self::Authentication => "ElevenLabs could not authenticate this key. Check Settings → API Keys.",
             Self::Quota => "ElevenLabs reached a usage or rate limit. Check your ElevenLabs account or choose another model.",
             Self::Connection => "Could not connect to ElevenLabs. Check your connection or choose another model.",
@@ -132,15 +137,22 @@ async fn expect_event(socket: &mut Socket, expected: &str, wait: Duration) -> Re
     .map_err(|_| Failure::Timeout)?
 }
 
-struct Stream {
+struct Stream<'a> {
     socket: Socket,
+    context: Option<&'a DictationRequestContext>,
     offset: usize,
+    segment_start: usize,
     uncommitted: usize,
+    last_send_at: Instant,
     text: String,
 }
 
-impl Stream {
-    async fn connect(endpoint: &str, key: &str) -> Result<Self> {
+impl<'a> Stream<'a> {
+    async fn connect(
+        endpoint: &str,
+        key: &str,
+        context: Option<&'a DictationRequestContext>,
+    ) -> Result<Self> {
         let mut request = endpoint
             .into_client_request()
             .map_err(|_| Failure::Connection)?;
@@ -174,8 +186,11 @@ impl Stream {
         }
         Ok(Self {
             socket,
+            context,
             offset: 0,
+            segment_start: 0,
             uncommitted: 0,
+            last_send_at: Instant::now(),
             text: String::new(),
         })
     }
@@ -195,17 +210,22 @@ impl Stream {
         .await
         .map_err(|_| Failure::Timeout)?
         .map_err(|_| Failure::Connection)?;
+        self.last_send_at = Instant::now();
         self.offset += samples.len();
-        self.uncommitted += samples.len();
+        self.uncommitted += samples.len() + padding;
+        if let Some(context) = self.context.filter(|_| !samples.is_empty()) {
+            context.record_scribe_write(samples.len());
+        }
         if commit {
             let event = expect_event(&mut self.socket, "committed_transcript", ACK_WAIT).await?;
             let segment = event.text.ok_or(Failure::Coverage)?;
-            if !segment.trim().is_empty() {
+            if self.offset > self.segment_start && !segment.trim().is_empty() {
                 if !self.text.is_empty() {
                     self.text.push(' ');
                 }
                 self.text.push_str(segment.trim());
             }
+            self.segment_start = self.offset;
             self.uncommitted = 0;
         }
         Ok(())
@@ -230,8 +250,19 @@ impl Stream {
             self.send(frame, padding, commit).await?;
             samples = rest;
         }
-        if final_chunk && self.uncommitted > 0 {
+        if final_chunk && self.offset > self.segment_start {
             self.send(&[], MIN_COMMIT.saturating_sub(self.uncommitted), true)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn keepalive(&mut self) -> Result<()> {
+        if self.last_send_at.elapsed() >= KEEPALIVE_AFTER {
+            // Count synthetic silence toward the provider segment, while the
+            // actual recording cursor continues to track only captured samples.
+            let padding = FRAME.min(SEGMENT - self.uncommitted);
+            self.send(&[], padding, self.uncommitted + padding == SEGMENT)
                 .await?;
         }
         Ok(())
@@ -243,8 +274,12 @@ pub(super) async fn run(
     key: &str,
     read: ReadAudio,
     mut finish: oneshot::Receiver<Vec<f32>>,
+    context: Option<&DictationRequestContext>,
 ) -> Result<String> {
-    let mut stream = Stream::connect(endpoint, key).await?;
+    if let Some(context) = context {
+        context.log_attempt("scribe_live", 0, false);
+    }
+    let mut stream = Stream::connect(endpoint, key, context).await?;
     let mut tick = interval(Duration::from_millis(80));
     tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
     loop {
@@ -258,6 +293,9 @@ pub(super) async fn run(
                 let recording = recording.map_err(|_| Failure::Connection)?;
                 let tail = recording.get(stream.offset..).ok_or(Failure::Coverage)?;
                 stream.audio(tail, true).await?;
+                if let Some(context) = context {
+                    context.log_attempt("scribe_live", stream.offset, true);
+                }
                 return Ok(stream.text);
             }
             _ = tick.tick() => {
@@ -267,6 +305,7 @@ pub(super) async fn run(
                 if let Some(chunk) = chunk {
                     stream.audio(&chunk.map_err(|_| Failure::Coverage)?, false).await?;
                 }
+                stream.keepalive().await?;
             }
         }
     }
@@ -276,7 +315,7 @@ pub(super) async fn run(
 mod tests {
     use super::*;
     use crate::scribe_live::fn_timing::{FnEdge, FnTiming};
-    use crate::scribe_live::{cancel, spawn_session, take_for_stop, FnPress, LiveGate};
+    use crate::scribe_live::{cancel, spawn_session, take_for_stop, FnPress, LiveGate, SESSIONS};
     use serde_json::Value;
     use std::{
         sync::atomic::{AtomicU64, Ordering},
@@ -323,7 +362,14 @@ mod tests {
     }
 
     async fn frame(socket: &mut WebSocketStream<TcpStream>) -> (Vec<u8>, bool) {
-        let msg = timeout(Duration::from_secs(3), socket.next())
+        frame_within(socket, Duration::from_secs(3)).await
+    }
+
+    async fn frame_within(
+        socket: &mut WebSocketStream<TcpStream>,
+        wait: Duration,
+    ) -> (Vec<u8>, bool) {
+        let msg = timeout(wait, socket.next())
             .await
             .unwrap()
             .unwrap()
@@ -339,6 +385,56 @@ mod tests {
         )
     }
 
+    #[tokio::test]
+    async fn quiet_pause_keeps_the_stream_open_and_preserves_the_next_audio() {
+        use std::sync::atomic::AtomicBool;
+
+        let (listener, endpoint) = listener().await;
+        let resumed = Arc::new(AtomicBool::new(false));
+        let recording = [vec![0.25; FRAME], vec![-0.25; FRAME]].concat();
+        let read: ReadAudio = {
+            let resumed = Arc::clone(&resumed);
+            let recording = recording.clone();
+            Arc::new(move |offset| {
+                let end = if resumed.load(Ordering::Relaxed) {
+                    recording.len()
+                } else {
+                    FRAME
+                };
+                Some(Ok(recording[offset..end].to_vec()))
+            })
+        };
+        let (finish, rx) = oneshot::channel();
+        let context = DictationRequestContext::new("transcribe", 1, None);
+        let stats = context.clone();
+        let client =
+            tokio::spawn(
+                async move { run(&endpoint, "test-local", read, rx, Some(&context)).await },
+            );
+        let mut socket = accept(listener).await;
+        let samples = |sample: i16| sample.to_le_bytes().repeat(FRAME);
+        assert_eq!(frame(&mut socket).await, (samples(8192), false));
+
+        // Give the client a smaller idle budget than the provider's 15 seconds.
+        assert_eq!(
+            frame_within(&mut socket, Duration::from_secs(9)).await,
+            (samples(0), false)
+        );
+        assert_eq!(stats.scribe_attempts_for_test(), (1, 0, FRAME));
+        resumed.store(true, Ordering::Relaxed);
+        assert_eq!(frame(&mut socket).await, (samples(-8192), false));
+
+        finish.send(recording).unwrap();
+        assert_eq!(frame(&mut socket).await, (vec![], true));
+        event(
+            &mut socket,
+            json!({"message_type":"committed_transcript","text":"both phrases"}),
+        )
+        .await;
+        assert_eq!(client.await.unwrap().unwrap(), "both phrases");
+        assert_eq!(stats.scribe_attempts_for_test(), (1, 1, FRAME * 2));
+    }
+
     async fn replay_fn_release(samples: Vec<f32>, held_ms: u64, expect_connection: bool) {
         let (listener, endpoint) = listener().await;
         let origin = Instant::now();
@@ -351,6 +447,9 @@ mod tests {
         let press = FnPress::missed_live_hold_for_test(timing.clone(), native_edge(10).at);
         static TEST_OPERATION: AtomicU64 = AtomicU64::new(u64::MAX - 500);
         let operation = TEST_OPERATION.fetch_sub(1, Ordering::Relaxed);
+        let context = DictationRequestContext::new("transcribe", operation, None);
+        let stats = context.clone();
+        let sample_count = samples.len();
         spawn_session(
             operation,
             LiveGate::Fn(Some(press.clone())),
@@ -361,6 +460,7 @@ mod tests {
                     "test-local",
                     Arc::new(|_| panic!("no live samples")),
                     finish,
+                    Some(&context),
                 )
                 .await
             },
@@ -400,11 +500,13 @@ mod tests {
             let received = server.await.unwrap();
             assert!(received.starts_with(&expected));
             assert!(received[expected.len()..].iter().all(|byte| *byte == 0));
+            assert_eq!(stats.scribe_attempts_for_test(), (1, 1, sample_count));
         } else {
             assert!(session.finish(samples).await.is_err());
             assert!(timeout(Duration::from_millis(30), listener.accept())
                 .await
                 .is_err());
+            assert_eq!(stats.scribe_attempts_for_test(), (0, 0, 0));
         }
         cancel(operation);
     }
@@ -470,7 +572,8 @@ mod tests {
             Some(Ok(during_hold[offset..end].to_vec()))
         });
         let (finish, rx) = oneshot::channel();
-        let client = tokio::spawn(async move { run(&endpoint, "test-local", read, rx).await });
+        let client =
+            tokio::spawn(async move { run(&endpoint, "test-local", read, rx, None).await });
         let server = tokio::spawn(async move {
             let mut socket = accept(listener).await;
             let mut wire_audio = Vec::new();
@@ -518,6 +621,52 @@ mod tests {
             .all(|&sample| sample == 0));
     }
 
+    #[tokio::test]
+    async fn cancel_active_recording_removes_waiting_worker_and_closes_open_socket() {
+        for (operation, admitted) in [(u64::MAX - 110, false), (u64::MAX - 111, true)] {
+            let (listener, endpoint) = listener().await;
+            let now = Instant::now();
+            let gate = if admitted {
+                LiveGate::Open
+            } else {
+                LiveGate::Fn(Some(FnPress::missed_live_hold_for_test(
+                    FnTiming::default(),
+                    now,
+                )))
+            };
+            spawn_session(operation, gate, now, move |finish| async move {
+                run(&endpoint, "test-local", Arc::new(|_| None), finish, None).await
+            });
+            let abort = SESSIONS.lock().unwrap()[&operation].abort.clone();
+            if admitted {
+                let mut socket = timeout(Duration::from_secs(2), accept(listener))
+                    .await
+                    .unwrap();
+                cancel(operation);
+                let end = timeout(Duration::from_secs(2), socket.next())
+                    .await
+                    .unwrap();
+                assert!(matches!(
+                    end,
+                    None | Some(Err(_)) | Some(Ok(Message::Close(_)))
+                ));
+            } else {
+                cancel(operation);
+                assert!(timeout(Duration::from_millis(30), listener.accept())
+                    .await
+                    .is_err());
+            }
+            assert!(!SESSIONS.lock().unwrap().contains_key(&operation));
+            timeout(Duration::from_secs(2), async {
+                while !abort.is_finished() {
+                    tokio::time::sleep(Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .unwrap();
+        }
+    }
+
     // test_disposition: permanent. A finalization handle must remain cancellable by operation ID.
     #[tokio::test]
     async fn cancel_pending_final_ack_closes_socket_without_touching_new_owner() {
@@ -541,7 +690,9 @@ mod tests {
             first,
             LiveGate::Open,
             Instant::now(),
-            move |finish| async move { run(&endpoint, "test-local", Arc::new(|_| None), finish).await },
+            move |finish| async move {
+                run(&endpoint, "test-local", Arc::new(|_| None), finish, None).await
+            },
         );
         let finalizing = tokio::spawn(take_for_stop(first).unwrap().finish(vec![0.1; 5000]));
         timeout(Duration::from_secs(3), pending)
@@ -598,7 +749,7 @@ mod tests {
             finish.send(vec![0.2; 300]).unwrap();
             let result = timeout(
                 ACK_WAIT + Duration::from_secs(3),
-                run(&endpoint, "test-local", Arc::new(|_| None), rx),
+                run(&endpoint, "test-local", Arc::new(|_| None), rx, None),
             )
             .await
             .unwrap();
