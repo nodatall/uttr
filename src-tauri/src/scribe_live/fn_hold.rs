@@ -3,6 +3,8 @@
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use super::fn_timing::FnTiming;
+
 const MIN_HOLD: Duration = Duration::from_millis(200);
 
 const SESSION_STATE: i32 = 0;
@@ -14,11 +16,13 @@ type EventCounters = [u32; 2];
 #[derive(Clone)]
 pub(crate) struct FnPress {
     verification: Arc<Mutex<HoldVerification>>,
+    release_timing: Option<(FnTiming, Instant)>,
 }
 
 struct HoldVerification {
     recording_start: Instant,
     verified_at: Option<Instant>,
+    shortcut_up: Option<Instant>,
     sources: [NativeHold; 2],
 }
 
@@ -38,7 +42,7 @@ enum Observation {
 }
 
 impl FnPress {
-    pub(crate) fn capture() -> Option<Self> {
+    pub(crate) fn capture(timing: Option<FnTiming>, shortcut_down: Instant) -> Option<Self> {
         // The native event tap can deliver the edge before Quartz updates its
         // combined-session flags and event counter for that same press.
         let session = native_event_counters(SESSION_STATE)?;
@@ -46,7 +50,9 @@ impl FnPress {
         // Both lanes use the original key-down count even if inputs arrive
         // between the two flag-counter reads.
         hardware[1] = session[1];
-        Some(Self::new(Instant::now(), [session, hardware]))
+        let mut press = Self::new(shortcut_down, [session, hardware]);
+        press.release_timing = timing.map(|timing| (timing, shortcut_down));
+        Some(press)
     }
 
     fn new(began: Instant, edges: [EventCounters; 2]) -> Self {
@@ -54,6 +60,7 @@ impl FnPress {
             verification: Arc::new(Mutex::new(HoldVerification {
                 recording_start: began,
                 verified_at: None,
+                shortcut_up: None,
                 sources: edges.map(|edge| NativeHold {
                     edge,
                     stable_since: None,
@@ -61,6 +68,7 @@ impl FnPress {
                     last_observation: Observation::WaitingForFn,
                 }),
             })),
+            release_timing: None,
         }
     }
 
@@ -96,6 +104,15 @@ impl FnPress {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn missed_live_hold_for_test(timing: FnTiming, shortcut_down: Instant) -> Self {
+        let mut press = Self::new(shortcut_down, [[40, 12], [80, 12]]);
+        press.release_timing = Some((timing, shortcut_down));
+        press.verify(0, shortcut_down, Some([42, 12]));
+        assert!(!press.verified_during(shortcut_down));
+        press
+    }
+
     pub(crate) fn arm(&self, recording_start: Instant) {
         self.verification.lock().unwrap().recording_start = recording_start;
     }
@@ -106,6 +123,16 @@ impl FnPress {
             .unwrap()
             .verified_at
             .is_some_and(|time| time >= start)
+    }
+
+    pub(crate) fn note_shortcut_release(&self, shortcut_up: Instant) {
+        self.verification.lock().unwrap().shortcut_up = Some(shortcut_up);
+    }
+
+    pub(super) fn verified_at_release(&self, recording_start: Instant) -> Option<Duration> {
+        let (timing, shortcut_down) = self.release_timing.as_ref()?;
+        let shortcut_up = self.verification.lock().unwrap().shortcut_up?;
+        timing.confirmed_release(*shortcut_down, shortcut_up, recording_start, MIN_HOLD)
     }
 
     pub(crate) fn log_unverified(&self, operation: u64) {

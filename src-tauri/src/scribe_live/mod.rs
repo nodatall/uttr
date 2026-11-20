@@ -1,6 +1,9 @@
 mod fn_hold;
+mod fn_timing;
 mod wire;
 pub(crate) use fn_hold::FnPress;
+#[cfg(target_os = "macos")]
+pub(crate) use fn_timing::FnTimingMonitor;
 
 use crate::{
     byok_secrets, groq_client, managers::audio::AudioRecordingManager, settings::AppSettings,
@@ -23,6 +26,7 @@ use wire::{Failure, ReadAudio};
 pub(crate) enum LiveGate {
     Open,
     Fn(Option<FnPress>),
+    VerifiedAtRelease(Duration),
 }
 
 impl LiveGate {
@@ -30,6 +34,7 @@ impl LiveGate {
         match self {
             Self::Open => true,
             Self::Fn(press) => press.as_ref().is_some_and(|p| p.verified_during(start)),
+            Self::VerifiedAtRelease(_) => false,
         }
     }
 }
@@ -58,26 +63,47 @@ impl Drop for Session {
 impl Session {
     fn freeze_gate(&self, operation: u64) {
         let mut gate = self.gate.lock().unwrap();
-        *gate = if gate.admitted(self.recording_start) {
-            LiveGate::Open
-        } else {
-            if let LiveGate::Fn(Some(press)) = &*gate {
-                press.log_unverified(operation);
-            } else {
-                log::debug!("Scribe Fn input witness missing operation={operation}");
+        if gate.admitted(self.recording_start) {
+            *gate = LiveGate::Open;
+            return;
+        }
+        if let LiveGate::Fn(Some(press)) = &*gate {
+            if let Some(hold) = press.verified_at_release(self.recording_start) {
+                log::debug!("Scribe Fn hold verified on release operation={operation}");
+                *gate = LiveGate::VerifiedAtRelease(hold);
+                return;
             }
-            LiveGate::Fn(None)
-        };
+            press.log_unverified(operation);
+        } else {
+            log::debug!("Scribe Fn input witness missing operation={operation}");
+        }
+        *gate = LiveGate::Fn(None);
+    }
+
+    pub(crate) fn verified_release_hold(&self) -> Option<Duration> {
+        match &*self.gate.lock().unwrap() {
+            LiveGate::VerifiedAtRelease(hold) => Some(*hold),
+            _ => None,
+        }
     }
 
     pub(crate) async fn finish(mut self, samples: Vec<f32>) -> anyhow::Result<String> {
-        if !self.gate.lock().unwrap().admitted(self.recording_start) {
-            return Err(anyhow::anyhow!(
-                "Uttr couldn't verify the Fn hold for Scribe. Try the dictation again."
-            ));
-        }
-        if let Some(finish) = self.finish.take() {
-            let _ = finish.send(samples);
+        {
+            let mut gate = self.gate.lock().unwrap();
+            let recovered = matches!(&*gate, LiveGate::VerifiedAtRelease(_));
+            if !recovered && !gate.admitted(self.recording_start) {
+                return Err(anyhow::anyhow!(
+                    "Uttr couldn't verify the Fn hold for Scribe. Try the dictation again."
+                ));
+            }
+            if let Some(finish) = self.finish.take() {
+                let _ = finish.send(samples);
+            }
+            // Queue the finalized recording before the worker can connect.
+            // A recovered session has no live samples or earlier commits.
+            if recovered {
+                *gate = LiveGate::Open;
+            }
         }
         let result = timeout(Duration::from_secs(20), &mut self.worker)
             .await

@@ -5259,6 +5259,10 @@ impl ShortcutAction for TranscribeAction {
         // transcription. The dedicated post-process hotkey still forces it on.
         let post_process = self.post_process || settings.post_process_enabled;
         let scribe = crate::scribe_live::take_for_stop(operation_id);
+        let observed_fn_hold = scribe
+            .as_ref()
+            .and_then(|session| session.verified_release_hold())
+            .or(observed_fn_hold);
         let use_incremental =
             scribe.is_none() && should_use_incremental_transcription(&settings, &tm);
         let is_edit_mode = self.completion_mode == TranscriptionCompletionMode::EditMode;

@@ -212,7 +212,9 @@ impl Stream {
     }
 
     async fn audio(&mut self, mut samples: &[f32], final_chunk: bool) -> Result<()> {
-        if samples.len() > MAX_PENDING {
+        // A recovered hold can have its entire recording waiting at release.
+        // Bound the backlog during live capture and drain the final audio in frames.
+        if !final_chunk && samples.len() > MAX_PENDING {
             return Err(Failure::Coverage);
         }
         while !samples.is_empty() {
@@ -273,9 +275,13 @@ pub(super) async fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::scribe_live::{cancel, spawn_session, take_for_stop, LiveGate};
+    use crate::scribe_live::fn_timing::{FnEdge, FnTiming};
+    use crate::scribe_live::{cancel, spawn_session, take_for_stop, FnPress, LiveGate};
     use serde_json::Value;
-    use std::time::Instant;
+    use std::{
+        sync::atomic::{AtomicU64, Ordering},
+        time::Instant,
+    };
     use tokio::{net::TcpListener, sync::oneshot};
     use tokio_tungstenite::{
         accept_hdr_async,
@@ -331,6 +337,117 @@ mod tests {
                 .unwrap(),
             value["commit"].as_bool().unwrap(),
         )
+    }
+
+    async fn replay_fn_release(samples: Vec<f32>, held_ms: u64, expect_connection: bool) {
+        let (listener, endpoint) = listener().await;
+        let origin = Instant::now();
+        let native_edge = |ms| FnEdge {
+            at: origin + Duration::from_millis(ms),
+            timestamp_ns: 1_000_000_000 + ms * 1_000_000,
+        };
+        let timing = FnTiming::default();
+        timing.down(native_edge(0), true);
+        let press = FnPress::missed_live_hold_for_test(timing.clone(), native_edge(10).at);
+        static TEST_OPERATION: AtomicU64 = AtomicU64::new(u64::MAX - 500);
+        let operation = TEST_OPERATION.fetch_sub(1, Ordering::Relaxed);
+        spawn_session(
+            operation,
+            LiveGate::Fn(Some(press.clone())),
+            native_edge(80).at,
+            move |finish| async move {
+                run(
+                    &endpoint,
+                    "test-local",
+                    Arc::new(|_| panic!("no live samples")),
+                    finish,
+                )
+                .await
+            },
+        );
+        timing.up(native_edge(held_ms), true);
+        press.note_shortcut_release(native_edge(held_ms + 10).at);
+        let session = take_for_stop(operation).unwrap();
+        assert_eq!(
+            session.verified_release_hold(),
+            expect_connection.then_some(Duration::from_millis(held_ms)),
+        );
+        assert!(timeout(Duration::from_millis(30), listener.accept())
+            .await
+            .is_err());
+
+        if expect_connection {
+            let expected: Vec<_> = samples
+                .iter()
+                .flat_map(|sample| {
+                    ((sample.clamp(-1.0, 1.0) * i16::MAX as f32).round() as i16).to_le_bytes()
+                })
+                .collect();
+            let server = tokio::spawn(async move {
+                let mut socket = accept(listener).await;
+                let mut received = Vec::new();
+                loop {
+                    let (bytes, committed) = frame(&mut socket).await;
+                    received.extend(bytes);
+                    if committed {
+                        event(&mut socket, json!({"message_type":"committed_transcript","text":"fixture transcript"})).await;
+                        break;
+                    }
+                }
+                received
+            });
+            assert_eq!(session.finish(samples).await.unwrap(), "fixture transcript");
+            let received = server.await.unwrap();
+            assert!(received.starts_with(&expected));
+            assert!(received[expected.len()..].iter().all(|byte| *byte == 0));
+        } else {
+            assert!(session.finish(samples).await.is_err());
+            assert!(timeout(Duration::from_millis(30), listener.accept())
+                .await
+                .is_err());
+        }
+        cancel(operation);
+    }
+
+    #[tokio::test]
+    async fn timestamped_release_recovers_a_missed_live_hold_and_rejects_taps() {
+        // The reported recording's raw hold estimate was 5,104 ms while the
+        // live counter check was interrupted. Exercise that same stop path.
+        replay_fn_release(vec![0.08; RATE * 5], 5104, true).await;
+        replay_fn_release(vec![0.001; RATE * 5 / 4], 143, false).await;
+    }
+
+    #[tokio::test]
+    async fn recovered_recording_can_exceed_the_live_backlog_limit() {
+        // The recovered 11.439-second hold retained 192,104 samples with pre-roll.
+        let samples = (0..192_104)
+            .map(|index| ((index % 16_000) as f32 - 8_000.0) / i16::MAX as f32)
+            .collect();
+        replay_fn_release(samples, 11_439, true).await;
+    }
+
+    #[tokio::test]
+    #[ignore = "requires explicitly named private local WAV fixtures"]
+    async fn replay_private_fn_fixtures_over_loopback() {
+        let root = std::path::PathBuf::from(std::env::var_os("UTTR_LOCAL_FN_FIXTURES").unwrap());
+        for (name, held_ms, should_connect) in [
+            ("fn-tap-ring-111ms.wav", 111, false),
+            ("fn-tap-ring-143ms.wav", 143, false),
+            ("quiet-thank-you.wav", 1000, true),
+            ("quiet-thank-you-pink-noise.wav", 1000, true),
+            ("whispered-yes.wav", 1000, true),
+        ] {
+            let mut wav = hound::WavReader::open(root.join(name)).unwrap();
+            assert_eq!(
+                (wav.spec().sample_rate, wav.spec().channels),
+                (RATE as u32, 1)
+            );
+            let samples: Vec<_> = wav
+                .samples::<i16>()
+                .map(|sample| f32::from(sample.unwrap()) / 32768.0)
+                .collect();
+            replay_fn_release(samples, held_ms, should_connect).await;
+        }
     }
 
     // test_disposition: permanent. A release racing an earlier commit used to

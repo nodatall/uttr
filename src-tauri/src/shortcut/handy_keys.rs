@@ -325,6 +325,14 @@ impl HandyKeysState {
                 None
             }
         };
+        #[cfg(target_os = "macos")]
+        let timing_monitor = raw_listener
+            .as_ref()
+            .map(|_| crate::scribe_live::FnTimingMonitor::start());
+        #[cfg(target_os = "macos")]
+        let fn_timing = timing_monitor.as_ref().map(|monitor| monitor.timing());
+        #[cfg(not(target_os = "macos"))]
+        let fn_timing = None;
 
         // Maps binding IDs to HotkeyIds and hotkey strings
         let mut binding_to_hotkey: HashMap<String, HotkeyId> = HashMap::new();
@@ -372,6 +380,7 @@ impl HandyKeysState {
                         }
                         break;
                     };
+                    let received_at = Instant::now();
                     let isolated_fn_down = starts_isolated_fn_press(
                         &event,
                         fn_gesture.down,
@@ -381,15 +390,20 @@ impl HandyKeysState {
                     let unrelated_release = releases_other_key_during_plain_fn(&event);
                     // Capture the native counters before scheduling any overlay work.
                     if isolated_fn_down {
-                        fn_press = FnPress::capture();
+                        fn_press = FnPress::capture(fn_timing.clone(), received_at);
                     } else if !unrelated_release {
-                        if fn_press.take().is_some()
-                            && event.changed_modifier != Some(handy_keys::Modifiers::FN)
-                        {
-                            debug!(
-                                "Scribe Fn witness interrupted by another input edge (down={})",
-                                event.is_key_down
-                            );
+                        if let Some(press) = fn_press.take() {
+                            if event.changed_modifier == Some(handy_keys::Modifiers::FN)
+                                && !event.is_key_down
+                                && event.modifiers.is_empty()
+                            {
+                                press.note_shortcut_release(received_at);
+                            } else {
+                                debug!(
+                                    "Scribe Fn witness interrupted by another input edge (down={})",
+                                    event.is_key_down
+                                );
+                            }
                         }
                     }
                     #[cfg(target_os = "macos")]
@@ -408,7 +422,7 @@ impl HandyKeysState {
                         &event,
                         pending_modifier_only_releases.get_mut("transcribe"),
                         last_empty_raw_poll,
-                        Instant::now(),
+                        received_at,
                     );
                     let effective_changed_modifier =
                         modifier_only_tracker.changed_modifier_for_event(&event);
