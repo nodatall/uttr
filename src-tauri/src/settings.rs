@@ -420,6 +420,8 @@ pub struct AppSettings {
     #[serde(default = "default_model")]
     pub selected_model: String,
     #[serde(default)]
+    pub scribe_live_dictation: bool,
+    #[serde(default)]
     pub onboarding_completed: bool,
     #[serde(default = "default_install_id")]
     pub install_id: String,
@@ -1129,6 +1131,7 @@ pub fn get_default_settings() -> AppSettings {
         autostart_enabled: default_autostart_enabled(),
         update_checks_enabled: default_update_checks_enabled(),
         selected_model: "".to_string(),
+        scribe_live_dictation: false,
         onboarding_completed: false,
         install_id: default_install_id(),
         device_fingerprint_hash: default_device_fingerprint_hash(),
@@ -1182,6 +1185,24 @@ pub fn get_default_settings() -> AppSettings {
 }
 
 impl AppSettings {
+    pub fn dictation_model_id(&self) -> &str {
+        if self.scribe_live_dictation {
+            crate::managers::model::ELEVENLABS_MODEL_SCRIBE_V3_LIVE
+        } else {
+            &self.selected_model
+        }
+    }
+
+    pub fn select_dictation_model(&mut self, model_id: String) {
+        self.scribe_live_dictation =
+            model_id == crate::managers::model::ELEVENLABS_MODEL_SCRIBE_V3_LIVE;
+        if !self.scribe_live_dictation {
+            self.selected_model = model_id;
+        } else if self.selected_model.is_empty() {
+            ensure_default_selected_transcription_model(self);
+        }
+    }
+
     pub fn active_post_process_provider(&self) -> Option<&PostProcessProvider> {
         self.post_process_providers
             .iter()
@@ -1598,6 +1619,42 @@ mod tests {
         let parsed: AppSettings = serde_json::from_value(value).unwrap();
 
         assert!(parsed.custom_vocabulary_terms.is_empty());
+    }
+
+    #[test]
+    fn live_dictation_preserves_the_compatible_model_across_reload_and_switches() {
+        use crate::managers::model::{
+            DEFAULT_LOCAL_MODEL_ID, ELEVENLABS_MODEL_SCRIBE_V3_LIVE, GROQ_MODEL_WHISPER_LARGE_V3,
+            OPENAI_MODEL_GPT_4O_TRANSCRIBE,
+        };
+        for (previous, fallback) in [
+            ("", GROQ_MODEL_WHISPER_LARGE_V3),
+            (DEFAULT_LOCAL_MODEL_ID, DEFAULT_LOCAL_MODEL_ID),
+            (
+                OPENAI_MODEL_GPT_4O_TRANSCRIBE,
+                OPENAI_MODEL_GPT_4O_TRANSCRIBE,
+            ),
+        ] {
+            let mut legacy = serde_json::to_value(get_default_settings()).unwrap();
+            legacy
+                .as_object_mut()
+                .unwrap()
+                .remove("scribe_live_dictation");
+            legacy["selected_model"] = previous.into();
+            let mut settings: AppSettings = serde_json::from_value(legacy).unwrap();
+            assert_eq!(settings.dictation_model_id(), previous);
+            settings.select_dictation_model(ELEVENLABS_MODEL_SCRIBE_V3_LIVE.to_string());
+            let mut reloaded: AppSettings =
+                serde_json::from_value(serde_json::to_value(&settings).unwrap()).unwrap();
+            assert_eq!(
+                reloaded.dictation_model_id(),
+                ELEVENLABS_MODEL_SCRIBE_V3_LIVE
+            );
+            assert_eq!(reloaded.selected_model, fallback);
+            reloaded.select_dictation_model(DEFAULT_LOCAL_MODEL_ID.to_string());
+            assert_eq!(reloaded.dictation_model_id(), DEFAULT_LOCAL_MODEL_ID);
+            assert!(!reloaded.scribe_live_dictation);
+        }
     }
 
     #[test]

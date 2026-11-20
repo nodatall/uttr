@@ -17,6 +17,7 @@ use std::sync::Mutex;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_stronghold::stronghold::Stronghold;
 
+pub const ELEVENLABS_SECRET_KEY: &str = "elevenlabs";
 const GROQ_SECRET_KEY: &str = "groq";
 const OPENAI_SECRET_KEY: &str = "openai";
 const LEGACY_STRONGHOLD_VAULT_FILE_NAME: &str = "byok.vault";
@@ -304,6 +305,13 @@ pub fn load_openai_api_key(
     load_provider_api_key(app, settings, OPENAI_SECRET_KEY)
 }
 
+pub fn load_elevenlabs_api_key(
+    app: &AppHandle,
+    settings: &AppSettings,
+) -> Result<Option<String>, String> {
+    load_provider_api_key(app, settings, ELEVENLABS_SECRET_KEY)
+}
+
 pub fn save_provider_api_key(
     app: &AppHandle,
     provider_id: &str,
@@ -344,6 +352,9 @@ pub fn has_any_transcription_api_key(app: &AppHandle, settings: &AppSettings) ->
         .map(|value| value.is_some())
         .unwrap_or(false)
         || load_openai_api_key(app, settings)
+            .map(|value| value.is_some())
+            .unwrap_or(false)
+        || load_elevenlabs_api_key(app, settings)
             .map(|value| value.is_some())
             .unwrap_or(false)
 }
@@ -495,6 +506,28 @@ mod tests {
                 "provider={provider_id}, configured={configured:?}"
             );
         }
+    }
+
+    #[test]
+    fn elevenlabs_key_round_trips_only_through_the_encrypted_store() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = "test-elevenlabs-credential";
+        save_provider_api_key_in_dir(dir.path(), ELEVENLABS_SECRET_KEY, key).unwrap();
+        assert!(!fs::read_to_string(secret_store_path_in_dir(dir.path()))
+            .unwrap()
+            .contains(key));
+        assert_eq!(
+            stored_provider_api_key_in_dir(dir.path(), ELEVENLABS_SECRET_KEY)
+                .unwrap()
+                .as_deref(),
+            Some(key)
+        );
+        clear_provider_api_key_in_dir(dir.path(), ELEVENLABS_SECRET_KEY).unwrap();
+        assert!(
+            stored_provider_api_key_in_dir(dir.path(), ELEVENLABS_SECRET_KEY)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

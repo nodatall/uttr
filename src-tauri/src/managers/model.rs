@@ -28,10 +28,13 @@ pub enum EngineType {
 pub const GROQ_MODEL_WHISPER_LARGE_V3_TURBO: &str = "groq-whisper-large-v3-turbo";
 pub const GROQ_MODEL_WHISPER_LARGE_V3: &str = "groq-whisper-large-v3";
 pub const OPENAI_MODEL_GPT_4O_TRANSCRIBE: &str = "openai-gpt-4o-transcribe";
+pub const ELEVENLABS_MODEL_SCRIBE_V3_LIVE: &str = "elevenlabs-scribe-v3-live";
 pub const DEFAULT_LOCAL_MODEL_ID: &str = "parakeet-tdt-0.6b-v3";
 
 pub fn is_cloud_model_id(model_id: &str) -> bool {
-    model_id.starts_with("groq-") || model_id.starts_with("openai-")
+    model_id.starts_with("groq-")
+        || model_id.starts_with("openai-")
+        || model_id == ELEVENLABS_MODEL_SCRIBE_V3_LIVE
 }
 
 fn is_user_visible_model_id(model_id: &str) -> bool {
@@ -304,6 +307,29 @@ impl ModelManager {
                 supports_translation: false,
                 is_recommended: false,
                 supported_languages: whisper_languages.clone(),
+                is_custom: false,
+            },
+        );
+
+        available_models.insert(
+            ELEVENLABS_MODEL_SCRIBE_V3_LIVE.to_string(),
+            ModelInfo {
+                id: ELEVENLABS_MODEL_SCRIBE_V3_LIVE.to_string(),
+                name: "ElevenLabs Scribe v3 Live".to_string(),
+                description: "Realtime microphone dictation.".to_string(),
+                filename: ELEVENLABS_MODEL_SCRIBE_V3_LIVE.to_string(),
+                url: None,
+                size_mb: 0,
+                is_downloaded: true,
+                is_downloading: false,
+                partial_size: 0,
+                is_directory: false,
+                engine_type: EngineType::Whisper,
+                accuracy_score: 0.0,
+                speed_score: 0.98,
+                supports_translation: false,
+                is_recommended: false,
+                supported_languages: Vec::new(),
                 is_custom: false,
             },
         );

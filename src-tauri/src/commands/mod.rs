@@ -114,14 +114,17 @@ pub fn get_app_settings(app: AppHandle) -> Result<AppSettings, String> {
 #[specta::specta]
 pub fn get_post_process_api_key_statuses(app: AppHandle) -> Result<HashMap<String, bool>, String> {
     let settings = get_settings(&app);
-    Ok(settings
+    let provider_ids = settings
         .post_process_providers
         .iter()
-        .map(|provider| {
-            let has_key = crate::byok_secrets::load_provider_api_key(&app, &settings, &provider.id)
+        .map(|provider| provider.id.as_str())
+        .chain(std::iter::once(crate::byok_secrets::ELEVENLABS_SECRET_KEY));
+    Ok(provider_ids
+        .map(|provider_id| {
+            let has_key = crate::byok_secrets::load_provider_api_key(&app, &settings, provider_id)
                 .map(|value| value.is_some())
                 .unwrap_or(false);
-            (provider.id.clone(), has_key)
+            (provider_id.to_string(), has_key)
         })
         .collect())
 }

@@ -1,6 +1,8 @@
 use crate::access::{bootstrap_install_state, refresh_entitlement_state, request_claim_token};
+use crate::audio_toolkit::short_tap::sounds_like_short_tap;
 use crate::audio_toolkit::{
-    apply_custom_words, filter_transcription_output, trim_proxy_upload_audio,
+    apply_custom_words, filter_transcription_output, trim_proxy_upload_audio, DictationAnalysis,
+    SpeechEvidence,
 };
 use crate::diagnostics::{report_byok_transcription_failure, report_missing_byok_api_key};
 use crate::groq_client::{self, DirectTranscriptionProvider};
@@ -15,6 +17,7 @@ use crate::settings::{
 use anyhow::Result;
 use log::{debug, error, info, warn};
 use serde::Serialize;
+use std::ops::Range;
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard};
@@ -79,6 +82,292 @@ const QUIET_AUDIO_MIN_GAIN: f32 = 1.15;
 const MIN_INCREMENTAL_FINALIZATION_CHUNKS: u64 = 2;
 const MIN_ONE_CHUNK_INCREMENTAL_FINALIZATION_SAMPLES: usize = SAMPLE_RATE * 15;
 
+// Calibrated and activated together with dictation phrase-filter retirement.
+// None collects content-free evidence without rejecting audio during calibration.
+// Synchronized eight-phase evidence, including model-only terminal context.
+const DICTATION_NO_SPEECH_CUTOFF: Option<f32> = Some(0.16);
+
+pub(crate) fn is_accidental_fn_tap(observed_fn_hold: Option<Duration>) -> bool {
+    // This is a gesture policy. Pre-roll, upload padding, speech scores, and
+    // recognition output cannot turn a tap into an intentional dictation hold.
+    observed_fn_hold.is_some_and(|hold| hold < Duration::from_millis(200))
+}
+
+pub(crate) enum DictationTranscription {
+    Text(String),
+    /// Terminal speech-gate suppression, possibly after earlier ASR invocations.
+    NoSpeech,
+}
+
+#[derive(Default)]
+struct DictationAttemptStats {
+    // Client/engine invocations, not proof that an HTTP request was sent.
+    attempted: u64,
+    completed: u64,
+    scribe_recorded_samples_written: usize,
+}
+
+/// Explicit microphone-dictation identity, even when analysis is unavailable.
+#[derive(Clone)]
+pub(crate) struct DictationRequestContext {
+    binding_id: String,
+    operation_id: u64,
+    analysis: Option<DictationAnalysis>,
+    attempts: Arc<Mutex<DictationAttemptStats>>,
+}
+
+impl DictationRequestContext {
+    pub(crate) fn new(
+        binding_id: &str,
+        operation_id: u64,
+        analysis: Option<DictationAnalysis>,
+    ) -> Self {
+        Self {
+            binding_id: binding_id.to_string(),
+            operation_id,
+            analysis: analysis.filter(|analysis| analysis.matches(binding_id, operation_id)),
+            attempts: Arc::new(Mutex::new(DictationAttemptStats::default())),
+        }
+    }
+
+    fn matches(&self, binding_id: &str, operation_id: u64) -> bool {
+        self.binding_id == binding_id && self.operation_id == operation_id
+    }
+
+    pub(crate) fn log_attempt(&self, boundary: &str, samples: usize, completed: bool) {
+        let mut stats = self.attempts.lock().unwrap();
+        if completed {
+            stats.completed += 1;
+        } else {
+            stats.attempted += 1;
+        }
+        info!(
+            "Dictation ASR invocation operation={} boundary={} samples={} completed={} attempted_total={} completed_total={}",
+            self.operation_id, boundary, samples, completed, stats.attempted, stats.completed
+        );
+    }
+
+    pub(crate) fn record_scribe_write(&self, samples: usize) {
+        self.attempts
+            .lock()
+            .unwrap()
+            .scribe_recorded_samples_written += samples;
+    }
+
+    #[cfg(test)]
+    pub(crate) fn scribe_attempts_for_test(&self) -> (u64, u64, usize) {
+        let stats = self.attempts.lock().unwrap();
+        (
+            stats.attempted,
+            stats.completed,
+            stats.scribe_recorded_samples_written,
+        )
+    }
+
+    fn log_skip(&self, boundary: &str) {
+        let stats = self.attempts.lock().unwrap();
+        info!(
+            "Dictation speech gate suppressed operation={} boundary={} attempted_total={} completed_total={} scribe_recorded_samples_written={}",
+            self.operation_id, boundary, stats.attempted, stats.completed, stats.scribe_recorded_samples_written
+        );
+    }
+
+    fn reject_evidence(
+        &self,
+        evidence: SpeechEvidence,
+        ranges: &[Range<usize>],
+        boundary: &str,
+    ) -> bool {
+        let max_score = match evidence {
+            SpeechEvidence::Complete { max_score } if max_score.is_finite() => Some(max_score),
+            _ => None,
+        };
+        let reject = DICTATION_NO_SPEECH_CUTOFF
+            .zip(max_score)
+            .is_some_and(|(cutoff, score)| score < cutoff);
+        info!(
+            "Dictation speech gate operation={} boundary={} start={} end={} max_score={:?} enabled={} rejected={}",
+            self.operation_id, boundary,
+            ranges.first().map_or(0, |range| range.start),
+            ranges.last().map_or(0, |range| range.end), max_score,
+            DICTATION_NO_SPEECH_CUTOFF.is_some(), reject
+        );
+        if reject {
+            self.log_skip(boundary);
+        }
+        reject
+    }
+
+    pub(crate) fn reject_whole_recording(&self, sample_count: usize, boundary: &str) -> bool {
+        let evidence = self
+            .analysis
+            .as_ref()
+            .map(DictationAnalysis::whole_recording_evidence)
+            .unwrap_or(SpeechEvidence::Unknown);
+        self.reject_evidence(evidence, &[0..sample_count], boundary)
+    }
+
+    pub(crate) async fn output_evidence(&self) -> SpeechEvidence {
+        match &self.analysis {
+            Some(analysis) => analysis.output_evidence().await,
+            None => SpeechEvidence::Unknown,
+        }
+    }
+
+    pub(crate) fn reject_output(
+        &self,
+        evidence: SpeechEvidence,
+        samples: &[f32],
+        observed_fn_hold: Option<Duration>,
+        transcription: &str,
+    ) -> bool {
+        if is_accidental_fn_tap(observed_fn_hold) {
+            self.log_skip("short_fn_hold_output");
+            return true;
+        }
+        if self.reject_evidence(evidence, &[0..samples.len()], "output") {
+            return true;
+        }
+        if should_suppress_fn_tap_output(observed_fn_hold, samples, transcription) {
+            self.log_skip("short_fn_tap_output");
+            return true;
+        }
+        false
+    }
+
+    /// Gate this request while preserving all context in admitted audio.
+    fn request_audio(
+        &self,
+        audio: Vec<f32>,
+        range: Range<usize>,
+    ) -> Option<(Vec<f32>, DictationRequestAudio)> {
+        DictationRequestAudio {
+            context: self.clone(),
+            source_ranges: Some(vec![range]),
+            unique_source_ranges: None,
+        }
+        .filter(audio)
+    }
+
+    fn invalidate(&self) {
+        if let Some(analysis) = &self.analysis {
+            analysis.invalidate();
+        }
+    }
+}
+
+/// Original retained coordinates for the requested PCM.
+#[derive(Clone)]
+struct DictationRequestAudio {
+    context: DictationRequestContext,
+    source_ranges: Option<Vec<Range<usize>>>,
+    // Original coordinates of this upload chunk's non-overlap portion.
+    unique_source_ranges: Option<Vec<Range<usize>>>,
+}
+
+impl DictationRequestAudio {
+    fn valid_ranges(&self, sample_count: usize) -> Option<&[Range<usize>]> {
+        let ranges = self.source_ranges.as_deref()?;
+        let mut total = 0usize;
+        let mut previous_end = 0usize;
+        for range in ranges {
+            if range.start < previous_end || range.start > range.end {
+                return None;
+            }
+            total = total.checked_add(range.end.checked_sub(range.start)?)?;
+            previous_end = range.end;
+        }
+        (total == sample_count).then_some(ranges)
+    }
+
+    fn slice(&self, range: Range<usize>, sample_count: usize) -> Self {
+        let source_ranges = self.valid_ranges(sample_count).and_then(|sources| {
+            if range.start > range.end || range.end > sample_count {
+                return None;
+            }
+            let mut mapped = Vec::new();
+            let mut offset = 0usize;
+            for source in sources {
+                let end = offset.checked_add(source.len())?;
+                let start_in_slice = range.start.max(offset);
+                let end_in_slice = range.end.min(end);
+                if start_in_slice < end_in_slice {
+                    mapped.push(
+                        source.start.checked_add(start_in_slice - offset)?
+                            ..source.start.checked_add(end_in_slice - offset)?,
+                    );
+                }
+                offset = end;
+            }
+            Some(mapped)
+        });
+        Self {
+            context: self.context.clone(),
+            source_ranges,
+            unique_source_ranges: self.unique_source_ranges.clone(),
+        }
+    }
+
+    fn surviving_unique_samples(&self, sample_count: usize) -> Option<usize> {
+        let ranges = self.valid_ranges(sample_count)?;
+        let other_ranges = self.unique_source_ranges.as_deref()?;
+        let mut total = 0usize;
+        for range in ranges {
+            let first = other_ranges.partition_point(|other| other.end <= range.start);
+            for other in &other_ranges[first..] {
+                if other.start >= range.end {
+                    break;
+                }
+                let start = range.start.max(other.start);
+                let end = range.end.min(other.end);
+                total = total.checked_add(end.saturating_sub(start))?;
+            }
+        }
+        Some(total)
+    }
+
+    fn filter(mut self, audio: Vec<f32>) -> Option<(Vec<f32>, Self)> {
+        // Whole-session evidence is independent of request slicing and ASR padding.
+        // Unfinished sessions remain Unknown; completed silence cannot bypass the
+        // gate through unavailable or mismatched request coordinates.
+        if self.context.reject_whole_recording(audio.len(), "request") {
+            return None;
+        }
+        if self.valid_ranges(audio.len()).is_none() {
+            warn!(
+                "Dictation speech gate operation={} reason=range_mismatch samples={}",
+                self.context.operation_id,
+                audio.len()
+            );
+            self.source_ranges = None;
+        }
+        Some((audio, self))
+    }
+}
+
+fn log_dictation_attempt(
+    dictation: &Option<DictationRequestAudio>,
+    boundary: &str,
+    samples: usize,
+    completed: bool,
+) {
+    if let Some(request) = dictation {
+        request.context.log_attempt(boundary, samples, completed);
+    }
+}
+
+fn filter_dictation_request(
+    audio: Vec<f32>,
+    dictation: Option<DictationRequestAudio>,
+) -> Option<(Vec<f32>, Option<DictationRequestAudio>)> {
+    match dictation {
+        Some(request) => request
+            .filter(audio)
+            .map(|(audio, request)| (audio, Some(request))),
+        None => Some((audio, None)),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum CloudTranscriptionRoute {
     DirectGroq,
@@ -99,10 +388,11 @@ struct IncrementalRuntime {
     next_chunk_start: AtomicUsize,
     chunk_count: AtomicU64,
     assembled_raw: Mutex<String>,
+    dictation: Option<DictationRequestContext>,
 }
 
 impl IncrementalRuntime {
-    fn new() -> Self {
+    fn with_dictation(dictation: Option<DictationRequestContext>) -> Self {
         Self {
             stop_requested: AtomicBool::new(false),
             failed: AtomicBool::new(false),
@@ -110,6 +400,7 @@ impl IncrementalRuntime {
             next_chunk_start: AtomicUsize::new(0),
             chunk_count: AtomicU64::new(0),
             assembled_raw: Mutex::new(String::new()),
+            dictation,
         }
     }
 }
@@ -128,6 +419,18 @@ fn normalized_silence_hallucination_text(text: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn should_suppress_fn_tap_output(
+    observed_fn_hold: Option<Duration>,
+    samples: &[f32],
+    transcription: &str,
+) -> bool {
+    // The hold only selects candidates. Genuine speech can start in the pre-roll.
+    const MAX_TAP_HOLD: Duration = Duration::from_secs(1);
+    observed_fn_hold.is_some_and(|hold| hold <= MAX_TAP_HOLD)
+        && normalized_silence_hallucination_text(transcription) == "thank you"
+        && sounds_like_short_tap(samples)
 }
 
 fn audio_levels(audio: &[f32]) -> Option<(f32, f32)> {
@@ -487,6 +790,7 @@ pub struct TranscriptionManager {
     is_loading: Arc<Mutex<bool>>,
     loading_condvar: Arc<Condvar>,
     incremental_session: Arc<Mutex<Option<IncrementalSession>>>,
+    dictation_context: Arc<Mutex<Option<DictationRequestContext>>>,
     cancel_requested: Arc<AtomicBool>,
     cancel_generation: Arc<AtomicU64>,
 }
@@ -509,6 +813,7 @@ impl TranscriptionManager {
             is_loading: Arc::new(Mutex::new(false)),
             loading_condvar: Arc::new(Condvar::new()),
             incremental_session: Arc::new(Mutex::new(None)),
+            dictation_context: Arc::new(Mutex::new(None)),
             cancel_requested: Arc::new(AtomicBool::new(false)),
             cancel_generation: Arc::new(AtomicU64::new(0)),
         };
@@ -955,11 +1260,52 @@ impl TranscriptionManager {
         filter_transcription_output(&corrected_result)
     }
 
+    pub(crate) fn finish_live_dictation(
+        &self,
+        raw: String,
+        samples: &[f32],
+    ) -> DictationTranscription {
+        let text = self.filter_with_audio_levels(
+            raw,
+            &get_settings(&self.app_handle),
+            audio_levels(samples),
+            DICTATION_NO_SPEECH_CUTOFF.is_some(),
+        );
+        if text.trim().is_empty() {
+            DictationTranscription::NoSpeech
+        } else {
+            DictationTranscription::Text(text)
+        }
+    }
+
+    fn filter_with_audio_levels(
+        &self,
+        raw_transcription: String,
+        settings: &AppSettings,
+        levels: Option<(f32, f32)>,
+        retire_phrase_filter: bool,
+    ) -> String {
+        let mut filtered_result = self.apply_transcription_filters(raw_transcription, settings);
+        let suppress = if retire_phrase_filter {
+            is_punctuation_only_transcription(&filtered_result)
+                && levels.is_some_and(is_near_silent_punctuation_candidate)
+        } else {
+            should_suppress_silence_hallucination(levels, &filtered_result)
+        };
+        if suppress {
+            info!("Suppressing likely silence hallucination for near-silent audio");
+            filtered_result.clear();
+        }
+
+        filtered_result
+    }
+
     fn transcribe_raw_local_with_settings(
         &self,
         audio: Vec<f32>,
         settings: &AppSettings,
-    ) -> Result<String> {
+        dictation: Option<DictationRequestAudio>,
+    ) -> Result<DictationTranscription> {
         self.update_last_activity();
 
         if self.cancel_requested.load(Ordering::Relaxed) {
@@ -967,7 +1313,7 @@ impl TranscriptionManager {
         }
 
         if audio.is_empty() {
-            return Ok(String::new());
+            return Ok(DictationTranscription::Text(String::new()));
         }
 
         let audio = prepare_transcription_audio(audio);
@@ -979,18 +1325,28 @@ impl TranscriptionManager {
         }
         drop(engine_guard);
 
-        self.transcribe_with_local_engine(audio, settings)
+        let Some((audio, dictation)) = filter_dictation_request(audio, dictation) else {
+            return Ok(DictationTranscription::NoSpeech);
+        };
+        let sample_count = audio.len();
+        log_dictation_attempt(&dictation, "local", sample_count, false);
+        let result = self.transcribe_with_local_engine(audio, settings);
+        if result.is_ok() {
+            log_dictation_attempt(&dictation, "local", sample_count, true);
+        }
+        result.map(DictationTranscription::Text)
     }
 
     async fn transcribe_raw_local_with_settings_async(
         &self,
         audio: Vec<f32>,
         settings: &AppSettings,
-    ) -> Result<String> {
+        dictation: Option<DictationRequestAudio>,
+    ) -> Result<DictationTranscription> {
         let manager = self.clone();
         let settings_owned = settings.clone();
         match tauri::async_runtime::spawn_blocking(move || {
-            manager.transcribe_raw_local_with_settings(audio, &settings_owned)
+            manager.transcribe_raw_local_with_settings(audio, &settings_owned, dictation)
         })
         .await
         {
@@ -1008,7 +1364,8 @@ impl TranscriptionManager {
         audio: Vec<f32>,
         settings: &AppSettings,
         allow_local_fallback_on_cloud_error: bool,
-    ) -> Result<String> {
+        dictation: Option<DictationRequestAudio>,
+    ) -> Result<DictationTranscription> {
         let groq_model = groq_api_model_name(model_id)
             .ok_or_else(|| anyhow::anyhow!("Unknown Groq model id: {}", model_id))?;
         let api_key = match self.resolve_byok_groq_api_key() {
@@ -1025,6 +1382,10 @@ impl TranscriptionManager {
             }
         };
 
+        let Some((audio, dictation)) = filter_dictation_request(audio, dictation) else {
+            return Ok(DictationTranscription::NoSpeech);
+        };
+        log_dictation_attempt(&dictation, "groq", audio.len(), false);
         let request_started = Instant::now();
         match groq_client::transcribe_samples_direct(
             &api_key,
@@ -1035,7 +1396,10 @@ impl TranscriptionManager {
         )
         .await
         {
-            Ok(text) => Ok(text),
+            Ok(text) => {
+                log_dictation_attempt(&dictation, "groq", audio.len(), true);
+                Ok(DictationTranscription::Text(text))
+            }
             Err(groq_error) => {
                 report_byok_transcription_failure(
                     settings,
@@ -1052,6 +1416,9 @@ impl TranscriptionManager {
                     ));
                 }
 
+                let Some((audio, dictation)) = filter_dictation_request(audio, dictation) else {
+                    return Ok(DictationTranscription::NoSpeech);
+                };
                 let fallback_local_model_id = self
                     .select_local_fallback_model_id(
                         self.get_current_model()
@@ -1094,7 +1461,7 @@ impl TranscriptionManager {
                     })?;
                 }
 
-                self.transcribe_raw_local_with_settings_async(audio, settings)
+                self.transcribe_raw_local_with_settings_async(audio, settings, dictation)
                     .await
             }
         }
@@ -1106,7 +1473,8 @@ impl TranscriptionManager {
         audio: Vec<f32>,
         settings: &AppSettings,
         allow_local_fallback_on_cloud_error: bool,
-    ) -> Result<String> {
+        dictation: Option<DictationRequestAudio>,
+    ) -> Result<DictationTranscription> {
         let openai_model = openai_api_model_name(model_id)
             .ok_or_else(|| anyhow::anyhow!("Unknown OpenAI model id: {}", model_id))?;
         let api_key = match self.resolve_byok_openai_api_key() {
@@ -1123,6 +1491,10 @@ impl TranscriptionManager {
             }
         };
 
+        let Some((audio, dictation)) = filter_dictation_request(audio, dictation) else {
+            return Ok(DictationTranscription::NoSpeech);
+        };
+        log_dictation_attempt(&dictation, "openai", audio.len(), false);
         let request_started = Instant::now();
         match groq_client::transcribe_samples_direct_openai(
             &api_key,
@@ -1134,12 +1506,16 @@ impl TranscriptionManager {
         .await
         {
             Ok(text) => {
+                log_dictation_attempt(&dictation, "openai", audio.len(), true);
                 if !text.trim().is_empty() {
-                    return Ok(text);
+                    return Ok(DictationTranscription::Text(text));
                 }
 
+                let Some((audio, dictation)) = filter_dictation_request(audio, dictation) else {
+                    return Ok(DictationTranscription::NoSpeech);
+                };
                 let Some(levels) = non_silent_empty_transcription_levels(&audio, &text) else {
-                    return Ok(text);
+                    return Ok(DictationTranscription::Text(text));
                 };
 
                 warn!(
@@ -1156,6 +1532,12 @@ impl TranscriptionManager {
                         );
                     }
 
+                    log_dictation_attempt(
+                        &dictation,
+                        "openai-quiet-retry",
+                        boosted_audio.len(),
+                        false,
+                    );
                     match groq_client::transcribe_samples_direct_openai(
                         &api_key,
                         openai_model,
@@ -1166,9 +1548,21 @@ impl TranscriptionManager {
                     .await
                     {
                         Ok(retry_text) if !retry_text.trim().is_empty() => {
-                            return Ok(retry_text);
+                            log_dictation_attempt(
+                                &dictation,
+                                "openai-quiet-retry",
+                                boosted_audio.len(),
+                                true,
+                            );
+                            return Ok(DictationTranscription::Text(retry_text));
                         }
                         Ok(_) => {
+                            log_dictation_attempt(
+                                &dictation,
+                                "openai-quiet-retry",
+                                boosted_audio.len(),
+                                true,
+                            );
                             warn!(
                                 "OpenAI quiet audio rescue still returned an empty transcription"
                             );
@@ -1197,6 +1591,7 @@ impl TranscriptionManager {
                             audio,
                             settings,
                             allow_local_fallback_on_cloud_error,
+                            dictation,
                         )
                         .await;
                 }
@@ -1212,6 +1607,7 @@ impl TranscriptionManager {
                     "returned an empty transcription for non-silent audio",
                     audio,
                     settings,
+                    dictation,
                 )
                 .await
             }
@@ -1233,7 +1629,7 @@ impl TranscriptionManager {
 
                 let issue = format!("transcription failed: {}", openai_error);
                 self.transcribe_with_local_fallback_after_cloud_issue(
-                    "OpenAI", &issue, audio, settings,
+                    "OpenAI", &issue, audio, settings, dictation,
                 )
                 .await
             }
@@ -1246,7 +1642,11 @@ impl TranscriptionManager {
         issue: &str,
         audio: Vec<f32>,
         settings: &AppSettings,
-    ) -> Result<String> {
+        dictation: Option<DictationRequestAudio>,
+    ) -> Result<DictationTranscription> {
+        let Some((audio, dictation)) = filter_dictation_request(audio, dictation) else {
+            return Ok(DictationTranscription::NoSpeech);
+        };
         let fallback_local_model_id = self
             .select_local_fallback_model_id(
                 self.get_current_model()
@@ -1292,7 +1692,7 @@ impl TranscriptionManager {
                 })?;
         }
 
-        self.transcribe_raw_local_with_settings_async(audio, settings)
+        self.transcribe_raw_local_with_settings_async(audio, settings, dictation)
             .await
     }
 
@@ -1302,16 +1702,23 @@ impl TranscriptionManager {
         audio: Vec<f32>,
         settings: &AppSettings,
         allow_local_fallback_on_cloud_error: bool,
-        metadata: groq_client::ProxyTranscriptionMetadata<'_>,
-    ) -> Result<String> {
+        mut metadata: groq_client::ProxyTranscriptionMetadata<'_>,
+        dictation: Option<DictationRequestAudio>,
+    ) -> Result<DictationTranscription> {
         let access = self.ensure_backend_access_state().await?;
 
         if access.access_state == AccessState::Blocked
             && access.anonymous_trial_state != TrialState::New
         {
-            return self.open_claim_flow().await;
+            return self
+                .open_claim_flow()
+                .await
+                .map(DictationTranscription::Text);
         }
 
+        let Some((audio, dictation)) = filter_dictation_request(audio, dictation) else {
+            return Ok(DictationTranscription::NoSpeech);
+        };
         let groq_model = groq_api_model_name(model_id)
             .ok_or_else(|| anyhow::anyhow!("Unknown Groq model id: {}", model_id))?;
         let trimmed_audio = trim_proxy_upload_audio(&audio);
@@ -1322,7 +1729,7 @@ impl TranscriptionManager {
                 audio.len()
             );
             self.maybe_unload_immediately("trimmed proxy audio");
-            return Ok(String::new());
+            return Ok(DictationTranscription::Text(String::new()));
         }
 
         if trimmed_audio.len() != audio.len() {
@@ -1333,6 +1740,21 @@ impl TranscriptionManager {
             );
         }
 
+        let upload_dictation = dictation
+            .as_ref()
+            .map(|request| request.slice(0..trimmed_audio.len(), audio.len()));
+        let Some((trimmed_audio, upload_dictation)) =
+            filter_dictation_request(trimmed_audio, upload_dictation)
+        else {
+            return Ok(DictationTranscription::NoSpeech);
+        };
+        if let Some(unique_samples) = upload_dictation
+            .as_ref()
+            .and_then(|request| request.surviving_unique_samples(trimmed_audio.len()))
+        {
+            metadata.audio_seconds = Some(unique_samples.div_ceil(SAMPLE_RATE) as u32);
+        }
+        log_dictation_attempt(&upload_dictation, "proxy", trimmed_audio.len(), false);
         match groq_client::transcribe_samples_with_metadata(
             access.install_token.trim(),
             groq_model,
@@ -1344,16 +1766,20 @@ impl TranscriptionManager {
         .await
         {
             Ok(result) => {
+                log_dictation_attempt(&upload_dictation, "proxy", trimmed_audio.len(), true);
                 self.sync_cloud_access_state(
                     result.trial_state,
                     result.access_state,
                     result.entitlement_state,
                 );
-                Ok(result.text)
+                Ok(DictationTranscription::Text(result.text))
             }
             Err(error) => {
                 if error.is_blocked() && access.anonymous_trial_state != TrialState::New {
-                    return self.open_claim_flow().await;
+                    return self
+                        .open_claim_flow()
+                        .await
+                        .map(DictationTranscription::Text);
                 }
 
                 if error.is_retryable()
@@ -1363,6 +1789,10 @@ impl TranscriptionManager {
                         AccessState::Trialing | AccessState::Subscribed
                     )
                 {
+                    let Some((audio, dictation)) = filter_dictation_request(audio, dictation)
+                    else {
+                        return Ok(DictationTranscription::NoSpeech);
+                    };
                     let fallback_local_model_id = self
                         .select_local_fallback_model_id(
                             self.get_current_model()
@@ -1406,7 +1836,7 @@ impl TranscriptionManager {
                     }
 
                     return self
-                        .transcribe_raw_local_with_settings_async(audio, settings)
+                        .transcribe_raw_local_with_settings_async(audio, settings, dictation)
                         .await;
                 }
 
@@ -1423,11 +1853,15 @@ impl TranscriptionManager {
         allow_local_fallback_on_cloud_error: bool,
         proxy_metadata: groq_client::ProxyTranscriptionMetadata<'_>,
         route: CloudTranscriptionRoute,
-    ) -> Result<String> {
+        dictation: Option<DictationRequestAudio>,
+    ) -> Result<DictationTranscription> {
         let chunk_limit_bytes = safe_live_chunk_limit_bytes(route);
         let chunks = plan_live_chunk_ranges(audio.len(), chunk_limit_bytes)?;
 
         if chunks.len() <= 1 {
+            let Some((audio, dictation)) = filter_dictation_request(audio, dictation) else {
+                return Ok(DictationTranscription::NoSpeech);
+            };
             return match route {
                 CloudTranscriptionRoute::DirectGroq => {
                     self.transcribe_with_direct_groq(
@@ -1435,6 +1869,7 @@ impl TranscriptionManager {
                         audio,
                         settings,
                         allow_local_fallback_on_cloud_error,
+                        dictation,
                     )
                     .await
                 }
@@ -1444,6 +1879,7 @@ impl TranscriptionManager {
                         audio,
                         settings,
                         allow_local_fallback_on_cloud_error,
+                        dictation,
                     )
                     .await
                 }
@@ -1454,6 +1890,7 @@ impl TranscriptionManager {
                         settings,
                         allow_local_fallback_on_cloud_error,
                         proxy_metadata,
+                        dictation,
                     )
                     .await
                 }
@@ -1468,6 +1905,7 @@ impl TranscriptionManager {
 
         let total_chunks = chunks.len() as u32;
         let mut assembled = String::new();
+        let mut completed = false;
 
         for (index, chunk) in chunks.iter().enumerate() {
             if self.cancel_requested.load(Ordering::Relaxed) {
@@ -1476,6 +1914,29 @@ impl TranscriptionManager {
 
             let current_chunk = index as u32 + 1;
             let chunk_audio = audio[chunk.start..chunk.end].to_vec();
+            let mut request = dictation
+                .as_ref()
+                .map(|request| request.slice(chunk.start..chunk.end, audio.len()));
+            let unique_start = if index == 0 {
+                0
+            } else {
+                LIVE_TRANSCRIPTION_OVERLAP_SAMPLES.min(chunk_audio.len())
+            };
+            if let Some(request) = request.as_mut() {
+                request.unique_source_ranges = request
+                    .slice(unique_start..chunk_audio.len(), chunk_audio.len())
+                    .source_ranges;
+            }
+            let Some((chunk_audio, admitted_request)) =
+                filter_dictation_request(chunk_audio, request)
+            else {
+                continue;
+            };
+            let unique_audio_seconds = admitted_request
+                .as_ref()
+                .and_then(|admitted| admitted.surviving_unique_samples(chunk_audio.len()))
+                .map(|samples| samples.div_ceil(SAMPLE_RATE) as u32)
+                .unwrap_or_else(|| live_chunk_unique_audio_seconds(*chunk, current_chunk));
             debug!(
                 "Transcribing chunk {} of {} (samples={}, source={:?}, route={:?})",
                 current_chunk,
@@ -1485,13 +1946,14 @@ impl TranscriptionManager {
                 route
             );
 
-            let chunk_text = match route {
+            let chunk_result = match route {
                 CloudTranscriptionRoute::DirectGroq => {
                     self.transcribe_with_direct_groq(
                         model_id,
                         chunk_audio,
                         settings,
                         allow_local_fallback_on_cloud_error,
+                        admitted_request,
                     )
                     .await?
                 }
@@ -1501,6 +1963,7 @@ impl TranscriptionManager {
                         chunk_audio,
                         settings,
                         allow_local_fallback_on_cloud_error,
+                        admitted_request,
                     )
                     .await?
                 }
@@ -1514,20 +1977,25 @@ impl TranscriptionManager {
                             source: proxy_metadata.source,
                             chunk_index: Some(current_chunk),
                             chunk_count: Some(total_chunks),
-                            audio_seconds: Some(live_chunk_unique_audio_seconds(
-                                *chunk,
-                                current_chunk,
-                            )),
+                            audio_seconds: Some(unique_audio_seconds),
                         },
+                        admitted_request,
                     )
                     .await?
                 }
             };
 
-            append_stitched_text(&mut assembled, &chunk_text);
+            if let DictationTranscription::Text(chunk_text) = chunk_result {
+                completed = true;
+                append_stitched_text(&mut assembled, &chunk_text);
+            }
         }
 
-        Ok(assembled)
+        Ok(if completed {
+            DictationTranscription::Text(assembled)
+        } else {
+            DictationTranscription::NoSpeech
+        })
     }
 
     async fn transcribe_raw_with_settings(
@@ -1536,7 +2004,8 @@ impl TranscriptionManager {
         settings: &AppSettings,
         allow_local_fallback_on_cloud_error: bool,
         proxy_metadata: groq_client::ProxyTranscriptionMetadata<'_>,
-    ) -> Result<String> {
+        dictation: Option<DictationRequestAudio>,
+    ) -> Result<DictationTranscription> {
         self.update_last_activity();
 
         if self.cancel_requested.load(Ordering::Relaxed) {
@@ -1544,7 +2013,7 @@ impl TranscriptionManager {
         }
 
         if audio.is_empty() {
-            return Ok(String::new());
+            return Ok(DictationTranscription::Text(String::new()));
         }
 
         let audio = prepare_transcription_audio(audio);
@@ -1574,7 +2043,10 @@ impl TranscriptionManager {
             .unwrap_or(false);
 
         if !is_cloud_model {
-            self.transcribe_raw_local_with_settings_async(audio, settings)
+            let Some((audio, dictation)) = filter_dictation_request(audio, dictation) else {
+                return Ok(DictationTranscription::NoSpeech);
+            };
+            self.transcribe_raw_local_with_settings_async(audio, settings, dictation)
                 .await
         } else {
             let model_id = active_model_id
@@ -1591,6 +2063,7 @@ impl TranscriptionManager {
                         allow_local_fallback_on_cloud_error,
                         proxy_metadata,
                         CloudTranscriptionRoute::DirectOpenAi,
+                        dictation,
                     )
                     .await;
             }
@@ -1607,6 +2080,7 @@ impl TranscriptionManager {
                         allow_local_fallback_on_cloud_error,
                         proxy_metadata,
                         CloudTranscriptionRoute::DirectGroq,
+                        dictation,
                     )
                     .await;
             }
@@ -1618,6 +2092,7 @@ impl TranscriptionManager {
                 allow_local_fallback_on_cloud_error,
                 proxy_metadata,
                 CloudTranscriptionRoute::BackendProxy,
+                dictation,
             )
             .await
         }
@@ -1875,10 +2350,60 @@ impl TranscriptionManager {
         current_model.clone()
     }
 
+    pub(crate) fn begin_dictation_context(&self, context: DictationRequestContext) {
+        if let Some(previous) = self.dictation_context.lock().unwrap().replace(context) {
+            previous.invalidate();
+        }
+    }
+
+    pub(crate) fn dictation_context(
+        &self,
+        binding_id: &str,
+        operation_id: u64,
+    ) -> DictationRequestContext {
+        self.dictation_context
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|context| context.matches(binding_id, operation_id))
+            .cloned()
+            .unwrap_or_else(|| DictationRequestContext::new(binding_id, operation_id, None))
+    }
+
+    pub(crate) fn cancel_dictation_context(&self, binding_id: &str, operation_id: u64) {
+        let mut current = self.dictation_context.lock().unwrap();
+        if current
+            .as_ref()
+            .is_some_and(|context| context.matches(binding_id, operation_id))
+        {
+            if let Some(context) = current.take() {
+                context.invalidate();
+            }
+        }
+    }
+
+    pub(crate) fn start_dictation_incremental_session(
+        &self,
+        binding_id: &str,
+        audio_manager: Arc<AudioRecordingManager>,
+        context: DictationRequestContext,
+    ) -> Result<()> {
+        self.start_incremental_session_inner(binding_id, audio_manager, Some(context))
+    }
+
     pub fn start_incremental_session(
         &self,
         binding_id: &str,
         audio_manager: Arc<AudioRecordingManager>,
+    ) -> Result<()> {
+        self.start_incremental_session_inner(binding_id, audio_manager, None)
+    }
+
+    fn start_incremental_session_inner(
+        &self,
+        binding_id: &str,
+        audio_manager: Arc<AudioRecordingManager>,
+        dictation: Option<DictationRequestContext>,
     ) -> Result<()> {
         self.clear_cancel_request();
 
@@ -1908,7 +2433,7 @@ impl TranscriptionManager {
             return Ok(());
         }
 
-        let runtime = Arc::new(IncrementalRuntime::new());
+        let runtime = Arc::new(IncrementalRuntime::with_dictation(dictation));
         let binding = binding_id.to_string();
         let manager_clone = self.clone();
         let runtime_clone = runtime.clone();
@@ -1987,6 +2512,19 @@ impl TranscriptionManager {
                 let chunk_end = next_start + CHUNK_SAMPLES;
                 let chunk_start = next_start.saturating_sub(CHUNK_OVERLAP_SAMPLES);
                 let chunk_samples = speech_buffer[chunk_start..chunk_end].to_vec();
+                let (chunk_samples, dictation_request) = if let Some(context) = &runtime.dictation {
+                    let Some((samples, request)) =
+                        context.request_audio(chunk_samples, chunk_start..chunk_end)
+                    else {
+                        runtime.next_chunk_start.store(chunk_end, Ordering::Relaxed);
+                        saw_pause = false;
+                        made_progress = true;
+                        continue 'chunking;
+                    };
+                    (samples, Some(request))
+                } else {
+                    (chunk_samples, None)
+                };
 
                 runtime.in_flight.store(true, Ordering::Relaxed);
                 let chunk_st = Instant::now();
@@ -2023,14 +2561,18 @@ impl TranscriptionManager {
                         &settings,
                         false,
                         groq_client::ProxyTranscriptionMetadata::default(),
+                        dictation_request,
                     )
                     .await
                 } else {
                     let manager = self.clone();
                     let settings_for_chunk = settings.clone();
                     match tauri::async_runtime::spawn_blocking(move || {
-                        manager
-                            .transcribe_raw_local_with_settings(chunk_samples, &settings_for_chunk)
+                        manager.transcribe_raw_local_with_settings(
+                            chunk_samples,
+                            &settings_for_chunk,
+                            dictation_request,
+                        )
                     })
                     .await
                     {
@@ -2044,7 +2586,12 @@ impl TranscriptionManager {
                 runtime.in_flight.store(false, Ordering::Relaxed);
 
                 match chunk_result {
-                    Ok(chunk_text) => {
+                    Ok(DictationTranscription::NoSpeech) => {
+                        runtime.next_chunk_start.store(chunk_end, Ordering::Relaxed);
+                        saw_pause = false;
+                        made_progress = true;
+                    }
+                    Ok(DictationTranscription::Text(chunk_text)) => {
                         if self.cancel_requested.load(Ordering::Relaxed) {
                             break 'chunking;
                         }
@@ -2090,16 +2637,44 @@ impl TranscriptionManager {
         binding_id: &str,
         full_samples: &[f32],
     ) -> Result<String> {
+        self.finish_incremental_session_inner(binding_id, full_samples, None)
+            .await
+    }
+
+    pub(crate) async fn finish_dictation_incremental_session(
+        &self,
+        binding_id: &str,
+        operation_id: u64,
+        full_samples: &[f32],
+    ) -> Result<String> {
+        self.finish_incremental_session_inner(binding_id, full_samples, Some(operation_id))
+            .await
+    }
+
+    async fn finish_incremental_session_inner(
+        &self,
+        binding_id: &str,
+        full_samples: &[f32],
+        operation_id: Option<u64>,
+    ) -> Result<String> {
         let session = {
             let mut guard = self.incremental_session.lock().unwrap();
             let Some(session) = guard.take() else {
                 return Err(anyhow::anyhow!("No active incremental session"));
             };
 
-            if session.binding_id != binding_id {
+            if session.binding_id != binding_id
+                || operation_id.is_some_and(|operation_id| {
+                    !session
+                        .runtime
+                        .dictation
+                        .as_ref()
+                        .is_some_and(|context| context.matches(binding_id, operation_id))
+                })
+            {
                 *guard = Some(session);
                 return Err(anyhow::anyhow!(
-                    "Active incremental session belongs to a different binding"
+                    "Active incremental session belongs to a different operation"
                 ));
             }
             session
@@ -2184,6 +2759,17 @@ impl TranscriptionManager {
         } else {
             Vec::new()
         };
+        let (tail_audio, tail_dictation) = if let Some(context) = &session.runtime.dictation {
+            context
+                .request_audio(
+                    tail_audio,
+                    tail_start.min(full_samples.len())..full_samples.len(),
+                )
+                .map(|(audio, request)| (audio, Some(request)))
+                .unwrap_or_default()
+        } else {
+            (tail_audio, None)
+        };
         let tail_sample_count = tail_audio.len();
         info!(
             "Incremental finalization state completed_chunks={} next_chunk_start={} full_samples={} tail_samples={}",
@@ -2205,13 +2791,15 @@ impl TranscriptionManager {
                     &settings,
                     false,
                     groq_client::ProxyTranscriptionMetadata::default(),
+                    tail_dictation,
                 ),
             )
             .await;
             session.runtime.in_flight.store(false, Ordering::Relaxed);
 
             match tail_result {
-                Ok(Ok(tail_text)) => {
+                Ok(Ok(DictationTranscription::NoSpeech)) => {}
+                Ok(Ok(DictationTranscription::Text(tail_text))) => {
                     if self.cancel_requested.load(Ordering::Relaxed) {
                         return Err(anyhow::anyhow!("Transcription cancelled"));
                     }
@@ -2309,6 +2897,58 @@ impl TranscriptionManager {
         Ok(final_result)
     }
 
+    pub(crate) fn signal_dictation_incremental_stop(&self, binding_id: &str, operation_id: u64) {
+        let guard = self.incremental_session.lock().unwrap();
+        if let Some(session) = guard.as_ref().filter(|session| {
+            session
+                .runtime
+                .dictation
+                .as_ref()
+                .is_some_and(|context| context.matches(binding_id, operation_id))
+        }) {
+            session
+                .runtime
+                .stop_requested
+                .store(true, Ordering::Relaxed);
+        }
+    }
+
+    pub(crate) fn has_dictation_incremental_progress(
+        &self,
+        binding_id: &str,
+        operation_id: u64,
+    ) -> bool {
+        let guard = self.incremental_session.lock().unwrap();
+        guard.as_ref().is_some_and(|session| {
+            session
+                .runtime
+                .dictation
+                .as_ref()
+                .is_some_and(|context| context.matches(binding_id, operation_id))
+                && (session.runtime.chunk_count.load(Ordering::Relaxed) > 0
+                    || session.runtime.next_chunk_start.load(Ordering::Relaxed) > 0)
+        })
+    }
+
+    pub(crate) fn cancel_dictation_incremental_session(&self, binding_id: &str, operation_id: u64) {
+        let mut guard = self.incremental_session.lock().unwrap();
+        if guard.as_ref().is_some_and(|session| {
+            session
+                .runtime
+                .dictation
+                .as_ref()
+                .is_some_and(|context| context.matches(binding_id, operation_id))
+        }) {
+            if let Some(session) = guard.take() {
+                session
+                    .runtime
+                    .stop_requested
+                    .store(true, Ordering::Relaxed);
+                session.worker_handle.abort();
+            }
+        }
+    }
+
     pub fn signal_incremental_stop(&self, binding_id: &str) {
         let guard = self.incremental_session.lock().unwrap();
         if let Some(session) = guard.as_ref() {
@@ -2350,6 +2990,9 @@ impl TranscriptionManager {
     pub fn request_cancel(&self) {
         self.cancel_generation.fetch_add(1, Ordering::Relaxed);
         self.cancel_requested.store(true, Ordering::Relaxed);
+        if let Some(context) = self.dictation_context.lock().unwrap().take() {
+            context.invalidate();
+        }
         self.cancel_incremental_session();
     }
 
@@ -2370,6 +3013,43 @@ impl TranscriptionManager {
         audio: Vec<f32>,
         source: Option<&str>,
     ) -> Result<String> {
+        self.transcribe_with_source_policy(audio, source, false, None)
+            .await
+            .map(|result| match result {
+                DictationTranscription::Text(text) => text,
+                DictationTranscription::NoSpeech => String::new(),
+            })
+    }
+
+    pub(crate) async fn transcribe_dictation_with_source(
+        &self,
+        audio: Vec<f32>,
+        source: Option<&str>,
+        context: &DictationRequestContext,
+    ) -> Result<DictationTranscription> {
+        if context.reject_whole_recording(audio.len(), "whole") {
+            return Ok(DictationTranscription::NoSpeech);
+        }
+        let sample_count = audio.len();
+        let Some((audio, request)) = context.request_audio(audio, 0..sample_count) else {
+            return Ok(DictationTranscription::NoSpeech);
+        };
+        self.transcribe_with_source_policy(
+            audio,
+            source,
+            DICTATION_NO_SPEECH_CUTOFF.is_some(),
+            Some(request),
+        )
+        .await
+    }
+
+    async fn transcribe_with_source_policy(
+        &self,
+        audio: Vec<f32>,
+        source: Option<&str>,
+        retire_phrase_filter: bool,
+        dictation: Option<DictationRequestAudio>,
+    ) -> Result<DictationTranscription> {
         self.update_last_activity();
 
         let st = std::time::Instant::now();
@@ -2379,7 +3059,7 @@ impl TranscriptionManager {
         if audio.is_empty() {
             debug!("Empty audio vector");
             self.maybe_unload_immediately("empty audio");
-            return Ok(String::new());
+            return Ok(DictationTranscription::Text(String::new()));
         }
 
         let levels = audio_levels(&audio);
@@ -2398,16 +3078,19 @@ impl TranscriptionManager {
                     source,
                     ..Default::default()
                 },
+                dictation,
             )
             .await?;
-        let mut filtered_result = self.apply_transcription_filters(raw_transcription, &settings);
-        if should_suppress_silence_hallucination(levels, &filtered_result) {
-            info!(
-                "Suppressing likely silence hallucination for near-silent audio: {}",
-                filtered_result
-            );
-            filtered_result.clear();
-        }
+        let DictationTranscription::Text(raw_transcription) = raw_transcription else {
+            self.maybe_unload_immediately("speech-free transcription");
+            return Ok(DictationTranscription::NoSpeech);
+        };
+        let filtered_result = self.filter_with_audio_levels(
+            raw_transcription,
+            &settings,
+            levels,
+            retire_phrase_filter,
+        );
 
         let et = std::time::Instant::now();
         let translation_note = if settings.translate_to_english {
@@ -2427,7 +3110,7 @@ impl TranscriptionManager {
 
         self.maybe_unload_immediately("transcription");
 
-        Ok(final_result)
+        Ok(DictationTranscription::Text(final_result))
     }
 }
 
@@ -2732,6 +3415,81 @@ mod tests {
 
         assert_eq!(live_chunk_unique_audio_seconds(first, 1), 20);
         assert_eq!(live_chunk_unique_audio_seconds(second, 2), 10);
+    }
+
+    #[test]
+    fn fn_tap_policy_uses_raw_hold_and_preserves_the_exact_minimum() {
+        for ms in [0, 86, 111, 143, 199] {
+            assert!(is_accidental_fn_tap(Some(Duration::from_millis(ms))));
+        }
+        assert!(is_accidental_fn_tap(Some(Duration::from_nanos(
+            199_999_999
+        ))));
+        for ms in [200, 201, 945, 1_207] {
+            assert!(!is_accidental_fn_tap(Some(Duration::from_millis(ms))));
+        }
+        assert!(!is_accidental_fn_tap(None));
+    }
+
+    #[test]
+    fn a_tap_cannot_be_admitted_by_speech_scores_padding_or_recognized_words() {
+        let context = DictationRequestContext::new("transcribe", 32, None);
+        // A short capture can include loud pre-roll and a padded upload.
+        let mut samples = vec![0.1; SAMPLE_RATE / 2];
+        samples.resize(SAMPLE_RATE * 2, 0.0);
+        for ms in [86, 111, 143] {
+            for evidence in [
+                SpeechEvidence::Unknown,
+                SpeechEvidence::Complete { max_score: 1.0 },
+            ] {
+                for text in ["Thank you.", "Bye.", "Yes."] {
+                    assert!(context.reject_output(
+                        evidence,
+                        &samples,
+                        Some(Duration::from_millis(ms)),
+                        text
+                    ));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn admitted_fn_holds_check_phrase_and_audio_before_suppressing_a_click() {
+        let context = DictationRequestContext::new("transcribe", 78, None);
+        // A click that the existing speech detector admitted, as both reported taps were.
+        let admitted = SpeechEvidence::Complete { max_score: 0.57 };
+        let samples = |burst: Range<usize>| -> Vec<f32> {
+            (0..SAMPLE_RATE)
+                .map(|i| {
+                    let phase = std::f32::consts::TAU * 800.0 * i as f32 / SAMPLE_RATE as f32;
+                    let amplitude = if burst.contains(&i) { 0.002 } else { 0.0002 };
+                    amplitude * phase.sin()
+                })
+                .collect()
+        };
+        let click = samples(8_000..8_320);
+        for ms in [80, 500, 1_000] {
+            assert!(context.reject_output(
+                admitted,
+                &click,
+                Some(Duration::from_millis(ms)),
+                "Thank you!",
+            ));
+        }
+        let accepted_hold = Some(Duration::from_millis(200));
+        assert!(!context.reject_output(admitted, &click, None, "Thank you."));
+        assert!(!context.reject_output(
+            admitted,
+            &click,
+            Some(Duration::from_millis(1_001)),
+            "Thank you."
+        ));
+        assert!(!context.reject_output(admitted, &click, accepted_hold, "Thank you for that."));
+        assert!(!context.reject_output(admitted, &click, accepted_hold, "Yes."));
+        // A hold that meets the minimum retains speech from the pre-roll.
+        let sustained = samples(800..4_000);
+        assert!(!context.reject_output(admitted, &sustained, accepted_hold, "Thank you."));
     }
 
     #[test]

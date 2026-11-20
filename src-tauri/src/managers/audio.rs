@@ -1,5 +1,6 @@
 use crate::audio_toolkit::{
-    import_audio_file, list_input_devices, vad::SmoothedVad, AudioRecorder, DrainResult, SileroVad,
+    import_audio_file, list_input_devices, vad::SmoothedVad, AudioRecorder, DictationAnalysis,
+    DrainResult, SileroVad, SpeechObserver,
 };
 use crate::helpers::clamshell;
 use crate::settings::{get_settings, AppSettings};
@@ -184,6 +185,8 @@ pub struct AudioRecordingManager {
     is_recording: Arc<Mutex<bool>>,
     recording_started_at: Arc<Mutex<Option<Instant>>>,
     did_mute: Arc<Mutex<bool>>,
+    speech_observer: SpeechObserver,
+    dictation_analysis: Arc<Mutex<Option<DictationAnalysis>>>,
 }
 
 impl AudioRecordingManager {
@@ -196,6 +199,10 @@ impl AudioRecordingManager {
         } else {
             MicrophoneMode::OnDemand
         };
+        let observer_model_path = app.path().resolve(
+            "resources/models/silero_vad_v4.onnx",
+            tauri::path::BaseDirectory::Resource,
+        )?;
 
         let manager = Self {
             lifecycle: Arc::new(Mutex::new(())),
@@ -209,6 +216,8 @@ impl AudioRecordingManager {
             is_recording: Arc::new(Mutex::new(false)),
             recording_started_at: Arc::new(Mutex::new(None)),
             did_mute: Arc::new(Mutex::new(false)),
+            speech_observer: SpeechObserver::new(observer_model_path),
+            dictation_analysis: Arc::new(Mutex::new(None)),
         };
 
         // Always-on?  Open immediately.
@@ -509,7 +518,61 @@ impl AudioRecordingManager {
 
     /* ---------- recording --------------------------------------------------- */
 
-    fn start_recorder_command(&self) -> Result<(), String> {
+    /// Begin loading on press; attachment waits for Start or the borrow boundary.
+    pub fn begin_dictation_analysis(
+        &self,
+        binding_id: &str,
+        operation_id: u64,
+    ) -> DictationAnalysis {
+        let handle = self.speech_observer.begin(binding_id, operation_id);
+        let mut current = self.dictation_analysis.lock().unwrap();
+        if let Some(previous) = current.replace(handle.clone()) {
+            previous.invalidate();
+        }
+        handle
+    }
+
+    pub fn dictation_analysis(
+        &self,
+        binding_id: &str,
+        operation_id: u64,
+    ) -> Option<DictationAnalysis> {
+        self.dictation_analysis
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|handle| handle.matches(binding_id, operation_id))
+            .cloned()
+    }
+
+    pub fn cancel_dictation_analysis(&self, binding_id: &str, operation_id: u64) {
+        let mut current = self.dictation_analysis.lock().unwrap();
+        if current
+            .as_ref()
+            .is_some_and(|handle| handle.matches(binding_id, operation_id))
+        {
+            if let Some(handle) = current.take() {
+                handle.invalidate();
+            }
+        }
+    }
+
+    fn analysis_for_binding(&self, binding_id: &str) -> Option<DictationAnalysis> {
+        self.dictation_analysis
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|handle| handle.binding_matches(binding_id))
+            .cloned()
+    }
+
+    fn invalidate_analysis_for_binding(&self, binding_id: &str) {
+        if let Some(handle) = self.analysis_for_binding(binding_id) {
+            handle.invalidate();
+        }
+    }
+
+    fn start_recorder_command(&self, binding_id: &str) -> Result<(), String> {
         if release_smoke_audio_file().is_some() {
             return Ok(());
         }
@@ -518,7 +581,7 @@ impl AudioRecordingManager {
         let rec = recorder_guard
             .as_ref()
             .ok_or_else(|| "Recorder not available".to_string())?;
-        rec.start()
+        rec.start_with_analysis(self.analysis_for_binding(binding_id))
             .map_err(|err| format!("Failed to send recorder start command: {err}"))
     }
 
@@ -527,6 +590,7 @@ impl AudioRecordingManager {
         let _lifecycle = self.lifecycle.lock().unwrap();
 
         if !matches!(*self.state.lock().unwrap(), RecordingState::Idle) {
+            self.invalidate_analysis_for_binding(binding_id);
             info!(
                 "[latency] audio start skipped binding={} reason=busy elapsed_ms={}",
                 binding_id,
@@ -540,6 +604,7 @@ impl AudioRecordingManager {
                 self.stop_microphone_stream_locked();
                 if let Err(e) = self.start_microphone_stream_locked() {
                     error!("Failed to restore preferred microphone stream: {e}");
+                    self.invalidate_analysis_for_binding(binding_id);
                     return false;
                 }
             }
@@ -548,21 +613,23 @@ impl AudioRecordingManager {
             if matches!(*self.mode.lock().unwrap(), MicrophoneMode::OnDemand) {
                 if let Err(e) = self.start_microphone_stream_locked() {
                     error!("Failed to open microphone stream: {e}");
+                    self.invalidate_analysis_for_binding(binding_id);
                     return false;
                 }
             }
 
             FIRST_AUDIO_LEVEL_LOGGED.store(false, Ordering::Relaxed);
-            let start_result = self.start_recorder_command().or_else(|err| {
+            let start_result = self.start_recorder_command(binding_id).or_else(|err| {
                 warn!("Recorder start failed; restarting microphone stream: {err}");
                 self.stop_microphone_stream_locked();
                 self.start_microphone_stream_locked()
                     .map_err(|restart_err| restart_err.to_string())?;
-                self.start_recorder_command()
+                self.start_recorder_command(binding_id)
             });
 
             if let Err(err) = start_result {
                 error!("Recorder not available: {err}");
+                self.invalidate_analysis_for_binding(binding_id);
                 return false;
             }
 
@@ -592,6 +659,19 @@ impl AudioRecordingManager {
     }
 
     pub fn stop_recording(&self, binding_id: &str) -> Option<Vec<f32>> {
+        self.stop_recording_samples(binding_id, true)
+            .map(pad_short_recording_samples)
+    }
+
+    pub(crate) fn stop_recording_unpadded(&self, binding_id: &str) -> Option<Vec<f32>> {
+        self.stop_recording_samples(binding_id, false)
+    }
+
+    fn stop_recording_samples(
+        &self,
+        binding_id: &str,
+        keep_frame_padding: bool,
+    ) -> Option<Vec<f32>> {
         let _lifecycle = self.lifecycle.lock().unwrap();
         let mut state = self.state.lock().unwrap();
 
@@ -604,6 +684,7 @@ impl AudioRecordingManager {
 
                 let (samples, should_reset_stream) =
                     if let Some(audio_file) = release_smoke_audio_file() {
+                        self.invalidate_analysis_for_binding(binding_id);
                         match import_audio_file(&audio_file) {
                             Ok(imported) => {
                                 info!(
@@ -624,8 +705,13 @@ impl AudioRecordingManager {
                     } else {
                         let recorder_guard = self.recorder.lock().unwrap();
                         if let Some(rec) = recorder_guard.as_ref() {
-                            match rec.stop() {
-                                Ok(buf) => (buf, false),
+                            match rec.stop_with_sample_boundary() {
+                                Ok((mut samples, boundary)) => {
+                                    if !keep_frame_padding {
+                                        samples.truncate(boundary);
+                                    }
+                                    (samples, false)
+                                }
                                 Err(e) => {
                                     error!("stop() failed: {e}");
                                     (Vec::new(), true)
@@ -646,7 +732,7 @@ impl AudioRecordingManager {
                     self.close_on_demand_stream();
                 }
 
-                Some(pad_short_recording_samples(samples))
+                Some(samples)
             }
             _ => None,
         }
@@ -658,12 +744,16 @@ impl AudioRecordingManager {
         to_binding_id: &str,
     ) -> bool {
         if !self.is_recording_binding(from_binding_id) {
+            self.invalidate_analysis_for_binding(to_binding_id);
             return false;
         }
 
         // Clear any audio captured for the previous owner so the borrowed
         // recording starts from a fresh sample boundary.
-        let Some(boundary) = self.drain_recording_delta(from_binding_id) else {
+        let Some(boundary) =
+            self.observation_boundary(from_binding_id, self.analysis_for_binding(to_binding_id))
+        else {
+            self.invalidate_analysis_for_binding(to_binding_id);
             warn!(
                 "Unable to borrow recording from '{}' to '{}' because the sample boundary drain failed",
                 from_binding_id, to_binding_id
@@ -687,7 +777,10 @@ impl AudioRecordingManager {
                 );
                 true
             }
-            _ => false,
+            _ => {
+                self.invalidate_analysis_for_binding(to_binding_id);
+                false
+            }
         }
     }
 
@@ -702,7 +795,7 @@ impl AudioRecordingManager {
         }
 
         let samples = self
-            .drain_recording_delta(borrowed_binding_id)
+            .observation_boundary(borrowed_binding_id, None)
             .map(|delta| delta.samples)
             .unwrap_or_default();
 
@@ -803,6 +896,28 @@ impl AudioRecordingManager {
         )
     }
 
+    pub(crate) fn read_dictation_samples(
+        &self,
+        binding_id: &str,
+        operation_id: u64,
+        offset: usize,
+        limit: usize,
+    ) -> Option<Result<Vec<f32>, ()>> {
+        let receiver = {
+            let state = self.state.try_lock().ok()?;
+            if !matches!(&*state, RecordingState::Recording { binding_id: active } if active == binding_id)
+            {
+                return None;
+            }
+            let recorder = self.recorder.try_lock().ok()?;
+            recorder
+                .as_ref()?
+                .request_dictation_samples(binding_id, operation_id, offset, limit)?
+        };
+        // Stop and promotion are free to run while this absolute read is in flight.
+        receiver.recv_timeout(Duration::from_millis(75)).ok()
+    }
+
     pub fn drain_recording_delta(&self, binding_id: &str) -> Option<DrainResult> {
         let state = self.state.lock().unwrap();
         match *state {
@@ -840,12 +955,34 @@ impl AudioRecordingManager {
         }
     }
 
+    fn observation_boundary(
+        &self,
+        binding_id: &str,
+        analysis: Option<DictationAnalysis>,
+    ) -> Option<DrainResult> {
+        if !self.is_recording_binding(binding_id) {
+            return None;
+        }
+        let recorder = self.recorder.try_lock().ok()?;
+        match recorder.as_ref()?.observation_boundary(analysis) {
+            Ok(delta) => Some(delta),
+            Err(error) => {
+                self.invalidate_analysis_for_binding(binding_id);
+                warn!("Dictation observation boundary failed: {error}");
+                None
+            }
+        }
+    }
+
     /// Cancel any ongoing recording without returning audio samples
     pub fn cancel_recording(&self) {
         let _lifecycle = self.lifecycle.lock().unwrap();
         let mut state = self.state.lock().unwrap();
 
         if let RecordingState::Recording { .. } = *state {
+            if let Some(handle) = self.dictation_analysis.lock().unwrap().as_ref() {
+                handle.invalidate();
+            }
             *state = RecordingState::Idle;
             drop(state);
 
@@ -944,7 +1081,6 @@ fn pad_short_recording_samples(samples: Vec<f32>) -> Vec<f32> {
         samples
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::{

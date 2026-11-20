@@ -12,6 +12,8 @@ type SessionWindowState = {
 };
 
 type FullSystemAudioTestState = {
+  useSettingsIpc?: boolean;
+  savedElevenLabsKey?: boolean;
   settings: {
     record_full_system_audio: boolean;
     always_on_microphone: boolean;
@@ -238,6 +240,10 @@ async function installBrowserMocks(
     >();
     let nextCallbackId = 1;
     let nextEventId = 1;
+    const hasElevenLabsKey = () =>
+      localStorage.getItem("mock-elevenlabs-saved") === null
+        ? Boolean(testState.savedElevenLabsKey)
+        : localStorage.getItem("mock-elevenlabs-saved") === "true";
 
     const dispatchTauriEvent = (event: string, payload: unknown) => {
       eventListeners.forEach((listener, id) => {
@@ -253,9 +259,11 @@ async function installBrowserMocks(
       });
     };
 
-    (
-      window as unknown as { __UTTR_E2E__: FullSystemAudioTestState }
-    ).__UTTR_E2E__ = testState;
+    if (!testState.useSettingsIpc) {
+      (
+        window as unknown as { __UTTR_E2E__: FullSystemAudioTestState }
+      ).__UTTR_E2E__ = testState;
+    }
     (window as unknown as { isTauri: boolean }).isTauri = true;
     (
       window as unknown as {
@@ -312,9 +320,7 @@ async function installBrowserMocks(
       }
     ).__TAURI_INTERNALS__ = {
       async invoke(cmd: string, args: Record<string, unknown> = {}) {
-        const e2eState = (
-          window as unknown as { __UTTR_E2E__: FullSystemAudioTestState }
-        ).__UTTR_E2E__;
+        const e2eState = testState;
         e2eState.invokedCommands.push({ cmd, args });
 
         const failure = e2eState.commandFailures?.[cmd];
@@ -349,7 +355,26 @@ async function installBrowserMocks(
           case "plugin:clipboard-manager|write_text":
             return null;
           case "get_current_model":
-            return "parakeet-tdt-0.6b-v3";
+            return (
+              localStorage.getItem("mock-selected-model") ??
+              "parakeet-tdt-0.6b-v3"
+            );
+          case "set_active_model":
+            localStorage.setItem("mock-selected-model", String(args.modelId));
+            dispatchTauriEvent("settings-changed", {
+              setting: "scribe_live_dictation",
+              value: args.modelId === "elevenlabs-scribe-v3-live",
+            });
+            return null;
+          case "get_post_process_api_key_statuses":
+            return { elevenlabs: hasElevenLabsKey() };
+          case "change_post_process_api_key_setting":
+            if (args.providerId !== "elevenlabs") return null;
+            localStorage.setItem(
+              "mock-elevenlabs-saved",
+              String(Boolean(args.apiKey)),
+            );
+            return null;
           case "has_any_models_available":
             return true;
           case "get_available_models":
@@ -373,15 +398,59 @@ async function installBrowserMocks(
                 supported_languages: ["en"],
                 is_custom: false,
               },
+              ...[
+                [
+                  "groq-whisper-large-v3",
+                  "Groq Whisper Large V3",
+                  "Higher quality.",
+                ],
+                [
+                  "groq-whisper-large-v3-turbo",
+                  "Groq Whisper Large V3 Turbo",
+                  "Extremely fast.",
+                ],
+                [
+                  "openai-gpt-4o-transcribe",
+                  "OpenAI GPT-4o Transcribe",
+                  "Accuracy-first dictation.",
+                ],
+                [
+                  "elevenlabs-scribe-v3-live",
+                  "ElevenLabs Scribe v3 Live",
+                  "Realtime microphone dictation.",
+                ],
+              ].map(([id, name, description]) => ({
+                id,
+                name,
+                description,
+                is_downloaded: true,
+                supported_languages: id.startsWith("elevenlabs")
+                  ? []
+                  : ["en", "es"],
+                accuracy_score: id.startsWith("elevenlabs") ? 0 : 0.9,
+                speed_score: 0.98,
+                supports_translation: id.startsWith("groq"),
+              })),
             ];
           case "get_transcription_model_status":
             return "parakeet-tdt-0.6b-v3";
           case "get_app_settings":
-            return e2eState.settings;
+            return {
+              ...e2eState.settings,
+              scribe_live_dictation:
+                localStorage.getItem("mock-selected-model") ===
+                "elevenlabs-scribe-v3-live",
+            };
           case "get_default_settings":
             return e2eState.defaultSettings;
+          case "refresh_install_entitlement":
           case "get_install_access_snapshot":
-            return e2eState.installAccess;
+            return e2eState.useSettingsIpc
+              ? {
+                  ...e2eState.installAccess,
+                  has_byok_secret: hasElevenLabsKey(),
+                }
+              : e2eState.installAccess;
           case "get_history_entries":
             return e2eState.historyEntries;
           case "check_custom_sounds":
@@ -453,7 +522,6 @@ async function installBrowserMocks(
           case "change_auto_submit_key_setting":
           case "change_post_process_enabled_setting":
           case "change_post_process_base_url_setting":
-          case "change_post_process_api_key_setting":
           case "change_post_process_model_setting":
           case "set_post_process_provider":
           case "change_post_process_cleaning_prompt_preset":
@@ -549,7 +617,7 @@ test.describe("full-system audio settings", () => {
     });
   }
 
-  for (const provider of ["groq", "openai"] as const) {
+  for (const provider of ["groq", "openai", "elevenlabs"] as const) {
     test(`keeps the ${provider} API key draft and shows failed saves`, async ({
       page,
     }, testInfo) => {
@@ -566,11 +634,13 @@ test.describe("full-system audio settings", () => {
       await installBrowserMocks(page, state);
       await page.goto("/");
       await page.getByRole("button", { name: /^API Keys$/i }).click();
-      const index = provider === "groq" ? 0 : 1;
+      const field = page.getByRole("region", {
+        name: new RegExp(provider, "i"),
+      });
       const draft = `test-${provider}-draft`;
-      const input = page.locator('input[type="password"]').nth(index);
+      const input = field.getByLabel(/API key/i);
       await input.fill(draft);
-      await page.getByRole("button", { name: "Save key" }).nth(index).click();
+      await field.getByRole("button", { name: "Save key" }).click();
       await expect(page.getByText("Unable to save the key.")).toBeVisible();
       await expect(input).toHaveValue(draft);
       await expect(input).toBeEnabled();
@@ -580,6 +650,85 @@ test.describe("full-system audio settings", () => {
       });
     });
   }
+
+  test("selects Scribe before setup, saves and clears its key, and switches back", async ({
+    page,
+  }, testInfo) => {
+    const state = createTestState(false, true);
+    state.settings.debug_mode = true;
+    state.useSettingsIpc = true;
+    await page.setViewportSize({ width: 1510, height: 1115 });
+    await installBrowserMocks(page, state);
+    await page.goto("/");
+    const models = page.getByRole("button", { name: "Models", exact: true });
+    const keys = page.getByRole("button", { name: "API Keys", exact: true });
+    const scribe = page.getByRole("button", {
+      name: /ElevenLabs Scribe v3 Live/,
+    });
+    const groq = page.getByRole("button").filter({
+      has: page.getByRole("heading", {
+        name: "Groq Whisper Large V3",
+        exact: true,
+      }),
+    });
+    await models.click();
+    await expect(scribe).toContainText("Cloud");
+    await scribe.click();
+    await expect(scribe).toContainText("Active");
+    await scribe.scrollIntoViewIfNeeded();
+    await page.screenshot({ path: testInfo.outputPath("scribe-selected.png") });
+
+    await groq.click();
+    await keys.click();
+    const field = page.getByRole("region", { name: "ElevenLabs" });
+    const input = field.getByLabel("ElevenLabs API key");
+    await input.fill("synthetic-browser-test");
+    await field.getByRole("button", { name: "Save key" }).click();
+    await expect(input).toHaveValue("");
+    await expect(input).toHaveAttribute("placeholder", "Saved key");
+    await field.scrollIntoViewIfNeeded();
+    await page.screenshot({
+      path: testInfo.outputPath("elevenlabs-key-saved.png"),
+    });
+    await models.click();
+    await expect(groq).toContainText("Active");
+
+    await scribe.click();
+    await keys.click();
+    await field.getByRole("button", { name: "Clear key" }).click();
+    await expect(input).toHaveAttribute("placeholder", "ElevenLabs API key");
+    await models.click();
+    await expect(scribe).toContainText("Active");
+    await groq.click();
+    await expect(groq).toContainText("Active");
+  });
+
+  test("keeps model and key settings available after clearing the only key while Scribe is selected", async ({
+    page,
+  }) => {
+    const state = createTestState(false, true);
+    state.useSettingsIpc = true;
+    state.savedElevenLabsKey = true;
+    await installBrowserMocks(page, state);
+    await page.goto("/");
+    const models = page.getByRole("button", { name: "Models", exact: true });
+    const apiKeys = page.getByRole("button", { name: "API Keys", exact: true });
+    await models.click();
+    const scribe = page.getByRole("button", {
+      name: /ElevenLabs Scribe v3 Live/,
+    });
+    await scribe.click();
+    await apiKeys.click();
+    const field = page.getByRole("region", { name: "ElevenLabs" });
+    await field.getByRole("button", { name: "Clear key" }).click();
+    await expect(field.getByLabel("ElevenLabs API key")).toHaveAttribute(
+      "placeholder",
+      "ElevenLabs API key",
+    );
+    await models.click();
+    await expect(scribe).toContainText("Active");
+    await expect(apiKeys).toBeVisible();
+  });
 
   test("starts a full-system session from Home without file or side cards", async ({
     page,

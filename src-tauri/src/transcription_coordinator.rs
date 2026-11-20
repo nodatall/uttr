@@ -2,6 +2,7 @@ use crate::actions::{promote_active_transcription_to_edit_mode, ACTION_MAP};
 use crate::managers::audio::AudioRecordingManager;
 use crate::managers::full_system_audio::FullSystemAudioSessionManager;
 use crate::managers::transcription::TranscriptionManager;
+use crate::scribe_live::{FnPress, LiveGate};
 use crate::{shortcut, utils};
 use log::{debug, error, info, warn};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -23,13 +24,16 @@ pub type OperationId = u64;
 struct Operation {
     binding_id: String,
     id: OperationId,
+    push_to_talk_shortcut: Option<String>,
 }
 
 impl Operation {
-    fn new(binding_id: &str) -> Self {
+    fn new(binding_id: &str, hotkey: &str, push_to_talk: bool) -> Self {
         Self {
             binding_id: binding_id.to_string(),
             id: next_operation_id(),
+            push_to_talk_shortcut: (push_to_talk && binding_id == "transcribe")
+                .then(|| hotkey.to_string()),
         }
     }
 
@@ -38,7 +42,13 @@ impl Operation {
         Self {
             binding_id: binding_id.to_string(),
             id,
+            push_to_talk_shortcut: None,
         }
+    }
+
+    fn fn_hold_on_release(&self, hotkey: &str, observed: Option<Duration>) -> Option<Duration> {
+        // A delayed hardware release can arrive after a signal or toggle starts a new operation.
+        observed.filter(|_| self.push_to_talk_shortcut.as_deref() == Some(hotkey))
     }
 
     fn matches(&self, binding_id: &str, operation_id: OperationId) -> bool {
@@ -59,6 +69,8 @@ enum Command {
         is_pressed: bool,
         push_to_talk: bool,
         received_at: Instant,
+        fn_press: Option<FnPress>,
+        observed_fn_hold: Option<Duration>,
     },
     StopMeeting,
     UserCancel,
@@ -112,7 +124,8 @@ enum ProcessingFinishedAction {
 enum ControlEffect {
     DispatchMeetingStop(Operation),
     StopTrackedDictation(Operation),
-    CancelStandalone(Option<OperationId>),
+    CancelStandaloneRecording(OperationId),
+    CancelStandaloneProcessing(OperationId),
     CancelQuickRecording {
         meeting: Operation,
         quick: Operation,
@@ -402,6 +415,8 @@ impl TranscriptionCoordinator {
                         is_pressed,
                         push_to_talk,
                         received_at,
+                        fn_press,
+                        observed_fn_hold,
                     } => {
                         warn!(
                             "[ask-hotkey] coordinator_input binding={} pressed={} push_to_talk={} stage={}",
@@ -436,6 +451,8 @@ impl TranscriptionCoordinator {
 
                         let push_to_talk =
                             transcribe_binding_push_to_talk(&binding_id, push_to_talk);
+                        let observed_fn_hold =
+                            observed_fn_hold.filter(|_| push_to_talk && !is_pressed);
 
                         if handle_meeting_quick_dictation_input(
                             &app,
@@ -444,6 +461,7 @@ impl TranscriptionCoordinator {
                             &hotkey_string,
                             push_to_talk,
                             is_pressed,
+                            observed_fn_hold,
                         ) {
                             continue;
                         }
@@ -455,7 +473,14 @@ impl TranscriptionCoordinator {
                                 {
                                     continue;
                                 }
-                                start(&app, &mut stage, &binding_id, &hotkey_string);
+                                start(
+                                    &app,
+                                    &mut stage,
+                                    &binding_id,
+                                    &hotkey_string,
+                                    push_to_talk,
+                                    fn_press,
+                                );
                             } else if is_pressed
                                 && can_start_dictation_while_legacy_meeting_processing(
                                     &stage,
@@ -472,6 +497,7 @@ impl TranscriptionCoordinator {
                                     &mut stage,
                                     &binding_id,
                                     &hotkey_string,
+                                    push_to_talk,
                                 );
                             } else if is_pressed
                                 && matches!(&stage, Stage::Recording(operation)
@@ -481,7 +507,7 @@ impl TranscriptionCoordinator {
                                     "Received push-to-talk press while already recording '{}'; treating as stop",
                                     binding_id
                                 );
-                                stop(&app, &mut stage, &binding_id, &hotkey_string);
+                                stop(&app, &mut stage, &binding_id, &hotkey_string, None);
                                 processing_started_at = Some(Instant::now());
                             } else if is_pressed
                                 && matches!(&stage, Stage::Recording(operation)
@@ -497,6 +523,7 @@ impl TranscriptionCoordinator {
                                     &app,
                                     &from_binding_id,
                                     &binding_id,
+                                    operation_id,
                                 ) {
                                     info!(
                                         "Promoted push-to-talk recording from '{}' to '{}'",
@@ -505,6 +532,7 @@ impl TranscriptionCoordinator {
                                     stage = Stage::Recording(Operation {
                                         binding_id: binding_id.clone(),
                                         id: operation_id,
+                                        push_to_talk_shortcut: None,
                                     });
                                 } else {
                                     warn!(
@@ -527,7 +555,13 @@ impl TranscriptionCoordinator {
                                     );
                                     processing_started_at = None;
                                 } else {
-                                    stop(&app, &mut stage, &binding_id, &hotkey_string);
+                                    stop(
+                                        &app,
+                                        &mut stage,
+                                        &binding_id,
+                                        &hotkey_string,
+                                        observed_fn_hold,
+                                    );
                                     processing_started_at = Some(Instant::now());
                                 }
                             } else if is_pressed && matches!(stage, Stage::Processing(_)) {
@@ -553,7 +587,14 @@ impl TranscriptionCoordinator {
                         } else if is_pressed {
                             match &stage {
                                 Stage::Idle => {
-                                    start(&app, &mut stage, &binding_id, &hotkey_string);
+                                    start(
+                                        &app,
+                                        &mut stage,
+                                        &binding_id,
+                                        &hotkey_string,
+                                        push_to_talk,
+                                        None,
+                                    );
                                 }
                                 _ if can_start_dictation_while_legacy_meeting_processing(
                                     &stage,
@@ -565,12 +606,13 @@ impl TranscriptionCoordinator {
                                         &mut stage,
                                         &binding_id,
                                         &hotkey_string,
+                                        push_to_talk,
                                     );
                                 }
                                 Stage::Recording(operation)
                                     if operation.binding_id == binding_id =>
                                 {
-                                    stop(&app, &mut stage, &binding_id, &hotkey_string);
+                                    stop(&app, &mut stage, &binding_id, &hotkey_string, None);
                                     processing_started_at = Some(Instant::now());
                                 }
                                 _ if is_repeated_meeting_input(&stage, &binding_id) => {
@@ -655,6 +697,26 @@ impl TranscriptionCoordinator {
         hotkey_string: &str,
         is_pressed: bool,
         push_to_talk: bool,
+        observed_fn_hold: Option<Duration>,
+    ) {
+        self.send_input_with_fn_press(
+            binding_id,
+            hotkey_string,
+            is_pressed,
+            push_to_talk,
+            observed_fn_hold,
+            None,
+        );
+    }
+
+    pub(crate) fn send_input_with_fn_press(
+        &self,
+        binding_id: &str,
+        hotkey_string: &str,
+        is_pressed: bool,
+        push_to_talk: bool,
+        observed_fn_hold: Option<Duration>,
+        fn_press: Option<FnPress>,
     ) {
         self.send_with_recovery(Command::Input {
             binding_id: binding_id.to_string(),
@@ -662,6 +724,8 @@ impl TranscriptionCoordinator {
             is_pressed,
             push_to_talk,
             received_at: Instant::now(),
+            fn_press,
+            observed_fn_hold,
         });
     }
 
@@ -820,12 +884,17 @@ fn handle_user_cancel(app: &AppHandle, stage: &mut Stage) {
 fn apply_user_cancel_command(stage: &mut Stage) -> Vec<ControlEffect> {
     match user_cancel_action(stage) {
         UserCancelAction::CancelStandalone => {
-            let operation_id = match stage {
-                Stage::Processing(operation) => Some(operation.id),
-                _ => None,
+            let effect = match stage {
+                Stage::Recording(operation) => {
+                    ControlEffect::CancelStandaloneRecording(operation.id)
+                }
+                Stage::Processing(operation) => {
+                    ControlEffect::CancelStandaloneProcessing(operation.id)
+                }
+                _ => unreachable!("standalone cancellation requires an active operation"),
             };
             *stage = Stage::Idle;
-            vec![ControlEffect::CancelStandalone(operation_id)]
+            vec![effect]
         }
         UserCancelAction::CancelQuickRecording => {
             let Stage::MeetingRecording {
@@ -933,18 +1002,24 @@ fn execute_control_effects(app: &AppHandle, effects: Vec<ControlEffect>) {
                     warn!("No action in ACTION_MAP for '{}'", operation.binding_id);
                     continue;
                 };
-                action.stop(app, &operation.binding_id, "Meeting Stop", operation.id);
+                action.stop(
+                    app,
+                    &operation.binding_id,
+                    "Meeting Stop",
+                    operation.id,
+                    None,
+                );
             }
-            ControlEffect::CancelStandalone(operation_id) => {
-                if let Some(operation_id) = operation_id {
-                    if crate::actions::cancel_dictation_operation(operation_id) {
-                        crate::actions::cancel_ask_selection_operation(app, operation_id);
-                        utils::cancel_non_meeting_operation(app);
-                    } else {
-                        debug!("Ignoring cancellation after dictation operation committed");
-                    }
-                } else {
+            ControlEffect::CancelStandaloneRecording(operation_id) => {
+                crate::scribe_live::cancel(operation_id);
+                utils::cancel_non_meeting_operation(app);
+            }
+            ControlEffect::CancelStandaloneProcessing(operation_id) => {
+                if crate::actions::cancel_dictation_operation(operation_id) {
+                    crate::actions::cancel_ask_selection_operation(app, operation_id);
                     utils::cancel_non_meeting_operation(app);
+                } else {
+                    debug!("Ignoring cancellation after dictation operation committed");
                 }
             }
             ControlEffect::CancelQuickRecording { meeting, quick } => {
@@ -982,15 +1057,30 @@ fn execute_control_effects(app: &AppHandle, effects: Vec<ControlEffect>) {
     }
 }
 
-fn start(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &str) {
+fn start(
+    app: &AppHandle,
+    stage: &mut Stage,
+    binding_id: &str,
+    hotkey_string: &str,
+    push_to_talk: bool,
+    fn_press: Option<FnPress>,
+) {
     let start_time = Instant::now();
-    let operation = Operation::new(binding_id);
+    let operation = Operation::new(binding_id, hotkey_string, push_to_talk);
 
     let Some(action) = ACTION_MAP.get(binding_id) else {
         warn!("No action in ACTION_MAP for '{binding_id}'");
         return;
     };
-    action.start(app, binding_id, hotkey_string);
+    let plain_fn = hotkey_string
+        .parse::<handy_keys::Hotkey>()
+        .is_ok_and(|hotkey| hotkey.key.is_none() && hotkey.modifiers == handy_keys::Modifiers::FN);
+    let gate = if push_to_talk && plain_fn {
+        LiveGate::Fn(fn_press)
+    } else {
+        LiveGate::Open
+    };
+    action.start_with_operation(app, binding_id, hotkey_string, operation.id, Some(gate));
     let audio_recording_active = app
         .try_state::<Arc<AudioRecordingManager>>()
         .map_or(false, |a| a.is_recording());
@@ -1048,13 +1138,14 @@ fn start_legacy_meeting_processing_dictation(
     stage: &mut Stage,
     binding_id: &str,
     hotkey_string: &str,
+    push_to_talk: bool,
 ) {
-    let operation = Operation::new(binding_id);
+    let operation = Operation::new(binding_id, hotkey_string, push_to_talk);
     let Some(action) = ACTION_MAP.get(binding_id) else {
         warn!("No action in ACTION_MAP for '{binding_id}'");
         return;
     };
-    action.start(app, binding_id, hotkey_string);
+    action.start_with_operation(app, binding_id, hotkey_string, operation.id, None);
 
     let audio_recording_active = app
         .try_state::<Arc<AudioRecordingManager>>()
@@ -1077,6 +1168,7 @@ fn handle_meeting_quick_dictation_input(
     hotkey_string: &str,
     push_to_talk: bool,
     is_pressed: bool,
+    observed_fn_hold: Option<Duration>,
 ) -> bool {
     if binding_id != "transcribe" {
         return false;
@@ -1094,6 +1186,7 @@ fn handle_meeting_quick_dictation_input(
             hotkey_string,
             push_to_talk,
             is_pressed,
+            observed_fn_hold,
         ),
         Stage::MeetingStopping {
             dictation,
@@ -1106,6 +1199,7 @@ fn handle_meeting_quick_dictation_input(
             hotkey_string,
             push_to_talk,
             is_pressed,
+            observed_fn_hold,
         ),
         _ => false,
     }
@@ -1119,6 +1213,7 @@ fn handle_recording_meeting_dictation_input(
     hotkey_string: &str,
     push_to_talk: bool,
     is_pressed: bool,
+    observed_fn_hold: Option<Duration>,
 ) -> bool {
     match quick_dictation_input_action(binding_id, push_to_talk, is_pressed, quick_dictation) {
         Some(QuickDictationInputAction::Start) => {
@@ -1128,6 +1223,7 @@ fn handle_recording_meeting_dictation_input(
                 quick_dictation,
                 binding_id,
                 hotkey_string,
+                push_to_talk,
             );
             true
         }
@@ -1136,7 +1232,13 @@ fn handle_recording_meeting_dictation_input(
                 return true;
             };
             let operation = operation.clone();
-            stop_tracked_dictation(app, quick_dictation, &operation, hotkey_string);
+            stop_tracked_dictation(
+                app,
+                quick_dictation,
+                &operation,
+                hotkey_string,
+                observed_fn_hold,
+            );
             true
         }
         Some(QuickDictationInputAction::Ignore) => {
@@ -1154,10 +1256,17 @@ fn handle_stopping_meeting_dictation_input(
     hotkey_string: &str,
     push_to_talk: bool,
     is_pressed: bool,
+    observed_fn_hold: Option<Duration>,
 ) -> bool {
     match quick_dictation_input_action(binding_id, push_to_talk, is_pressed, dictation) {
         Some(QuickDictationInputAction::Start) => {
-            start_stopping_meeting_dictation(app, dictation, binding_id, hotkey_string);
+            start_stopping_meeting_dictation(
+                app,
+                dictation,
+                binding_id,
+                hotkey_string,
+                push_to_talk,
+            );
             true
         }
         Some(QuickDictationInputAction::Stop) => {
@@ -1165,7 +1274,7 @@ fn handle_stopping_meeting_dictation_input(
                 return true;
             };
             let operation = operation.clone();
-            stop_tracked_dictation(app, dictation, &operation, hotkey_string);
+            stop_tracked_dictation(app, dictation, &operation, hotkey_string, observed_fn_hold);
             true
         }
         Some(QuickDictationInputAction::Ignore) => {
@@ -1210,14 +1319,15 @@ fn start_meeting_quick_dictation(
     quick_dictation: &mut Option<QuickDictationStage>,
     binding_id: &str,
     hotkey_string: &str,
+    push_to_talk: bool,
 ) {
-    let operation = Operation::new(binding_id);
+    let operation = Operation::new(binding_id, hotkey_string, push_to_talk);
     let Some(action) = ACTION_MAP.get(binding_id) else {
         warn!("No action in ACTION_MAP for '{binding_id}'");
         return;
     };
     crate::actions::set_active_quick_dictation_ui_operation(operation.id);
-    action.start(app, binding_id, hotkey_string);
+    action.start_with_operation(app, binding_id, hotkey_string, operation.id, None);
 
     let audio_recording_active = app
         .try_state::<Arc<AudioRecordingManager>>()
@@ -1244,13 +1354,14 @@ fn start_stopping_meeting_dictation(
     dictation: &mut Option<QuickDictationStage>,
     binding_id: &str,
     hotkey_string: &str,
+    push_to_talk: bool,
 ) {
-    let operation = Operation::new(binding_id);
+    let operation = Operation::new(binding_id, hotkey_string, push_to_talk);
     let Some(action) = ACTION_MAP.get(binding_id) else {
         warn!("No action in ACTION_MAP for '{binding_id}'");
         return;
     };
-    action.start(app, binding_id, hotkey_string);
+    action.start_with_operation(app, binding_id, hotkey_string, operation.id, None);
 
     let audio_recording_active = app
         .try_state::<Arc<AudioRecordingManager>>()
@@ -1270,13 +1381,20 @@ fn stop_tracked_dictation(
     quick_dictation: &mut Option<QuickDictationStage>,
     operation: &Operation,
     hotkey_string: &str,
+    observed_fn_hold: Option<Duration>,
 ) {
     let binding_id = &operation.binding_id;
     let Some(action) = ACTION_MAP.get(binding_id) else {
         warn!("No action in ACTION_MAP for '{binding_id}'");
         return;
     };
-    action.stop(app, binding_id, hotkey_string, operation.id);
+    action.stop(
+        app,
+        binding_id,
+        hotkey_string,
+        operation.id,
+        operation.fn_hold_on_release(hotkey_string, observed_fn_hold),
+    );
     *quick_dictation = Some(QuickDictationStage::Processing(operation.clone()));
     info!(
         "Stopped quick dictation '{}' while meeting remains active",
@@ -1378,7 +1496,7 @@ fn dispatch_meeting_stop(app: &AppHandle, meeting: &Operation) {
         warn!("No action in ACTION_MAP for '{}'", meeting.binding_id);
         return;
     };
-    action.stop(app, &meeting.binding_id, "Home Stop", meeting.id);
+    action.stop(app, &meeting.binding_id, "Home Stop", meeting.id, None);
 }
 
 fn finish_processing_stage(
@@ -1490,6 +1608,9 @@ fn cancel_stale_push_to_talk_recording(app: &AppHandle, stage: &mut Stage, bindi
         binding_id
     );
 
+    if let Stage::Recording(operation) = stage {
+        crate::scribe_live::cancel(operation.id);
+    }
     shortcut::unregister_cancel_shortcut(app);
 
     if let Some(audio_manager) = app.try_state::<Arc<AudioRecordingManager>>() {
@@ -1504,7 +1625,13 @@ fn cancel_stale_push_to_talk_recording(app: &AppHandle, stage: &mut Stage, bindi
     *stage = Stage::Idle;
 }
 
-fn stop(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &str) {
+fn stop(
+    app: &AppHandle,
+    stage: &mut Stage,
+    binding_id: &str,
+    hotkey_string: &str,
+    observed_fn_hold: Option<Duration>,
+) {
     let stop_time = Instant::now();
     info!("[latency] coordinator stop begin binding={}", binding_id);
 
@@ -1522,7 +1649,13 @@ fn stop(app: &AppHandle, stage: &mut Stage, binding_id: &str, hotkey_string: &st
         warn!("No action in ACTION_MAP for '{binding_id}'");
         return;
     };
-    action.stop(app, binding_id, hotkey_string, operation.id);
+    action.stop(
+        app,
+        binding_id,
+        hotkey_string,
+        operation.id,
+        operation.fn_hold_on_release(hotkey_string, observed_fn_hold),
+    );
     *stage = Stage::Processing(operation);
     info!(
         "[latency] coordinator stop dispatched binding={} elapsed_ms={}",
@@ -1614,6 +1747,13 @@ mod tests {
 
     #[test]
     fn escape_targets_only_the_active_dictation_stage() {
+        let mut recording = Stage::Recording(operation("transcribe", 1));
+        assert_eq!(
+            apply_control_command(&mut recording, &Command::UserCancel),
+            vec![ControlEffect::CancelStandaloneRecording(1)]
+        );
+        assert_eq!(recording, Stage::Idle);
+
         assert_eq!(
             user_cancel_action(&Stage::Recording(operation("transcribe", 1))),
             UserCancelAction::CancelStandalone
@@ -1947,6 +2087,24 @@ mod tests {
             release_received_at,
             Some(recording_started_at)
         ));
+    }
+
+    #[test]
+    fn delayed_fn_release_only_supplies_timing_to_the_matching_push_to_talk_operation() {
+        let hold = Some(Duration::from_millis(120));
+        for (source, push_to_talk, expected) in [
+            ("fn", true, hold),
+            ("fn", false, None),
+            ("SIGUSR2", false, None),
+            ("option+fn", true, None),
+        ] {
+            let operation = Operation::new("transcribe", source, push_to_talk);
+            assert_eq!(operation.fn_hold_on_release("fn", hold), expected);
+        }
+        assert_eq!(
+            Operation::new("edit_mode", "fn", true).fn_hold_on_release("fn", hold),
+            None
+        );
     }
 
     #[test]

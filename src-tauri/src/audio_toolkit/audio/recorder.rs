@@ -17,7 +17,7 @@ use cpal::{
 use rubato::Resampler;
 
 use crate::audio_toolkit::{
-    audio::{AudioVisualiser, FrameResampler},
+    audio::{AudioVisualiser, DictationAnalysis, FrameResampler},
     constants,
     vad::{self, VadFrame},
     VoiceActivityDetector,
@@ -25,8 +25,17 @@ use crate::audio_toolkit::{
 
 enum Cmd {
     Start,
+    StartObserved(DictationAnalysis),
+    ObservationBoundary(Option<DictationAnalysis>, mpsc::Sender<DrainResult>),
     Drain(mpsc::Sender<DrainResult>),
-    Stop(mpsc::Sender<Vec<f32>>),
+    ReadDictation {
+        operation_id: u64,
+        binding_id: String,
+        offset: usize,
+        limit: usize,
+        reply: mpsc::Sender<Result<Vec<f32>, ()>>,
+    },
+    Stop(mpsc::Sender<(Vec<f32>, usize)>),
     Shutdown,
 }
 
@@ -392,6 +401,13 @@ impl AudioRecorder {
     }
 
     pub fn start(&self) -> Result<(), Box<dyn std::error::Error>> {
+        self.start_with_analysis(None)
+    }
+
+    pub fn start_with_analysis(
+        &self,
+        analysis: Option<DictationAnalysis>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if self.has_stream_failed() {
             return Err(Box::new(Error::new(
                 std::io::ErrorKind::BrokenPipe,
@@ -403,11 +419,33 @@ impl AudioRecorder {
             .cmd_tx
             .as_ref()
             .ok_or_else(|| Error::new(std::io::ErrorKind::BrokenPipe, "Recorder is not open"))?;
-        tx.send(Cmd::Start)?;
+        tx.send(analysis.map_or(Cmd::Start, Cmd::StartObserved))?;
         Ok(())
     }
 
+    /// Drain and change observation ownership at one recorder sample boundary.
+    pub fn observation_boundary(
+        &self,
+        analysis: Option<DictationAnalysis>,
+    ) -> Result<DrainResult, Box<dyn std::error::Error>> {
+        let (reply_tx, reply_rx) = mpsc::channel();
+        let tx = self
+            .cmd_tx
+            .as_ref()
+            .ok_or_else(|| Error::new(std::io::ErrorKind::BrokenPipe, "Recorder is not open"))?;
+        tx.send(Cmd::ObservationBoundary(analysis, reply_tx))?;
+        Ok(reply_rx.recv_timeout(Duration::from_millis(75))?)
+    }
+
     pub fn stop(&self) -> Result<Vec<f32>, Box<dyn std::error::Error>> {
+        self.stop_with_sample_boundary().map(|(samples, _)| samples)
+    }
+
+    /// The returned boundary excludes only VAD-frame completion zeros. All
+    /// available filtered Rubato output remains part of the recording.
+    pub(crate) fn stop_with_sample_boundary(
+        &self,
+    ) -> Result<(Vec<f32>, usize), Box<dyn std::error::Error>> {
         let (resp_tx, resp_rx) = mpsc::channel();
         let tx = self
             .cmd_tx
@@ -429,6 +467,28 @@ impl AudioRecorder {
                 };
                 Box::new(io_err) as Box<dyn std::error::Error>
             })
+    }
+
+    // An absolute read never advances the shared recorder cursor, even if its reply times out.
+    pub(crate) fn request_dictation_samples(
+        &self,
+        binding_id: &str,
+        operation_id: u64,
+        offset: usize,
+        limit: usize,
+    ) -> Option<mpsc::Receiver<Result<Vec<f32>, ()>>> {
+        let (reply, rx) = mpsc::channel();
+        self.cmd_tx
+            .as_ref()?
+            .send(Cmd::ReadDictation {
+                binding_id: binding_id.to_owned(),
+                operation_id,
+                offset,
+                limit,
+                reply,
+            })
+            .ok()?;
+        Some(rx)
     }
 
     pub fn drain(&self) -> Result<DrainResult, Box<dyn std::error::Error>> {
@@ -565,6 +625,7 @@ impl AudioRecorder {
 
 struct PreRollBuffer {
     samples: VecDeque<f32>,
+    valid: VecDeque<bool>,
     max_samples: usize,
 }
 
@@ -572,19 +633,33 @@ impl PreRollBuffer {
     fn new(max_samples: usize) -> Self {
         Self {
             samples: VecDeque::with_capacity(max_samples),
+            valid: VecDeque::with_capacity(max_samples),
             max_samples,
         }
     }
 
     fn push_frame(&mut self, frame: &[f32]) {
+        self.push_frame_with_validity(frame, Some(frame.len()));
+    }
+
+    fn push_frame_with_validity(&mut self, frame: &[f32], valid: Option<usize>) {
+        let valid = valid.filter(|&valid| valid <= frame.len());
+        // Output-frame padding belongs only to the completed recording. Keep
+        // every available filtered sample, but no appended zeros, in pre-roll.
+        let frame = valid.map_or(frame, |valid| &frame[..valid]);
         if self.max_samples == 0 || frame.is_empty() {
             return;
         }
 
         if frame.len() >= self.max_samples {
             self.samples.clear();
+            self.valid.clear();
             self.samples
                 .extend(frame[frame.len() - self.max_samples..].iter().copied());
+            self.valid.extend(
+                (frame.len() - self.max_samples..frame.len())
+                    .map(|index| valid.is_some_and(|valid| index < valid)),
+            );
             return;
         }
 
@@ -595,13 +670,43 @@ impl PreRollBuffer {
             .saturating_sub(self.max_samples);
         for _ in 0..overflow {
             self.samples.pop_front();
+            self.valid.pop_front();
         }
 
         self.samples.extend(frame.iter().copied());
+        self.valid
+            .extend((0..frame.len()).map(|index| valid.is_some_and(|valid| index < valid)));
     }
 
     fn extend_into(&self, out: &mut Vec<f32>) {
         out.extend(self.samples.iter().copied());
+    }
+}
+
+struct RecordingObservation {
+    analysis: DictationAnalysis,
+    raw_samples: usize,
+    borrowed_retained_start: Option<usize>,
+}
+
+impl RecordingObservation {
+    fn frame(&mut self, samples: &[f32], valid: Option<usize>) {
+        self.analysis.observe(samples, valid);
+        self.raw_samples = self.raw_samples.saturating_add(valid.unwrap_or(0));
+    }
+
+    fn retained(&self, appended: usize, frame_len: usize, valid: Option<usize>) {
+        let Some(valid) = valid else {
+            self.analysis.invalidate();
+            return;
+        };
+        let real = appended.saturating_sub(frame_len.saturating_sub(valid));
+        if real > self.raw_samples {
+            self.analysis.invalidate();
+            return;
+        }
+        self.analysis
+            .retain(appended, self.raw_samples - real..self.raw_samples);
     }
 }
 
@@ -699,6 +804,7 @@ fn run_consumer(
     let mut silence_run_samples = 0usize;
     let mut saw_pause_since_last_drain = false;
     let mut startup_passthrough_remaining = 0usize;
+    let mut observation: Option<RecordingObservation> = None;
 
     // ---------- spectrum visualisation setup ---------------------------- //
     const BUCKETS: usize = 16;
@@ -762,9 +868,26 @@ fn run_consumer(
         silence_run_samples: &mut usize,
         saw_pause_since_last_drain: &mut bool,
         startup_passthrough_remaining: &mut usize,
+        observation: &mut Option<RecordingObservation>,
     ) -> bool {
         match cmd {
-            Cmd::Start => {
+            Cmd::Start | Cmd::StartObserved(_) => {
+                if let Some(previous) = observation.take() {
+                    previous.analysis.invalidate();
+                }
+                if let Cmd::StartObserved(analysis) = cmd {
+                    if !pre_roll_samples.valid.iter().all(|valid| *valid) {
+                        analysis.invalidate();
+                    }
+                    let pre_roll: Vec<_> = pre_roll_samples.samples.iter().copied().collect();
+                    analysis.observe(&pre_roll, Some(pre_roll.len()));
+                    analysis.retain(pre_roll.len(), 0..pre_roll.len());
+                    *observation = Some(RecordingObservation {
+                        analysis,
+                        raw_samples: pre_roll.len(),
+                        borrowed_retained_start: None,
+                    });
+                }
                 handle_start(
                     processed_samples,
                     pre_roll_samples,
@@ -781,6 +904,59 @@ fn run_consumer(
                 }
                 false
             }
+            Cmd::ObservationBoundary(next, reply_tx) => {
+                let mut delta = drain_recording(
+                    *recording,
+                    processed_samples,
+                    drain_cursor,
+                    saw_pause_since_last_drain,
+                );
+                if let Some(previous) = observation.take() {
+                    if let Some(start) = previous.borrowed_retained_start {
+                        // Incremental drains move the cursor; finalization needs
+                        // the entire borrowed segment in observer coordinates.
+                        // Start/Stop remove observation before clearing this PCM.
+                        delta.samples = processed_samples[start..].to_vec();
+                    }
+                    previous.analysis.finish();
+                }
+                if let Some(analysis) = next {
+                    if *recording {
+                        *observation = Some(RecordingObservation {
+                            analysis,
+                            raw_samples: 0,
+                            borrowed_retained_start: Some(processed_samples.len()),
+                        });
+                    } else {
+                        analysis.invalidate();
+                    }
+                }
+                let _ = reply_tx.send(delta);
+                false
+            }
+            Cmd::ReadDictation {
+                binding_id,
+                operation_id,
+                offset,
+                limit,
+                reply,
+            } => {
+                let result = if *recording
+                    && observation
+                        .as_ref()
+                        .is_some_and(|o| o.analysis.matches(&binding_id, operation_id))
+                {
+                    processed_samples
+                        .get(offset..)
+                        .filter(|tail| tail.len() <= limit)
+                        .map(|tail| tail.to_vec())
+                        .ok_or(())
+                } else {
+                    Err(())
+                };
+                let _ = reply.send(result);
+                false
+            }
             Cmd::Drain(reply_tx) => {
                 let _ = reply_tx.send(drain_recording(
                     *recording,
@@ -794,21 +970,47 @@ fn run_consumer(
                 *recording = false;
 
                 let mut flush_passthrough = 0usize;
-                frame_resampler.finish(&mut |frame: &[f32]| {
-                    pre_roll_samples.push_frame(frame);
+                let mut trailing_padding = 0;
+                frame_resampler.finish_with_validity(&mut |frame: &[f32], valid| {
+                    pre_roll_samples.push_frame_with_validity(frame, valid);
+                    if let Some(observer) = observation.as_mut() {
+                        observer.frame(frame, valid);
+                    }
+                    if frame.is_empty() {
+                        return;
+                    }
+                    let before = processed_samples.len();
                     // we still want to process the last few frames
                     let _ =
                         handle_frame(frame, true, vad, processed_samples, &mut flush_passthrough);
+                    let appended = processed_samples.len() - before;
+                    if appended != 0 {
+                        trailing_padding = valid
+                            .map_or(0, |count| frame.len().saturating_sub(count).min(appended));
+                    }
+                    if let Some(observer) = observation.as_ref() {
+                        observer.retained(appended, frame.len(), valid);
+                    }
                 });
+
+                if let Some(observer) = observation.take() {
+                    observer.analysis.finish();
+                }
 
                 *drain_cursor = 0;
                 *silence_run_samples = 0;
                 *saw_pause_since_last_drain = false;
                 *startup_passthrough_remaining = 0;
-                let _ = reply_tx.send(std::mem::take(processed_samples));
+                let boundary = processed_samples.len() - trailing_padding;
+                let _ = reply_tx.send((std::mem::take(processed_samples), boundary));
                 false
             }
-            Cmd::Shutdown => true,
+            Cmd::Shutdown => {
+                if let Some(observer) = observation.take() {
+                    observer.analysis.invalidate();
+                }
+                true
+            }
         }
     }
 
@@ -826,6 +1028,7 @@ fn run_consumer(
                 &mut silence_run_samples,
                 &mut saw_pause_since_last_drain,
                 &mut startup_passthrough_remaining,
+                &mut observation,
             ) {
                 return;
             }
@@ -845,8 +1048,15 @@ fn run_consumer(
         }
 
         // ---------- existing pipeline ------------------------------------ //
-        frame_resampler.push(&raw, &mut |frame: &[f32]| {
-            pre_roll_samples.push_frame(frame);
+        frame_resampler.push_with_validity(&raw, &mut |frame: &[f32], valid| {
+            pre_roll_samples.push_frame_with_validity(frame, valid);
+            if let Some(observer) = observation.as_mut() {
+                observer.frame(frame, valid);
+            }
+            if frame.is_empty() {
+                return;
+            }
+            let before = processed_samples.len();
             let saw_speech = handle_frame(
                 frame,
                 recording,
@@ -854,6 +1064,9 @@ fn run_consumer(
                 &mut processed_samples,
                 &mut startup_passthrough_remaining,
             );
+            if let Some(observer) = observation.as_ref() {
+                observer.retained(processed_samples.len() - before, frame.len(), valid);
+            }
             if recording {
                 if saw_speech {
                     silence_run_samples = 0;
@@ -880,13 +1093,13 @@ fn run_consumer(
                 &mut silence_run_samples,
                 &mut saw_pause_since_last_drain,
                 &mut startup_passthrough_remaining,
+                &mut observation,
             ) {
                 return;
             }
         }
     }
 }
-
 #[cfg(test)]
 mod tests {
     use super::{

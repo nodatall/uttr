@@ -167,6 +167,26 @@
   transition: opacity 120ms linear;
 }
 
+.siriwave-host::before {
+  content: "";
+  position: absolute;
+  inset-inline: 0;
+  top: 50%;
+  height: 2px;
+  transform: translateY(-50%);
+  background: linear-gradient(
+    90deg,
+    transparent 5%,
+    rgb(238 247 255 / 92%) 28%,
+    rgb(238 247 255 / 92%) 72%,
+    transparent 95%
+  );
+}
+
+.siriwave-host-processing::before {
+  transform: translate(-24px, -50%);
+}
+
 .siriwave-host-hidden {
   opacity: 0;
 }
@@ -204,6 +224,10 @@
 
 .recording-overlay.fade-in {
   opacity: 1;
+  transition-duration: 0ms;
+}
+
+.recording-overlay.fn-preview {
   transition-duration: 0ms;
 }
 

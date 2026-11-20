@@ -137,6 +137,8 @@ The desktop app sidebar is compact and persistent. Inactive items are muted; act
 
 Settings groups are single rounded containers with internal row dividers. Each row has label content on the left and the control on the right. Descriptions should be short and only visible when they help the user decide.
 
+Cloud transcription models use the same selectable cards in the Models screen. Configure provider credentials on the API Keys screen.
+
 ## Buttons
 
 Use icon buttons for icon-native actions such as stop, pause, reset, delete, copy, and refresh. Use text buttons for commands that need words, such as "Save key" or "Check for updates".

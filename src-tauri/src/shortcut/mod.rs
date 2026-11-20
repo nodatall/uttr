@@ -954,7 +954,7 @@ fn maybe_select_first_api_key_transcription_model(
     api_key: &str,
     already_had_api_key: bool,
 ) -> bool {
-    if api_key.trim().is_empty() || already_had_api_key {
+    if api_key.trim().is_empty() || already_had_api_key || settings.scribe_live_dictation {
         return false;
     }
 
@@ -974,7 +974,9 @@ pub fn change_post_process_api_key_setting(
     api_key: String,
 ) -> Result<(), String> {
     let mut settings = settings::get_settings(&app);
-    validate_provider_exists(&settings, &provider_id)?;
+    if provider_id != crate::byok_secrets::ELEVENLABS_SECRET_KEY {
+        validate_provider_exists(&settings, &provider_id)?;
+    }
     let trimmed_api_key = api_key.trim();
     let already_had_api_key = crate::byok_secrets::has_any_post_process_api_key(&app, &settings);
     let selected_model_changed = maybe_select_first_api_key_transcription_model(
@@ -1182,6 +1184,28 @@ mod tests {
             false
         ));
         assert_eq!(settings.selected_model, OPENAI_MODEL_GPT_4O_TRANSCRIBE);
+    }
+
+    #[test]
+    fn saving_keys_preserves_explicit_live_and_compatible_model_choices() {
+        for (live, provider) in [
+            (false, "elevenlabs"),
+            (true, "elevenlabs"),
+            (true, "groq"),
+            (true, "openai"),
+        ] {
+            let mut settings = settings::get_default_settings();
+            settings.selected_model = DEFAULT_LOCAL_MODEL_ID.to_string();
+            settings.scribe_live_dictation = live;
+            assert!(!maybe_select_first_api_key_transcription_model(
+                &mut settings,
+                provider,
+                "test",
+                false
+            ));
+            assert_eq!(settings.selected_model, DEFAULT_LOCAL_MODEL_ID);
+            assert_eq!(settings.scribe_live_dictation, live);
+        }
     }
 
     #[test]

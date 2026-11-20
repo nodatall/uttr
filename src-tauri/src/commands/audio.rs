@@ -477,7 +477,13 @@ pub async fn start_full_system_audio_session(app: AppHandle) -> Result<(), Strin
     let coordinator = app
         .try_state::<TranscriptionCoordinator>()
         .ok_or_else(|| "Transcription coordinator is not initialized.".to_string())?;
-    coordinator.send_input("transcribe_full_system_audio", "Home Start", true, false);
+    coordinator.send_input(
+        "transcribe_full_system_audio",
+        "Home Start",
+        true,
+        false,
+        None,
+    );
 
     Ok(())
 }

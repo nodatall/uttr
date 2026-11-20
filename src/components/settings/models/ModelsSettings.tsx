@@ -11,6 +11,7 @@ import {
   getLocalizedLanguages,
   getLocalizedLanguageLabel,
 } from "@/lib/constants/languages.ts";
+import { isCloudModel } from "@/lib/constants/models";
 import type { ModelInfo } from "@/bindings";
 import { useSettings } from "@/hooks/useSettings";
 import { shouldShowModelControls } from "@/lib/utils/premiumFeatures";
@@ -20,15 +21,16 @@ const modelSupportsLanguage = (model: ModelInfo, langCode: string): boolean => {
   return model.supported_languages.includes(langCode);
 };
 
-const isCloudModel = (modelId: string): boolean =>
-  modelId.startsWith("groq-") || modelId.startsWith("openai-");
-
 const useModelsSettingsController = () => {
   const { t, i18n } = useTranslation();
   const { installAccess, settings } = useSettings();
   const showModelControls =
     shouldShowModelControls(installAccess) ||
-    Boolean(settings?.byok_enabled || settings?.debug_mode);
+    Boolean(
+      settings?.byok_enabled ||
+        settings?.debug_mode ||
+        settings?.scribe_live_dictation,
+    );
   const [switchingModelId, setSwitchingModelId] = useState<string | null>(null);
   const [languageFilter, setLanguageFilter] = useState("all");
   const [languageDropdownOpen, setLanguageDropdownOpen] = useState(false);

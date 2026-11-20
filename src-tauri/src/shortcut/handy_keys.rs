@@ -42,7 +42,8 @@ use tauri::{AppHandle, Emitter, Manager};
 use crate::settings::{self, get_settings, ShortcutBinding};
 use crate::transcription_coordinator::{is_transcribe_binding, transcribe_binding_push_to_talk};
 
-use super::handler::handle_shortcut_event;
+use super::handler::{handle_shortcut_event, handle_shortcut_event_with_fn_press};
+use crate::scribe_live::FnPress;
 
 const MODIFIER_ONLY_CHORD_WINDOW: Duration = Duration::from_millis(500);
 const MODIFIER_ONLY_PRESS_DEBOUNCE: Duration = Duration::from_millis(50);
@@ -102,6 +103,60 @@ struct PendingModifierOnlyRelease {
     hotkey_string: String,
     due_at: Instant,
     force: bool,
+    observed_fn_hold: Option<Duration>,
+}
+
+#[derive(Default)]
+struct PlainFnGesture {
+    down: bool,
+    pressed_after: Option<Instant>,
+}
+
+fn starts_isolated_fn_press(event: &KeyEvent, fn_down: bool, modifier_binding_busy: bool) -> bool {
+    event.key.is_none()
+        && !fn_down
+        && !modifier_binding_busy
+        && event.is_key_down
+        && event.changed_modifier == Some(handy_keys::Modifiers::FN)
+        && event.modifiers == handy_keys::Modifiers::FN
+}
+
+fn releases_other_key_during_plain_fn(event: &KeyEvent) -> bool {
+    !event.is_key_down && event.key.is_some() && event.modifiers == handy_keys::Modifiers::FN
+}
+
+impl PlainFnGesture {
+    fn observe(
+        &mut self,
+        event: &KeyEvent,
+        pending_release: Option<&mut PendingModifierOnlyRelease>,
+        last_empty_poll: Instant,
+        received_at: Instant,
+    ) -> Option<Duration> {
+        if event.key.is_some() || event.changed_modifier != Some(handy_keys::Modifiers::FN) {
+            // Chords and other key activity cannot supply an isolated Fn gesture.
+            self.pressed_after = None;
+            return None;
+        }
+        if event.is_key_down {
+            // A second press during release debounce shares the first recording; its shorter
+            // interval must never be used to judge all of that recording's audio.
+            self.pressed_after = if let Some(pending) = pending_release {
+                pending.observed_fn_hold = None;
+                None
+            } else {
+                (!self.down && event.modifiers == handy_keys::Modifiers::FN)
+                    .then_some(last_empty_poll)
+            };
+            self.down = true;
+            return None;
+        }
+        self.down = false;
+        self.pressed_after
+            .take()
+            .filter(|_| event.modifiers.is_empty())
+            .and_then(|pressed| received_at.checked_duration_since(pressed))
+    }
 }
 
 #[derive(Clone)]
@@ -262,6 +317,7 @@ impl HandyKeysState {
         };
 
         // Raw listener covers modifier-only shortcuts and push-to-talk release recovery.
+        let mut last_empty_raw_poll = Instant::now();
         let raw_listener = match KeyboardListener::new() {
             Ok(listener) => Some(listener),
             Err(e) => {
@@ -269,6 +325,14 @@ impl HandyKeysState {
                 None
             }
         };
+        #[cfg(target_os = "macos")]
+        let timing_monitor = raw_listener
+            .as_ref()
+            .map(|_| crate::scribe_live::FnTimingMonitor::start());
+        #[cfg(target_os = "macos")]
+        let fn_timing = timing_monitor.as_ref().map(|monitor| monitor.timing());
+        #[cfg(not(target_os = "macos"))]
+        let fn_timing = None;
 
         // Maps binding IDs to HotkeyIds and hotkey strings
         let mut binding_to_hotkey: HashMap<String, HotkeyId> = HashMap::new();
@@ -276,6 +340,10 @@ impl HandyKeysState {
         let mut modifier_only_bindings: HashMap<String, (Hotkey, String)> = HashMap::new();
         let mut pressed_modifier_only: HashSet<String> = HashSet::new();
         let mut modifier_only_tracker = ModifierOnlyTracker::default();
+        let mut fn_gesture = PlainFnGesture::default();
+        let mut fn_press: Option<FnPress> = None;
+        #[cfg(target_os = "macos")]
+        let mut fn_preview = None;
         let mut active_push_to_talk: HashMap<String, ActivePushToTalkGuard> = HashMap::new();
         let mut pending_modifier_only_presses: HashMap<String, PendingModifierOnlyPress> =
             HashMap::new();
@@ -298,12 +366,64 @@ impl HandyKeysState {
                         hotkey_string,
                         is_pressed,
                     );
-                    handle_shortcut_event(&app, binding_id, hotkey_string, is_pressed);
+                    handle_shortcut_event(&app, binding_id, hotkey_string, is_pressed, None);
                 }
             }
 
             if let Some(listener) = raw_listener.as_ref() {
-                while let Some(event) = listener.try_recv() {
+                loop {
+                    let poll_started = Instant::now();
+                    let Some(event) = listener.try_recv() else {
+                        last_empty_raw_poll = poll_started;
+                        if let Some(press) = fn_press.as_ref() {
+                            press.on_empty_poll();
+                        }
+                        break;
+                    };
+                    let received_at = Instant::now();
+                    let isolated_fn_down = starts_isolated_fn_press(
+                        &event,
+                        fn_gesture.down,
+                        !pending_modifier_only_releases.is_empty()
+                            || !pressed_modifier_only.is_empty(),
+                    );
+                    let unrelated_release = releases_other_key_during_plain_fn(&event);
+                    // Capture the native counters before scheduling any overlay work.
+                    if isolated_fn_down {
+                        fn_press = FnPress::capture(fn_timing.clone(), received_at);
+                    } else if !unrelated_release {
+                        if let Some(press) = fn_press.take() {
+                            if event.changed_modifier == Some(handy_keys::Modifiers::FN)
+                                && !event.is_key_down
+                                && event.modifiers.is_empty()
+                            {
+                                press.note_shortcut_release(received_at);
+                            } else {
+                                debug!(
+                                    "Scribe Fn witness interrupted by another input edge (down={})",
+                                    event.is_key_down
+                                );
+                            }
+                        }
+                    }
+                    #[cfg(target_os = "macos")]
+                    if isolated_fn_down {
+                        fn_preview = modifier_only_bindings
+                            .get("transcribe")
+                            .filter(|(hotkey, _)| hotkey.modifiers == handy_keys::Modifiers::FN)
+                            .map(|_| crate::overlay::FnOverlayPreview::show(&app));
+                    } else if !unrelated_release {
+                        // A release or chord dismisses a box still owned by the raw press.
+                        drop(fn_preview.take());
+                    }
+                    // The previous empty poll supplies an upper bound for the
+                    // separate, existing short-tap check on release.
+                    let observed_fn_hold = fn_gesture.observe(
+                        &event,
+                        pending_modifier_only_releases.get_mut("transcribe"),
+                        last_empty_raw_poll,
+                        received_at,
+                    );
                     let effective_changed_modifier =
                         modifier_only_tracker.changed_modifier_for_event(&event);
                     let modifier_only_modifiers = if event.key.is_none() {
@@ -342,6 +462,8 @@ impl HandyKeysState {
                         modifier_only_modifiers,
                         effective_changed_modifier,
                         &event,
+                        observed_fn_hold,
+                        fn_press.as_ref(),
                     );
                     Self::process_pending_modifier_only_presses(
                         &app,
@@ -350,6 +472,7 @@ impl HandyKeysState {
                         &mut active_push_to_talk,
                         &mut pending_modifier_only_presses,
                         &pending_modifier_only_releases,
+                        fn_press.as_ref(),
                         modifier_only_tracker.modifiers(),
                         Instant::now(),
                     );
@@ -389,6 +512,7 @@ impl HandyKeysState {
                 &mut active_push_to_talk,
                 &mut pending_modifier_only_presses,
                 &pending_modifier_only_releases,
+                fn_press.as_ref(),
                 modifier_only_tracker.modifiers(),
                 Instant::now(),
             );
@@ -400,6 +524,10 @@ impl HandyKeysState {
                         hotkey_string,
                         response,
                     } => {
+                        #[cfg(target_os = "macos")]
+                        if binding_id == "transcribe" {
+                            drop(fn_preview.take());
+                        }
                         let result = Self::do_register(
                             &manager,
                             &mut binding_to_hotkey,
@@ -417,6 +545,10 @@ impl HandyKeysState {
                         binding_id,
                         response,
                     } => {
+                        #[cfg(target_os = "macos")]
+                        if binding_id == "transcribe" {
+                            drop(fn_preview.take());
+                        }
                         let result = Self::do_unregister(
                             &manager,
                             &mut binding_to_hotkey,
@@ -559,6 +691,8 @@ impl HandyKeysState {
         modifier_only_modifiers: handy_keys::Modifiers,
         effective_changed_modifier: Option<handy_keys::Modifiers>,
         event: &KeyEvent,
+        observed_fn_hold: Option<Duration>,
+        fn_press: Option<&FnPress>,
     ) {
         if event.key.is_some() {
             return;
@@ -625,7 +759,14 @@ impl HandyKeysState {
                         "[ask-hotkey] dispatch_modifier_press binding={} hotkey={}",
                         binding_id, hotkey_string
                     );
-                    handle_shortcut_event(app, binding_id, hotkey_string, true);
+                    handle_shortcut_event_with_fn_press(
+                        app,
+                        binding_id,
+                        hotkey_string,
+                        true,
+                        None,
+                        fn_press.cloned(),
+                    );
                     cancel_shadowed_modifier_only_bindings(
                         app,
                         modifier_only_bindings,
@@ -636,6 +777,11 @@ impl HandyKeysState {
                     );
                 }
                 Some(false) => {
+                    let observed_fn_hold = observed_fn_hold.filter(|_| {
+                        binding_id == "transcribe"
+                            && hotkey.modifiers == handy_keys::Modifiers::FN
+                            && active_push_to_talk.contains_key(binding_id)
+                    });
                     pending_modifier_only_releases.insert(
                         binding_id.clone(),
                         PendingModifierOnlyRelease {
@@ -645,6 +791,7 @@ impl HandyKeysState {
                                 *hotkey,
                                 effective_changed_modifier,
                             ),
+                            observed_fn_hold,
                         },
                     );
                     pending_modifier_only_presses.remove(binding_id);
@@ -694,7 +841,11 @@ impl HandyKeysState {
             }
 
             if now >= pending.due_at {
-                completed_releases.push((binding_id.clone(), pending.hotkey_string.clone()));
+                completed_releases.push((
+                    binding_id.clone(),
+                    pending.hotkey_string.clone(),
+                    pending.observed_fn_hold,
+                ));
             }
         }
 
@@ -710,7 +861,7 @@ impl HandyKeysState {
             );
         }
 
-        for (binding_id, hotkey_string) in completed_releases {
+        for (binding_id, hotkey_string, observed_fn_hold) in completed_releases {
             pending_modifier_only_releases.remove(&binding_id);
             pressed_modifier_only.remove(&binding_id);
             active_push_to_talk.remove(&binding_id);
@@ -722,7 +873,7 @@ impl HandyKeysState {
                 "[ask-hotkey] complete_pending_release binding={} hotkey={} active_modifiers={:?}",
                 binding_id, hotkey_string, modifier_only_modifiers
             );
-            handle_shortcut_event(app, &binding_id, &hotkey_string, false);
+            handle_shortcut_event(app, &binding_id, &hotkey_string, false, observed_fn_hold);
         }
     }
 
@@ -733,6 +884,7 @@ impl HandyKeysState {
         active_push_to_talk: &mut HashMap<String, ActivePushToTalkGuard>,
         pending_modifier_only_presses: &mut HashMap<String, PendingModifierOnlyPress>,
         pending_modifier_only_releases: &HashMap<String, PendingModifierOnlyRelease>,
+        fn_press: Option<&FnPress>,
         modifier_only_modifiers: handy_keys::Modifiers,
         now: Instant,
     ) {
@@ -801,7 +953,14 @@ impl HandyKeysState {
                 "[ask-hotkey] complete_pending_press binding={} hotkey={} active_modifiers={:?}",
                 binding_id, hotkey_string, modifier_only_modifiers
             );
-            handle_shortcut_event(app, &binding_id, &hotkey_string, true);
+            handle_shortcut_event_with_fn_press(
+                app,
+                &binding_id,
+                &hotkey_string,
+                true,
+                None,
+                fn_press.cloned(),
+            );
         }
     }
 
@@ -871,7 +1030,7 @@ impl HandyKeysState {
                 "handy-keys push-to-talk release guard fired: binding={}, hotkey={}",
                 binding_id, hotkey_string
             );
-            handle_shortcut_event(app, &binding_id, &hotkey_string, false);
+            handle_shortcut_event(app, &binding_id, &hotkey_string, false, None);
         }
     }
 
@@ -1248,7 +1407,7 @@ fn cancel_shadowed_modifier_only_bindings(
                 "[ask-hotkey] release_shadowed_binding binding={} hotkey={} active_modifiers={:?}",
                 binding_id, hotkey_string, active_modifiers
             );
-            handle_shortcut_event(app, &binding_id, hotkey_string, false);
+            handle_shortcut_event(app, &binding_id, hotkey_string, false, None);
         }
     }
 }
@@ -1408,6 +1567,156 @@ fn push_to_talk_guard_should_release(
 mod tests {
     use super::*;
 
+    fn raw_fn_edge(is_key_down: bool) -> KeyEvent {
+        KeyEvent {
+            modifiers: if is_key_down {
+                handy_keys::Modifiers::FN
+            } else {
+                handy_keys::Modifiers::empty()
+            },
+            key: None,
+            is_key_down,
+            changed_modifier: Some(handy_keys::Modifiers::FN),
+        }
+    }
+
+    #[test]
+    fn releasing_an_earlier_key_is_not_a_new_fn_chord() {
+        let release = KeyEvent {
+            modifiers: handy_keys::Modifiers::FN,
+            key: Some(handy_keys::Key::A),
+            changed_modifier: None,
+            is_key_down: false,
+        };
+        assert!(releases_other_key_during_plain_fn(&release));
+        assert!(!releases_other_key_during_plain_fn(&KeyEvent {
+            is_key_down: true,
+            ..release
+        }));
+        assert!(!releases_other_key_during_plain_fn(&KeyEvent {
+            modifiers: handy_keys::Modifiers::FN | handy_keys::Modifiers::OPT_LEFT,
+            ..release
+        }));
+        assert!(!releases_other_key_during_plain_fn(&raw_fn_edge(false)));
+    }
+
+    // test_disposition: permanent. Enigo emits a Unicode key-down without a key-up.
+    // It and other raw activity interrupt only the gesture in which they arrive.
+    #[test]
+    fn previous_direct_paste_and_latched_events_do_not_block_a_new_fn_press() {
+        use handy_keys::Key;
+        for key in [Key::A, Key::CapsLock, Key::MouseLeft, Key::MouseRight] {
+            let other_key = KeyEvent {
+                key: Some(key),
+                changed_modifier: None,
+                ..raw_fn_edge(true)
+            };
+            assert!(!starts_isolated_fn_press(&other_key, false, false));
+            assert!(
+                starts_isolated_fn_press(&raw_fn_edge(true), false, false),
+                "new Fn after {key}"
+            );
+            assert!(
+                !starts_isolated_fn_press(&other_key, true, false),
+                "intervening {key}"
+            );
+            assert!(!starts_isolated_fn_press(&raw_fn_edge(true), true, true));
+        }
+    }
+
+    fn pending_fn_release(hold: Option<Duration>, up: Instant) -> PendingModifierOnlyRelease {
+        PendingModifierOnlyRelease {
+            hotkey_string: "fn".into(),
+            due_at: up + MODIFIER_ONLY_RELEASE_DEBOUNCE,
+            force: true,
+            observed_fn_hold: hold,
+        }
+    }
+
+    #[test]
+    fn fn_hold_uses_raw_edges_before_release_debounce() {
+        let mut gesture = PlainFnGesture::default();
+        let poll = Instant::now();
+        let ms = Duration::from_millis;
+        let down = poll + ms(8);
+        let up = poll + ms(106);
+        assert_eq!(gesture.observe(&raw_fn_edge(true), None, poll, down), None);
+        let hold = gesture.observe(&raw_fn_edge(false), None, up - ms(10), up);
+        assert_eq!(hold, Some(ms(106)));
+        let mut pending = pending_fn_release(hold, up);
+        // Further non-Fn events while release debounce runs cannot start a new estimate.
+        let other = KeyEvent {
+            changed_modifier: None,
+            ..raw_fn_edge(false)
+        };
+        assert_eq!(
+            gesture.observe(&other, Some(&mut pending), up, up + ms(5)),
+            None
+        );
+        assert_eq!(
+            gesture.observe(&raw_fn_edge(false), Some(&mut pending), up, up + ms(50)),
+            None
+        );
+        assert_eq!(pending.observed_fn_hold, hold);
+    }
+
+    #[test]
+    fn delayed_raw_poll_and_repress_cannot_shorten_a_long_hold() {
+        let mut gesture = PlainFnGesture::default();
+        let poll = Instant::now();
+        let ms = Duration::from_millis;
+        let resume = poll + ms(1800);
+        gesture.observe(&raw_fn_edge(true), None, poll, resume);
+        assert_eq!(
+            gesture.observe(&raw_fn_edge(false), None, poll, resume),
+            Some(ms(1800))
+        );
+        let mut pending = pending_fn_release(Some(ms(1800)), resume);
+        gesture.observe(
+            &raw_fn_edge(true),
+            Some(&mut pending),
+            resume,
+            resume + ms(15),
+        );
+        assert_eq!(pending.observed_fn_hold, None);
+        assert_eq!(
+            gesture.observe(
+                &raw_fn_edge(false),
+                Some(&mut pending),
+                resume + ms(35),
+                resume + ms(40)
+            ),
+            None
+        );
+        gesture.observe(&raw_fn_edge(true), None, resume + ms(200), resume + ms(205));
+        assert_eq!(
+            gesture.observe(
+                &raw_fn_edge(false),
+                None,
+                resume + ms(300),
+                resume + ms(305)
+            ),
+            Some(ms(105))
+        );
+    }
+
+    #[test]
+    fn fn_hold_requires_an_uninterrupted_matching_pair() {
+        let mut gesture = PlainFnGesture::default();
+        let t = Instant::now();
+        let chord = KeyEvent {
+            modifiers: handy_keys::Modifiers::FN | handy_keys::Modifiers::OPT,
+            changed_modifier: Some(handy_keys::Modifiers::OPT),
+            ..raw_fn_edge(true)
+        };
+        gesture.observe(&raw_fn_edge(true), None, t, t);
+        gesture.observe(&chord, None, t, t);
+        assert_eq!(gesture.observe(&raw_fn_edge(false), None, t, t), None);
+        gesture.observe(&raw_fn_edge(true), None, t, t);
+        gesture.observe(&raw_fn_edge(true), None, t, t);
+        assert_eq!(gesture.observe(&raw_fn_edge(false), None, t, t), None);
+    }
+
     struct ModifierOnlyScenario {
         bindings: Vec<(String, Hotkey, String)>,
         tracker: ModifierOnlyTracker,
@@ -1519,6 +1828,7 @@ mod tests {
                                     hotkey,
                                     effective_changed_modifier,
                                 ),
+                                observed_fn_hold: None,
                             },
                         );
                         self.pending_presses.remove(&binding_id);

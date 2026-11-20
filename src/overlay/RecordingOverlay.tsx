@@ -7,6 +7,7 @@ import { getLanguageDirection } from "@/lib/utils/rtl";
 import SiriWave from "siriwave";
 
 type OverlayState =
+  | "fn-preview"
   | "warming"
   | "recording"
   | "trial_ended"
@@ -32,6 +33,7 @@ const SPEECH_SLEEP_HOLD_MS = 260;
 const WAVE_ENERGY_MIN = 0;
 const WAVE_ENERGY_MAX = 1;
 const WAVE_AMPLITUDE_MIN = 0.65;
+const WAVE_REST_AMPLITUDE = 0.07;
 const WAVE_AMPLITUDE_RANGE = 3.2;
 const WAVE_AMPLITUDE_CAP = 2.95;
 const WAVE_AMPLITUDE_BOOST = 1.45;
@@ -40,14 +42,11 @@ const WAVE_PEAK_GUARD = 0.9;
 const WAVE_SPEED_MIN = 0.065;
 const WAVE_SPEED_RANGE = 0.105;
 const WAVE_SPEED_CAP = 0.17;
-const WAVE_IDLE_AMPLITUDE = 0.08;
-const WAVE_IDLE_SPEED = 0.012;
 const SUSTAINED_SPEECH_MIN_ENERGY = 0.12;
 const EFFECTIVE_WAVE_ENERGY_CAP = 0.56;
 const SUSTAINED_SPEECH_ENERGY_DECAY = 0.9;
 const IOS9_BASELINE_OFFSET_PX = 6;
 const RECORDING_CURVES = [
-  { color: "255,255,255", supportLine: true },
   { color: "102,217,255" },
   { color: "170,120,255" },
   { color: "96,243,191" },
@@ -90,8 +89,8 @@ const useRecordingOverlayController = () => {
   const quietSinceRef = useRef<number | null>(null);
   const isVisibleRef = useRef(true);
   const lastHideAtRef = useRef(0);
-  const previousStateRef = useRef<OverlayState>("recording");
   const direction = getLanguageDirection(i18n.language);
+  const isFnPreview = state === "fn-preview";
   const isRecordingState = state === "recording";
   const isWarmingState = state === "warming";
   const isProcessingState = state === "transcribing" || state === "processing";
@@ -156,9 +155,9 @@ const useRecordingOverlayController = () => {
       ratio,
       width,
       height,
-      autostart: true,
-      amplitude: WAVE_AMPLITUDE_MIN,
-      speed: WAVE_SPEED_MIN,
+      autostart: false,
+      amplitude: 0,
+      speed: 0,
       pixelDepth: 0.02,
       lerpSpeed: 0.11,
       globalCompositeOperation: "lighter",
@@ -172,7 +171,6 @@ const useRecordingOverlayController = () => {
         despawnTimeout: [900, 2200],
       },
     });
-
     return siriWaveRef.current;
   };
 
@@ -210,30 +208,30 @@ const useRecordingOverlayController = () => {
     }
 
     const currentState = overlayStateRef.current;
-    const hasAlert = overlayAlertRef.current !== null;
-    const isProcessing =
-      currentState === "transcribing" || currentState === "processing";
-
-    if (isProcessing || hasAlert) {
-      if (previousStateRef.current === "recording" && siriWave.run) {
-        siriWave.stop();
-      }
-      previousStateRef.current = currentState;
-      return;
-    }
-
-    if (currentState !== "recording") {
+    if (
+      overlayAlertRef.current !== null ||
+      (currentState !== "recording" && currentState !== "fn-preview")
+    ) {
       if (siriWave.run) {
         siriWave.stop();
       }
-      siriWave.setAmplitude(WAVE_AMPLITUDE_MIN * 0.45);
-      siriWave.setSpeed(WAVE_SPEED_MIN * 0.5);
-      previousStateRef.current = currentState;
       return;
     }
 
-    if (!siriWave.run) {
-      siriWave.start();
+    if (!hasDetectedSpeechRef.current) {
+      if (
+        currentState === "recording" &&
+        siriWave.run &&
+        siriWave.amplitude > WAVE_REST_AMPLITUDE
+      ) {
+        siriWave.setAmplitude(0);
+        siriWave.setSpeed(0);
+        return;
+      }
+      siriWave.stop();
+      // The CSS baseline stays visible at any display scale during a pause.
+      siriWave.ctx.clearRect(0, 0, siriWave.width, siriWave.height);
+      return;
     }
 
     const effectiveWaveEnergy = getCurrentWaveEnergy();
@@ -251,13 +249,11 @@ const useRecordingOverlayController = () => {
       WAVE_SPEED_MIN,
       WAVE_SPEED_CAP,
     );
-    const amplitude = hasDetectedSpeechRef.current
-      ? activeAmplitude
-      : WAVE_IDLE_AMPLITUDE;
-    const speed = hasDetectedSpeechRef.current ? activeSpeed : WAVE_IDLE_SPEED;
-    siriWave.setAmplitude(amplitude);
-    siriWave.setSpeed(speed);
-    previousStateRef.current = currentState;
+    siriWave.setAmplitude(activeAmplitude);
+    siriWave.setSpeed(activeSpeed);
+    if (!siriWave.run) {
+      siriWave.start();
+    }
   };
 
   useEffect(() => {
@@ -376,6 +372,9 @@ const useRecordingOverlayController = () => {
                 );
                 quietSinceRef.current = null;
                 setSpeechDetectedRef(true);
+                syncSiriWaveForOverlay();
+              } else if (siriWaveRef.current?.run) {
+                // Silent samples let the wave settle before stopping its draw loop.
                 syncSiriWaveForOverlay();
               }
               return;
@@ -514,6 +513,7 @@ const useRecordingOverlayController = () => {
 
   return {
     direction,
+    isFnPreview,
     isVisible,
     isRecordingState,
     isProcessingState,
@@ -530,6 +530,7 @@ const useRecordingOverlayController = () => {
 const RecordingOverlay: React.FC = () => {
   const {
     direction,
+    isFnPreview,
     isVisible,
     isRecordingState,
     isProcessingState,
@@ -545,7 +546,7 @@ const RecordingOverlay: React.FC = () => {
   return (
     <div
       dir={direction}
-      className={`recording-overlay ${isVisible ? "fade-in" : ""}`}
+      className={`recording-overlay ${isVisible ? "fade-in" : ""} ${isFnPreview ? "fn-preview" : ""}`}
       data-tauri-drag-region
       role="presentation"
       onMouseDown={startOverlayDrag}
